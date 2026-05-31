@@ -1,0 +1,16 @@
+# Runtime / orchestration local state
+.omx/
+.agent/logs/
+.agent/cache/
+
+# OS/editor
+.DS_Store
+*.swp
+
+# Node / build artifacts
+node_modules/
+dist/
+build/
+coverage/
+.env
+.env.*
