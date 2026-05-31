@@ -1,5 +1,7 @@
 # Milestone Completion Report: v0
 
+> **CORRECTION (2026-06-01):** This report used the previous scaffold-level standard and is not a valid completion report under the corrected 95% product standard. See `PRODUCT_COMPLETION_STANDARD.md`, `FULL_PRODUCT_ROADMAP.md`, and `CURRENT_BASELINE_GAP_REPORT.md`.
+
 ## Original Goal
 
 Implement the CLI-first run record loop with semi-auto OMX handoff artifacts and a read-only web viewer.
