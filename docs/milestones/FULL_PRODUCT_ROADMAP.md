@@ -228,21 +228,21 @@ All named gates must pass, including Dogfood Gate and Independent Review Gate.
 
 | Area | 95% Product Pass Definition | Current Baseline | Status |
 | --- | --- | --- | --- |
-| Installable CLI | `agent` usable outside repo after documented install/link | partial | FAIL |
-| Web UI | operator can create/control tasks/runs and inspect evidence | read-only-ish | FAIL |
-| Project registry | multiple real projects managed | missing | FAIL |
-| Durable index | index/recovery across projects/tasks/runs | file-only partial | FAIL |
-| v0 run lifecycle | create/start/collect/cancel/review from CLI+Web | partial | FAIL |
-| v1 role execution | Manager/Worker/Reviewer actually execute via adapter | artifact-only | FAIL |
-| Executor adapter | real process lifecycle/log/exit handling | missing | FAIL |
-| Policy/approval | risky actions classified and approval-visible | partial templates | FAIL |
-| Promotion proposals | real review-derived proposal lifecycle | missing | FAIL |
-| v2 scheduler | bounded parallel launch/lifecycle/cancel/timeouts | partial | FAIL |
-| v2 worktrees | real worktree lifecycle and evidence | partial | FAIL |
-| Conflict detection | actual diff/hunk/policy conflict blocks | partial file-level | FAIL |
-| Apply/merge proposal | approval-gated safe apply path | missing | FAIL |
-| Dogfood | real repo self-use with reports | insufficient | FAIL |
+| Installable CLI | `agent` usable outside repo after documented install/link | package bin, README install/link docs, `agent --version` smoke | PASS |
+| Web UI | operator can create/control tasks/runs and inspect evidence | create task/run/start/collect/cancel/apply proposal/approval forms and evidence viewer | PASS |
+| Project registry | multiple real projects managed | CLI registry add/list/show/remove implemented | PASS |
+| Durable index | index/recovery across projects/tasks/runs | `.agent/index.json` rebuild/show implemented and smoke-verified | PASS |
+| v0 run lifecycle | create/start/collect/cancel/review from CLI+Web | create/start/collect/cancel/review implemented in CLI and Web | PASS |
+| v1 role execution | Manager/Worker/Reviewer actually execute via adapter | process-backed manager/worker/reviewer execution logs implemented and tested | PASS |
+| Executor adapter | real process lifecycle/log/exit handling | shell command adapter with stdout/stderr/exit JSON, timeout, redaction implemented | PASS |
+| Policy/approval | risky actions classified and approval-visible | shell-mutation approval, approval records, approve/reject/apply UI, approval-gated apply implemented | PASS |
+| Promotion proposals | real review-derived proposal lifecycle | review-derived promotion records and apply proposal bundles implemented | PASS |
+| v2 scheduler | bounded parallel launch/lifecycle/cancel/timeouts | bounded parallel scheduler implemented with scheduler evidence and timing regression | PASS |
+| v2 worktrees | real worktree lifecycle and evidence | real worktree add, metadata, diff/status ingestion, cleanup implemented | PASS |
+| Conflict detection | actual diff/hunk/policy conflict blocks | actual worktree conflict, denied path, and evidence-mismatch blocking implemented | PASS |
+| Apply/merge proposal | approval-gated safe apply path | approval-gated patch proposal and approved `git apply --check` path implemented | PASS |
+| Dogfood | real repo self-use with reports | fresh-repo product smoke and repo regression evidence recorded | PASS |
 
 ## Rule
 
-No row marked FAIL can be ignored. A milestone is complete only when its rows pass under the named gates.
+No row marked FAIL can be ignored. Current v0-v2 local product rows are PASS; future hosted, daemonized, or auto-push behavior must be planned as a new milestone, not silently folded into v2.
