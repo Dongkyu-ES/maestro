@@ -1,8 +1,14 @@
 # Dominic Orchestration Full Product Roadmap: v0 → v2
 
-**Status:** Corrected 95% product plan  
-**Date:** 2026-06-01  
+**Status:** Corrected PRD-scoped v0-v2 product plan with anti-self-deception gate
+**Date:** 2026-06-01
 **Standard:** `docs/milestones/PRODUCT_COMPLETION_STANDARD.md`
+
+## Scope Guard
+
+This roadmap is not allowed to invent a smaller target after implementation. The controlling target is `dominic_orchestration_PRD.md`: local webservice, task/run/worker/review/promotion control plane, v0 single run, v1 manager/worker/reviewer, v2 bounded multi-worker. SaaS, full custom Agents SDK runtime, broad MCP integration, and automatic push remain outside v0-v2 because the PRD excludes or postpones them.
+
+Every completion report must include a Result-Reality Delta and pass the Scope Integrity Gate plus Anti-Self-Deception Critic Gate before the usual quality gates.
 
 ## Current Baseline
 
@@ -226,6 +232,8 @@ All named gates must pass, including Dogfood Gate and Independent Review Gate.
 
 ## Product Acceptance Matrix
 
+This matrix must be read as PRD-scoped v0-v2, not as a universal final-platform claim. A row may pass only when actual runnable behavior exists and the pass scope is traceable to the PRD.
+
 | Area | 95% Product Pass Definition | Current Baseline | Status |
 | --- | --- | --- | --- |
 | Installable CLI | `agent` usable outside repo after documented install/link | package bin, README install/link docs, `agent --version` smoke | PASS |
@@ -242,7 +250,9 @@ All named gates must pass, including Dogfood Gate and Independent Review Gate.
 | Conflict detection | actual diff/hunk/policy conflict blocks | actual worktree conflict, denied path, and evidence-mismatch blocking implemented | PASS |
 | Apply/merge proposal | approval-gated safe apply path | approval-gated patch proposal and approved `git apply --check` path implemented | PASS |
 | Dogfood | real repo self-use with reports | fresh-repo product smoke and repo regression evidence recorded | PASS |
+| Scope integrity | completion scope traceable to original PRD, not post-hoc shrinking | PRD local/v0-v2/non-goal sections cited in Product Gate Rerun Report | PASS |
+| Anti-self-deception critic | result compared against PRD, not against implementation-friendly artifacts | Scope Integrity + Anti-Self-Deception gates added and executable product gate implemented | PASS |
 
 ## Rule
 
-No row marked FAIL can be ignored. Current v0-v2 local product rows are PASS; future hosted, daemonized, or auto-push behavior must be planned as a new milestone, not silently folded into v2.
+No row marked FAIL can be ignored. Current PRD-scoped v0-v2 local product rows are PASS only under the original PRD boundary; future hosted, daemonized, broad MCP, custom Agents SDK runtime, or auto-push behavior must be planned as a new milestone, not silently folded into v2. A reviewer must not call this a universal final-product 95% completion claim.

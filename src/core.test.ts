@@ -721,3 +721,123 @@ test('secret path detection and safeJoin reject unsafe paths', () => {
   assert.throws(() => safeJoin(dir, '..', 'escape.txt'), /escapes project root/);
   assert.throws(() => safeJoin(dir, '.env'), /refusing secret path/);
 });
+
+
+test('Anti-self-deception product gate rejects rubber-stamp criteria and passes current PRD-scoped evidence', async () => {
+  const report = (await import('./core.js')).runProductGate(process.cwd());
+  assert.equal(report.decision, 'PASS');
+  assert.equal(report.checks.some((check) => check.name === 'Anti-Self-Deception Critic Gate' && check.status === 'PASS'), true);
+  assert.equal(report.checks.some((check) => check.name === 'PRD Scope Integrity Gate' && check.status === 'PASS'), true);
+  assert.equal(report.result_reality_delta.every((row) => row.status === 'PASS'), true);
+});
+
+
+test('fake string-only repo cannot pass the product gate', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-fake-gate-'));
+  mkdirSync(join(dir, 'docs', 'milestones'), { recursive: true });
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  writeFileSync(join(dir, 'dominic_orchestration_PRD.md'), '로컬 웹서비스 로컬 에이전트 작업 v0: Single Run + Review v1: Manager + Worker + Reviewer v2: Bounded Multi-Worker');
+  writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_COMPLETION_STANDARD.md'), 'Anti-Self-Deception Critic Gate Scope Integrity Gate rubber-stamp 원 PRD Result-Reality Delta');
+  writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n| Installable CLI | x | x | PASS |');
+  writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), 'FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS basic_run= multi_run= approval=');
+  writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'), 'Result-Reality Delta | Original PRD / v0-v2 target | Current runnable evidence | Delta | Forbidden completion claim Allowed completion claim Why the previous loop failed implementation-friendly grading Final wording guard');
+  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test( fake ) executor.process.json scheduler.json worker-001.process.json actual worktree changes not declared declared files not present in worktree diff unsafe-host auth does not leak tokens Anti-self-deception product gate rejects rubber-stamp criteria fake string-only repo cannot pass the product gate product gate durable report contains report_path');
+  const report = (await import('./core.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.some((check) => check.name === 'Product Completeness Gate' && check.status === 'FAIL'), true);
+  assert.equal(report.result_reality_delta.some((row) => row.status === 'FAIL'), true);
+});
+
+test('product gate durable report contains report_path', async () => {
+  const report = (await import('./core.js')).runProductGate(process.cwd(), { write: true });
+  assert.equal(report.decision, 'PASS');
+  assert.ok(report.report_path);
+  const written = JSON.parse(readFileSync(join(process.cwd(), report.report_path), 'utf8'));
+  assert.equal(written.report_path, report.report_path);
+  assert.ok(Array.isArray(written.result_reality_delta));
+});
+
+
+test('shaped scaffold with fake CLI and dogfood strings still fails without dogfood artifacts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-shaped-gate-'));
+  mkdirSync(join(dir, 'docs', 'milestones'), { recursive: true });
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  mkdirSync(join(dir, 'dist'), { recursive: true });
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ bin: { agent: './dist/cli.js' } }));
+  writeFileSync(join(dir, 'dist', 'cli.js'), 'if(process.argv.includes("--version")) console.log("dominic-orchestration 0.1.0"); else console.log("agent quality gate [--write]\nagent run create|start|collect|cancel|latest\nagent apply propose|approved");');
+  writeFileSync(join(dir, 'dominic_orchestration_PRD.md'), '로컬 웹서비스 로컬 에이전트 작업 v0: Single Run + Review v1: Manager + Worker + Reviewer v2: Bounded Multi-Worker');
+  writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_COMPLETION_STANDARD.md'), 'Anti-Self-Deception Critic Gate Scope Integrity Gate rubber-stamp 원 PRD Result-Reality Delta');
+  const rows = ['Installable CLI','Web UI','Project registry','Durable index','v0 run lifecycle','v1 role execution','Executor adapter','Policy/approval','Promotion proposals','v2 scheduler','v2 worktrees','Conflict detection','Apply/merge proposal','Dogfood','Scope integrity','Anti-self-deception critic'];
+  writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n' + rows.map((r) => `| ${r} | x | x | PASS |`).join('\n') + '\nUI shows worker lanes Run detail UI showing all required evidence');
+  writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'), 'Result-Reality Delta | Original PRD / v0-v2 target | Current runnable evidence | Delta | Forbidden completion claim Allowed completion claim Why the previous loop failed implementation-friendly grading Final wording guard CLI/Web controls agent quality gate --write');
+  writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), 'FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS root=/tmp/missing-dogfood basic_run=run-fake multi_run=run-fake2 approval=approval-fake');
+  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path Anti-self-deception product gate rejects rubber-stamp criteria');
+  const report = (await import('./core.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.some((check) => check.name === 'Dogfood Gate' && check.status === 'FAIL'), true);
+  assert.equal(report.result_reality_delta.some((row) => row.target.startsWith('Real execution') && row.status === 'FAIL'), true);
+});
+
+
+test('minimal fake dogfood artifacts still fail coherence checks', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-fake-artifacts-'));
+  mkdirSync(join(dir, 'docs', 'milestones'), { recursive: true });
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  mkdirSync(join(dir, 'dist'), { recursive: true });
+  const dogRoot = join(dir, 'dogfood');
+  const basic = 'run-basic'; const multi = 'run-multi'; const approval = 'approval-apply';
+  mkdirSync(join(dogRoot, '.agent', 'runs', basic), { recursive: true });
+  mkdirSync(join(dogRoot, '.agent', 'runs', multi), { recursive: true });
+  mkdirSync(join(dogRoot, '.agent', 'approvals'), { recursive: true });
+  writeFileSync(join(dogRoot, '.agent', 'runs', basic, 'executor.process.json'), JSON.stringify({ exit_code: 0 }));
+  writeFileSync(join(dogRoot, '.agent', 'runs', basic, 'review.md'), 'pass');
+  writeFileSync(join(dogRoot, '.agent', 'runs', multi, 'scheduler.json'), JSON.stringify({ workers: ['worker-001', 'worker-002'] }));
+  writeFileSync(join(dogRoot, '.agent', 'runs', multi, 'conflict-report.generated.md'), 'Status: clear');
+  writeFileSync(join(dogRoot, '.agent', 'approvals', `${approval}.json`), JSON.stringify({ id: approval, run_id: multi, type: 'apply_proposal' }));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ bin: { agent: './dist/cli.js' } }));
+  writeFileSync(join(dir, 'dist', 'cli.js'), 'if(process.argv.includes("--version")) console.log("dominic-orchestration 0.1.0"); else console.log("agent quality gate [--write]\nagent run create|start|collect|cancel|latest\nagent apply propose|approved");');
+  writeFileSync(join(dir, 'dominic_orchestration_PRD.md'), '로컬 웹서비스 로컬 에이전트 작업 v0: Single Run + Review v1: Manager + Worker + Reviewer v2: Bounded Multi-Worker');
+  writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_COMPLETION_STANDARD.md'), 'Anti-Self-Deception Critic Gate Scope Integrity Gate rubber-stamp 원 PRD Result-Reality Delta');
+  const rows = ['Installable CLI','Web UI','Project registry','Durable index','v0 run lifecycle','v1 role execution','Executor adapter','Policy/approval','Promotion proposals','v2 scheduler','v2 worktrees','Conflict detection','Apply/merge proposal','Dogfood','Scope integrity','Anti-self-deception critic'];
+  writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n' + rows.map((r) => `| ${r} | x | x | PASS |`).join('\n') + '\nUI shows worker lanes Run detail UI showing all required evidence');
+  writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), `FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS root=${dogRoot} basic_run=${basic} multi_run=${multi} approval=${approval}`);
+  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path Anti-self-deception product gate rejects rubber-stamp criteria');
+  const report = (await import('./core.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.result_reality_delta.some((row) => row.target.startsWith('Real execution') && row.status === 'FAIL'), true);
+});
+
+
+test('forged dogfood proposal digest fails product gate', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-forged-digest-'));
+  mkdirSync(join(dir, 'docs', 'milestones'), { recursive: true });
+  mkdirSync(join(dir, 'src'), { recursive: true });
+  mkdirSync(join(dir, 'dist'), { recursive: true });
+  const dogRoot = join(dir, 'dogfood');
+  const basic = 'run-basic'; const multi = 'run-multi'; const approval = 'approval-apply';
+  const basicDir = join(dogRoot, '.agent', 'runs', basic);
+  const multiDir = join(dogRoot, '.agent', 'runs', multi);
+  const proposalDir = join(multiDir, 'apply-proposal');
+  mkdirSync(basicDir, { recursive: true }); mkdirSync(proposalDir, { recursive: true }); mkdirSync(join(dogRoot, '.agent', 'approvals'), { recursive: true });
+  writeFileSync(join(basicDir, 'run.yaml'), `id: "${basic}"\nmode: "basic"\nstatus: "completed"\ndecision: "pass"\nexit_code: 0\n`);
+  writeFileSync(join(basicDir, 'executor.process.json'), JSON.stringify({ label: 'executor', exit_code: 0, stdout: 'Dominic Orchestration executor smoke' }));
+  writeFileSync(join(basicDir, 'review.md'), '## Decision\npass');
+  writeFileSync(join(multiDir, 'run.yaml'), `id: "${multi}"\nmode: "multi"\nstatus: "completed"\ndecision: "pass"\nexit_code: 0\nmax_workers: 2\n`);
+  writeFileSync(join(multiDir, 'scheduler.json'), JSON.stringify({ strategy: 'bounded-parallel', workers: ['worker-001', 'worker-002'], ended_at: new Date().toISOString() }));
+  writeFileSync(join(multiDir, 'conflict-report.generated.md'), 'Status: clear\nworker-001\nworker-002');
+  writeFileSync(join(proposalDir, 'worker-001.patch'), 'diff --git a/x.txt b/x.txt\nnew file mode 100644\n--- /dev/null\n+++ b/x.txt\n@@ -0,0 +1 @@\n+x\n');
+  const badSha = '0'.repeat(64);
+  writeFileSync(join(proposalDir, 'manifest.json'), JSON.stringify({ run_id: multi, patches: ['worker-001.patch'], sha256: badSha }));
+  writeFileSync(join(dogRoot, '.agent', 'approvals', `${approval}.json`), JSON.stringify({ id: approval, run_id: multi, type: 'apply_proposal', status: 'applied', proposal_path: `.agent/runs/${multi}/apply-proposal`, proposal_sha256: badSha }));
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({ bin: { agent: './dist/cli.js' } }));
+  writeFileSync(join(dir, 'dist', 'cli.js'), 'if(process.argv.includes("--version")) console.log("dominic-orchestration 0.1.0"); else console.log("agent quality gate [--write]\nagent run create|start|collect|cancel|latest\nagent apply propose|approved");');
+  writeFileSync(join(dir, 'dominic_orchestration_PRD.md'), '로컬 웹서비스 로컬 에이전트 작업 v0: Single Run + Review v1: Manager + Worker + Reviewer v2: Bounded Multi-Worker');
+  writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_COMPLETION_STANDARD.md'), 'Anti-Self-Deception Critic Gate Scope Integrity Gate rubber-stamp 원 PRD Result-Reality Delta');
+  const rows = ['Installable CLI','Web UI','Project registry','Durable index','v0 run lifecycle','v1 role execution','Executor adapter','Policy/approval','Promotion proposals','v2 scheduler','v2 worktrees','Conflict detection','Apply/merge proposal','Dogfood','Scope integrity','Anti-self-deception critic'];
+  writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n' + rows.map((r) => `| ${r} | x | x | PASS |`).join('\n') + '\nUI shows worker lanes Run detail UI showing all required evidence');
+  writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), `FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS root=${dogRoot} basic_run=${basic} multi_run=${multi} approval=${approval}`);
+  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path Anti-self-deception product gate rejects rubber-stamp criteria');
+  const report = (await import('./core.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.result_reality_delta.some((row) => row.target.startsWith('Real execution') && row.status === 'FAIL'), true);
+});

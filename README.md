@@ -67,3 +67,13 @@ The server binds loopback only by default. `--unsafe-host` exposes remote comman
 - Mutating shell commands create a `shell_mutation` approval and do not execute until approved.
 - Risky apply is approval-gated and never auto-pushes.
 - Worktree cleanup is explicit: `agent worktrees cleanup`.
+
+## Product quality gate
+
+Run the PRD-scoped anti-self-deception product gate before claiming milestone completion:
+
+```bash
+agent quality gate --write
+```
+
+The gate rejects scaffold/MVP/docs-only/self-certified completion, verifies that the claimed scope is traceable to `dominic_orchestration_PRD.md`, and writes a durable report under `.agent/product-gates/`. Passing this gate means PRD-scoped local v0-v2 behavior passed; it is not a claim that every future hosted/v3/SaaS feature is complete.

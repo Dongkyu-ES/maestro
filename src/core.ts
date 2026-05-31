@@ -226,6 +226,97 @@ export function applyApprovedProposal(approvalId: string, cwd = process.cwd()): 
   approval.status = 'applied'; approval.updated_at = nowIso(); writeFileSync(approvalPath, JSON.stringify(approval, null, 2)); rebuildIndex(root); return approval;
 }
 
+export interface ProductGateCheck { name: string; status: 'PASS' | 'FAIL'; evidence: string; }
+export interface ProductGateDelta { target: string; evidence: string; delta: string; status: 'PASS' | 'FAIL'; }
+export interface ProductGateReport { schema_version: number; generated_at: string; decision: 'PASS' | 'FAIL'; scope: string; result_reality_delta: ProductGateDelta[]; checks: ProductGateCheck[]; report_path?: string; }
+function hasAll(text: string, needles: string[]): boolean { return needles.every((needle) => text.includes(needle)); }
+function readIfExists(path: string): string { return existsSync(path) ? readFileSync(path, 'utf8') : ''; }
+function gateCheck(name: string, ok: boolean, evidence: string): ProductGateCheck { return { name, status: ok ? 'PASS' : 'FAIL', evidence }; }
+function jsonIfExists(path: string): any { try { return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null; } catch { return null; } }
+function commandEvidence(root: string, args: string[], mustInclude: string[]): boolean { try { const out = execFileSync(process.execPath, args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 5000 }); return mustInclude.every((needle) => out.includes(needle)); } catch { return false; } }
+function markdownTableRows(text: string): string[][] { return text.split('\n').filter((line) => /^\|.*\|$/.test(line.trim()) && !/^\|\s*-/.test(line.trim())).map((line) => line.trim().slice(1, -1).split('|').map((cell) => cell.trim())); }
+function hasPassingMatrixRows(roadmap: string, requiredAreas: string[]): boolean { const rows = markdownTableRows(roadmap); return requiredAreas.every((area) => rows.some((row) => row[0] === area && row.at(-1) === 'PASS')) && !rows.some((row) => row.at(-1) === 'FAIL'); }
+function countTests(testText: string): number { return [...testText.matchAll(/\btest\(/g)].length; }
+
+function dogfoodEvidence(dogfood: string): { ok: boolean; root: string; basicRun: string; multiRun: string; approval: string; evidence: string } {
+  const root = dogfood.match(/root=([^\s]+)/)?.[1] || '';
+  const basicRun = dogfood.match(/basic_run=([^\s]+)/)?.[1] || '';
+  const multiRun = dogfood.match(/multi_run=([^\s]+)/)?.[1] || '';
+  const approval = dogfood.match(/approval=([^\s]+)/)?.[1] || '';
+  const basicDir = root && basicRun ? join(root, AGENT_DIR, 'runs', basicRun) : '';
+  const multiDir = root && multiRun ? join(root, AGENT_DIR, 'runs', multiRun) : '';
+  const approvalPath = root && approval ? join(root, AGENT_DIR, 'approvals', `${approval}.json`) : '';
+  const basicYaml = basicDir && existsSync(join(basicDir, 'run.yaml')) ? readYaml(join(basicDir, 'run.yaml')) : {};
+  const multiYaml = multiDir && existsSync(join(multiDir, 'run.yaml')) ? readYaml(join(multiDir, 'run.yaml')) : {};
+  const basicProcess = basicDir ? jsonIfExists(join(basicDir, 'executor.process.json')) : null;
+  const scheduler = multiDir ? jsonIfExists(join(multiDir, 'scheduler.json')) : null;
+  const approvalJson = approvalPath ? jsonIfExists(approvalPath) : null;
+  const manifestPath = approvalJson?.proposal_path ? join(root, String(approvalJson.proposal_path), 'manifest.json') : '';
+  const manifest = manifestPath ? jsonIfExists(manifestPath) : null;
+  const patchFiles = manifestPath && Array.isArray(manifest?.patches) ? manifest.patches.map((patch: string) => join(dirname(manifestPath), patch)) : [];
+  const basicOk = basicYaml.id === basicRun && basicYaml.mode === 'basic' && basicYaml.status === 'completed' && basicYaml.decision === 'pass' && Number(basicYaml.exit_code) === 0 && basicProcess?.label === 'executor' && Number(basicProcess?.exit_code) === 0 && String(basicProcess?.stdout || '').includes('Dominic Orchestration executor smoke') && /## Decision\npass/.test(readIfExists(join(basicDir, 'review.md')));
+  const multiOk = multiYaml.id === multiRun && multiYaml.mode === 'multi' && multiYaml.status === 'completed' && multiYaml.decision === 'pass' && Number(multiYaml.exit_code) === 0 && Number(multiYaml.max_workers) >= 2 && scheduler?.strategy === 'bounded-parallel' && Array.isArray(scheduler?.workers) && scheduler.workers.length >= 2 && Boolean(scheduler?.ended_at) && /Status: clear/.test(readIfExists(join(multiDir, 'conflict-report.generated.md'))) && /worker-001/.test(readIfExists(join(multiDir, 'conflict-report.generated.md'))) && /worker-002/.test(readIfExists(join(multiDir, 'conflict-report.generated.md')));
+  const patchesOk = patchFiles.length >= 1 && patchFiles.every((patch: string) => existsSync(patch) && readFileSync(patch, 'utf8').trim().startsWith('diff --git '));
+  const patchDigest = patchesOk ? (() => { const digest = createHash('sha256'); for (const patch of patchFiles) digest.update(readFileSync(patch)); return digest.digest('hex'); })() : '';
+  const applyOk = approvalJson?.id === approval && approvalJson?.run_id === multiRun && approvalJson?.type === 'apply_proposal' && ['approved', 'applied'].includes(String(approvalJson?.status)) && manifest?.run_id === multiRun && /^[a-f0-9]{64}$/.test(String(manifest?.sha256 || '')) && manifest?.sha256 === approvalJson?.proposal_sha256 && manifest?.sha256 === patchDigest && patchesOk;
+  const ok = Boolean(root && basicRun && multiRun && approval && basicOk && multiOk && applyOk);
+  const reasons = [basicOk ? '' : 'basic run content invalid', multiOk ? '' : 'multi run content invalid', applyOk ? '' : 'apply proposal content invalid'].filter(Boolean).join('; ');
+  return { ok, root, basicRun, multiRun, approval, evidence: ok ? `resolved coherent dogfood artifacts at ${root}` : `missing/unresolved dogfood artifacts root=${root || 'missing'} basic=${basicRun || 'missing'} multi=${multiRun || 'missing'} approval=${approval || 'missing'} ${reasons}`.trim() };
+}
+function deltaRow(target: string, ok: boolean, evidence: string, passDelta: string, failDelta: string): ProductGateDelta { return { target, evidence, delta: ok ? passDelta : failDelta, status: ok ? 'PASS' : 'FAIL' }; }
+export function runProductGate(cwd = process.cwd(), options: { write?: boolean } = {}): ProductGateReport {
+  const root = projectRoot(cwd);
+  const prd = readIfExists(join(root, 'dominic_orchestration_PRD.md'));
+  const standard = readIfExists(join(root, 'docs', 'milestones', 'PRODUCT_COMPLETION_STANDARD.md'));
+  const roadmap = readIfExists(join(root, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'));
+  const rerun = readIfExists(join(root, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'));
+  const dogfood = readIfExists(join(root, 'docs', 'milestones', 'DOGFOOD_REPORT.md'));
+  const packageJson = jsonIfExists(join(root, 'package.json'));
+  const tests = readIfExists(join(root, 'src', 'core.test.ts'));
+  const helpOk = existsSync(join(root, 'dist', 'cli.js')) && commandEvidence(root, ['dist/cli.js', '--help'], ['agent quality gate [--write]', 'agent run create|start|collect|cancel|latest', 'agent apply propose|approved']);
+  const versionOk = existsSync(join(root, 'dist', 'cli.js')) && commandEvidence(root, ['dist/cli.js', '--version'], ['dominic-orchestration']);
+  const requiredRows = ['Installable CLI', 'Web UI', 'Project registry', 'Durable index', 'v0 run lifecycle', 'v1 role execution', 'Executor adapter', 'Policy/approval', 'Promotion proposals', 'v2 scheduler', 'v2 worktrees', 'Conflict detection', 'Apply/merge proposal', 'Dogfood', 'Scope integrity', 'Anti-self-deception critic'];
+  const reportHasDelta = hasAll(rerun, ['Result-Reality Delta', '| Original PRD / v0-v2 target | Current runnable evidence | Delta |', 'Forbidden completion claim', 'Allowed completion claim']);
+  const prdScopeOk = hasAll(prd, ['로컬 웹서비스', '로컬 에이전트 작업', 'v0: Single Run + Review', 'v1: Manager + Worker + Reviewer', 'v2: Bounded Multi-Worker']);
+  const acceptanceOk = hasPassingMatrixRows(roadmap, requiredRows);
+  const dogfoodResolved = dogfoodEvidence(dogfood);
+  const executionOk = dogfoodResolved.ok && hasAll(dogfood, ['FINAL_PRODUCT_SMOKE_PASS', 'basic_run=', 'multi_run=', 'approval=']) && hasAll(tests, ['executor.process.json', 'scheduler.json', 'worker-001.process.json', 'roles mode passes distinct ROLE context']);
+  const evidenceOk = hasAll(tests, ['actual worktree changes not declared', 'declared files not present in worktree diff', 'multi mode detects actual worktree conflicts', 'multi mode blocks stale declared files absent from actual worktree diff']);
+  const safetyOk = hasAll(tests, ['unsafe-host auth does not leak tokens', 'readonly shell allowlist rejects mutating git output flags', 'secret path detection and safeJoin reject unsafe paths', 'shell mutation approvals are bound to the exact command digest', 'applyApprovedProposal checks whole bundle before applying']);
+  const regressionOk = countTests(tests) >= 49 && hasAll(tests, ['fake string-only repo cannot pass the product gate', 'product gate durable report contains report_path', 'Anti-self-deception product gate rejects rubber-stamp criteria']);
+  const resultRealityDelta: ProductGateDelta[] = [
+    deltaRow('Original PRD scope: local webservice, task/run/worker/review/promotion, v0-v2 bounded flow', prdScopeOk, 'dominic_orchestration_PRD.md required scope anchors', 'Claimed local v0-v2 scope is PRD-derived.', 'Cannot prove claimed scope from original PRD.'),
+    deltaRow('Runnable operator surface: installable CLI and command help/version', Boolean(packageJson?.bin?.agent === './dist/cli.js') && helpOk && versionOk, 'package.json bin + dist/cli.js --help/--version', 'Runnable CLI evidence exists.', 'CLI/package evidence is missing or not runnable.'),
+    deltaRow('Acceptance matrix: every PRD-scoped row passes without FAIL', acceptanceOk, 'docs/milestones/FULL_PRODUCT_ROADMAP.md parsed table rows', 'Matrix has all required PASS rows and no FAIL rows.', 'Acceptance matrix is incomplete or contains FAIL rows.'),
+    deltaRow('Real execution: dogfood run ids plus process/scheduler/role regressions', executionOk, `${dogfoodResolved.evidence}; DOGFOOD_REPORT.md + src/core.test.ts behavioral tests`, 'Execution evidence is stronger than prose.', 'Execution evidence is missing or prose-only.'),
+    deltaRow('Evidence integrity: worker output checked against actual worktree diff', evidenceOk, 'src/core.test.ts mismatch/conflict tests', 'Worker prose is not the sole truth source.', 'No deterministic mismatch/conflict regression evidence.'),
+    deltaRow('Safety: command/control boundaries covered by adversarial tests', safetyOk, 'src/core.test.ts safety and approval tests', 'Policy/safety claims have adversarial tests.', 'Policy/safety claims lack adversarial tests.'),
+    deltaRow('Anti-rubber-stamp regression: fake string-only repo fails', regressionOk, 'src/core.test.ts positive and negative product gate tests', 'The gate has negative tests against string-only self-certification.', 'The gate lacks negative anti-rubber-stamp tests.')
+  ];
+  const deltaOk = resultRealityDelta.every((row) => row.status === 'PASS');
+  const checks: ProductGateCheck[] = [
+    gateCheck('PRD Scope Integrity Gate', prdScopeOk && deltaOk, 'Original PRD scope and the Result-Reality Delta report must both exist; local-first scope must be PRD-derived, not invented after implementation.'),
+    gateCheck('Anti-Self-Deception Critic Gate', hasAll(standard, ['Anti-Self-Deception Critic Gate', 'Scope Integrity Gate', 'rubber-stamp', '원 PRD', 'Result-Reality Delta']) && deltaOk && (!rerun || reportHasDelta), 'The repo must document the rubber-stamp failure mode and include an explicit PRD-vs-result delta plus allowed/forbidden completion wording.'),
+    gateCheck('Product Completeness Gate', Boolean(packageJson?.bin?.agent === './dist/cli.js') && helpOk && versionOk && acceptanceOk, 'Package bin, built CLI help/version, and every PRD-scoped acceptance matrix row must pass without FAIL rows.'),
+    gateCheck('Real Execution Gate', executionOk, 'Execution claims require dogfood run identifiers plus process/scheduler/role regression evidence.'),
+    gateCheck('Evidence Integrity Gate', evidenceOk, 'Worker prose must be tested against actual worktree diff mismatches and conflicts.'),
+    gateCheck('Safety and Policy Gate', safetyOk, 'Security/policy gates must be backed by adversarial tests, not just source-code strings.'),
+    gateCheck('Operator UX Gate', helpOk && hasAll(rerun, ['CLI/Web controls', 'agent quality gate --write']) && hasAll(roadmap, ['UI shows worker lanes', 'Run detail UI showing all required evidence']), 'CLI help and reports must expose task/run/approval/product gate controls without manual .agent editing.'),
+    gateCheck('Regression Gate', regressionOk, 'Regression tests must include positive and negative anti-rubber-stamp fixtures plus durable report-path coverage.'),
+    gateCheck('Dogfood Gate', dogfoodResolved.ok && hasAll(dogfood, ['FINAL_PRODUCT_SMOKE_PASS', 'WEB_CSRF_SMOKE_PASS', 'FINAL_POLICY_EVIDENCE_PASS']), 'Dogfood must record real product use and policy/web smoke evidence.')
+  ];
+  const decision = checks.every((check) => check.status === 'PASS') ? 'PASS' : 'FAIL';
+  const report: ProductGateReport = { schema_version: 1, generated_at: nowIso(), decision, scope: 'PRD-scoped local v0-v2 product; no claim of hosted SaaS, v3 custom runtime, or automatic push.', result_reality_delta: resultRealityDelta, checks };
+  if (options.write) {
+    const dir = safeJoin(root, AGENT_DIR, 'product-gates'); ensureDir(dir);
+    const reportPath = join(dir, `product-gate-${nowIso().replace(/[-:TZ.]/g, '').slice(0, 14)}.json`);
+    report.report_path = relative(root, reportPath);
+    writeFileSync(reportPath, JSON.stringify(report, null, 2));
+    rebuildIndex(root);
+  }
+  return report;
+}
+
 export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''): string { const index = loadIndex(cwd); const csrf = csrfToken ? `<input type="hidden" name="csrf" value="${attr(csrfToken)}">` : ''; const auth = authToken ? `<input type="hidden" name="auth" value="${attr(authToken)}">` : ''; const hidden = csrf + auth; return page('Dominic Orchestration', `<header><h1>Dominic Orchestration</h1><p>95% product-gated local agent control plane</p></header><section class="grid"><div class="card"><h2>Tasks</h2><p>${index.tasks.length}</p></div><div class="card"><h2>Runs</h2><p>${index.runs.length}</p></div><div class="card"><h2>Approvals</h2><p>${index.approvals.filter(a=>a.status==='requested').length}</p></div><div class="card"><h2>Promotions</h2><p>${index.promotions.length}</p></div></section><section class="card"><h2>Create Task</h2><form method="POST" action="/api/tasks">${hidden}<input name="title" placeholder="Task title" required><button>Create</button></form></section><section class="card"><h2>Task Board</h2>${index.tasks.map(t=>`<div class="row"><b>${attr(t.title)}</b> <code>${t.id}</code> <span>${t.status}</span><form method="POST" action="/api/tasks/${t.id}/update">${hidden}<input name="title" value="${attr(t.title)}"><select name="status"><option>${t.status}</option><option>ready</option><option>running</option><option>done</option><option>blocked</option><option>cancelled</option></select><button>Update Task</button></form><form method="POST" action="/api/tasks/${t.id}/archive">${hidden}<button>Archive</button></form><form method="POST" action="/api/runs">${hidden}<input type="hidden" name="taskId" value="${t.id}"><select name="mode"><option>basic</option><option>roles</option><option>multi</option></select><button>Create Run</button></form></div>`).join('') || '<p>No tasks.</p>'}</section><section class="card"><h2>Runs</h2>${index.runs.slice().reverse().map(r=>`<div class="row"><a href="/run/${attr(r.id)}">${esc(r.id)}</a> <span>${esc(String(r.mode))}</span> <span>${esc(String(r.status))}</span> <form method="POST" action="/api/runs/${r.id}/start">${hidden}<input name="command" placeholder="executor command"><button>Start</button></form><form method="POST" action="/api/runs/${r.id}/collect">${hidden}<button>Collect</button></form><form method="POST" action="/api/runs/${r.id}/cancel">${hidden}<button>Cancel</button></form><form method="POST" action="/api/runs/${r.id}/apply-proposal">${hidden}<button>Propose Apply</button></form></div>`).join('') || '<p>No runs.</p>'}</section><section class="card"><h2>Approvals</h2>${index.approvals.map(a=>`<div class="row"><code>${esc(a.id)}</code> ${esc(a.type)} ${esc(a.risk)} ${esc(a.status)}<form method="POST" action="/api/approvals/${a.id}/approve">${hidden}<button>Approve</button></form><form method="POST" action="/api/approvals/${a.id}/reject">${hidden}<button>Reject</button></form>${a.type==='apply_proposal' && a.status==='approved' ? `<form method="POST" action="/api/approvals/${a.id}/apply">${hidden}<button>Apply Approved</button></form>` : ''}</div>`).join('') || '<p>No approvals.</p>'}</section>`); }
 export function renderRun(runId: string, cwd = process.cwd()): string { if (!/^run-[A-Za-z0-9가-힣-]+$/.test(runId)) throw new Error(`invalid run id: ${runId}`); const root = projectRoot(cwd); const runsDir = safeJoin(root, AGENT_DIR, 'runs'); const runDir = safeJoin(runsDir, runId); const relToRuns = relative(realpathSync(runsDir), realpathSync(runDir)).replaceAll('\\', '/'); if (relToRuns === '..' || relToRuns.startsWith('../')) throw new Error(`invalid run path: ${runId}`); const names = listFilesRecursive(runDir).filter((f) => { if (f.includes('/.git/') || isSecretPath(f)) return false; const full = join(runDir, f); const real = realpathSync(full); const rel = relative(realpathSync(runDir), real).replaceAll('\\', '/'); return !(rel === '..' || rel.startsWith('../') || isSecretPath(relative(root, real).replaceAll('\\', '/'))); }).sort(); return page(runId, `<a href="/">← back</a><h1>${esc(runId)}</h1>${names.map(n=>`<h2>${esc(n)}</h2><pre>${esc(redact(readFileSync(join(runDir,n),'utf8')))}</pre>`).join('')}`); }
 function page(title: string, body: string): string { return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>body{font-family:system-ui;margin:2rem;max-width:1200px}pre{background:#111;color:#eee;padding:1rem;overflow:auto;white-space:pre-wrap}.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:1rem}.card{border:1px solid #ddd;padding:1rem;margin:.75rem 0;border-radius:8px}.row{display:flex;gap:.75rem;align-items:center;border-top:1px solid #eee;padding:.5rem}input,select,button{font:inherit;padding:.35rem}</style></head><body>${body}</body></html>`; }

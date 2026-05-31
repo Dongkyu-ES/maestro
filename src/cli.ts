@@ -3,7 +3,7 @@ import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { parse as parseQuery } from 'node:querystring';
 import { existsSync, readFileSync } from 'node:fs';
-import { addProject, addTask, applyApprovedProposal, cancelRun, cleanupWorktrees, collectRun, createApproval, createRun, initProject, latestRunId, listApprovals, listProjects, listTasks, loadIndex, proposeApply, rebuildIndex, removeProject, renderHtml, renderRun, resolveApproval, startRun, taskPath, updateTask } from './core.js';
+import { addProject, addTask, applyApprovedProposal, cancelRun, cleanupWorktrees, collectRun, createApproval, createRun, initProject, latestRunId, listApprovals, listProjects, listTasks, loadIndex, proposeApply, rebuildIndex, removeProject, renderHtml, renderRun, resolveApproval, runProductGate, startRun, taskPath, updateTask } from './core.js';
 
 function arg(name: string, fallback?: string): string | undefined { const idx = process.argv.indexOf(name); return idx >= 0 ? process.argv[idx + 1] : fallback; }
 function has(name: string): boolean { return process.argv.includes(name); }
@@ -23,6 +23,7 @@ function usage(): string { return `usage:
   agent approval request|approve|reject
   agent apply propose|approved
   agent worktrees cleanup
+  agent quality gate [--write]
   agent web [--host 127.0.0.1] [--port 4317] [--unsafe-host]`; }
 
 async function main() {
@@ -55,6 +56,7 @@ async function main() {
     if (cmd === 'apply' && sub === 'propose') { const id = rest[0] || latestRunId(); if (!id) throw new Error('usage: agent apply propose <run-id>'); console.log(JSON.stringify(proposeApply(id), null, 2)); return; }
     if (cmd === 'apply' && sub === 'approved') { const id = rest[0]; if (!id) throw new Error('usage: agent apply approved <approval-id>'); console.log(JSON.stringify(applyApprovedProposal(id), null, 2)); return; }
     if (cmd === 'worktrees' && sub === 'cleanup') { cleanupWorktrees(); console.log('worktrees cleaned'); return; }
+    if (cmd === 'quality' && sub === 'gate') { const report = runProductGate(process.cwd(), { write: has('--write') }); console.log(JSON.stringify(report, null, 2)); if (report.decision !== 'PASS') process.exitCode = 2; return; }
     if (cmd === 'web') { await serveWeb(); return; }
     console.log(usage());
   } catch (err: any) { console.error(`error: ${err.message || err}`); process.exitCode = 1; }
