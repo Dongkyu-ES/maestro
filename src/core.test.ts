@@ -688,6 +688,11 @@ test('unsafe-host auth does not leak tokens on unmatched POST', async () => {
     assert.ok(csrf);
     const created = await fetch(`http://127.0.0.1:${port}/api/tasks`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie }, body: `csrf=${csrf}&title=unsafe-host-task` });
     assert.equal(created.status, 303);
+    const loopbackAlias = await fetch(`http://127.0.0.1:${port}/api/tasks`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie, origin: `http://localhost:${port}` }, body: `csrf=${csrf}&title=localhost-origin-task` });
+    assert.equal(loopbackAlias.status, 303);
+    const badOrigin = await fetch(`http://127.0.0.1:${port}/api/tasks`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie, origin: 'http://evil.local' }, body: `csrf=${csrf}&title=bad-origin-task` });
+    assert.equal(badOrigin.status, 500);
+    assert.equal(await badOrigin.text(), 'invalid origin');
   } finally { child.kill('SIGTERM'); }
 });
 
