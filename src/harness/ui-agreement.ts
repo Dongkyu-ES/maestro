@@ -1,6 +1,6 @@
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { renderRun } from '../core.js';
+import { renderRun } from '../view.js';
 
 export interface UiAgreementSmokeReport {
   schema_version: 1;

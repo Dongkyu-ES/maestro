@@ -1,8 +1,7 @@
 import { execFileSync, spawn } from 'node:child_process';
-import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, dirname, join, resolve, relative } from 'node:path';
 import { createHash } from 'node:crypto';
-import { homedir } from 'node:os';
 import { appendRuntimeEvent, readRuntimeEvents, type RuntimeEventEnvelope } from './events/ledger.js';
 import { rebuildRuntimeProjection, findProjectedRun, type RuntimeProjection } from './projection/projection.js';
 import { writeProjectionSqlite } from './projection/sqlite-store.js';
@@ -11,78 +10,76 @@ import { createCodexLaunchProof } from './runtime/codex-process-bridge.js';
 import { evaluatePermission } from './policy/permission-broker.js';
 import { OmxCliAdapter } from './runtime/omx-adapter.js';
 import { AgyCliAdapter } from './runtime/agy-adapter.js';
+import {
+  AGENT_DIR,
+  type ApprovalRecord,
+  type Decision,
+  type EvidenceResult,
+  type ExecutorKind,
+  type ProductIndex,
+  type ProjectRecord,
+  type PromotionRecord,
+  type RunMeta,
+  type RunMode,
+  type RunStatus,
+  type TaskMeta,
+  type TaskStatus,
+  ensureDir,
+  frontmatter,
+  git,
+  gitEvidence,
+  gitNoIndexPatch,
+  isSecretPath,
+  normalizeNoIndexPatch,
+  nowIso,
+  parseFrontmatter,
+  patchTouchedFiles,
+  projectRoot,
+  readYaml,
+  redact,
+  registryPath,
+  safeJoin,
+  slug,
+  uniqueId,
+  writeIfMissing,
+  yaml,
+} from './util.js';
 
-export type TaskStatus = 'inbox' | 'scoped' | 'ready' | 'running' | 'review' | 'changes_requested' | 'done' | 'blocked' | 'cancelled' | 'abandoned';
+export {
+  AGENT_DIR,
+  ensureDir,
+  frontmatter,
+  git,
+  isSecretPath,
+  nowIso,
+  parseFrontmatter,
+  projectRoot,
+  readYaml,
+  redact,
+  registryPath,
+  safeJoin,
+  slug,
+  uniqueId,
+  writeIfMissing,
+  yaml,
+} from './util.js';
+export type {
+  ApprovalRecord,
+  Decision,
+  ExecutorKind,
+  ProductIndex,
+  ProjectRecord,
+  PromotionRecord,
+  RunMeta,
+  RunMode,
+  RunStatus,
+  TaskMeta,
+  TaskStatus,
+} from './util.js';
+
 const TASK_STATUSES = new Set(['inbox', 'scoped', 'ready', 'running', 'review', 'changes_requested', 'done', 'blocked', 'cancelled', 'abandoned']);
-export type RunStatus = 'created' | 'planning' | 'dispatching' | 'workers_running' | 'collecting' | 'reviewing' | 'awaiting_approval' | 'applying' | 'completed' | 'failed' | 'cancelled' | 'timed_out';
-export type RunMode = 'basic' | 'roles' | 'multi';
 const RUN_MODES = new Set(['basic', 'roles', 'multi']);
-export type Decision = 'pass' | 'changes_requested' | 'blocked' | 'fail';
 
-export interface TaskMeta { schema_version: number; id: string; title: string; status: TaskStatus; priority: 'low' | 'normal' | 'high'; created_at: string; updated_at: string; }
-export type ExecutorKind = 'omx' | 'codex' | 'agy' | 'command';
-export interface RunMeta { schema_version: number; id: string; task_id: string; status: RunStatus; executor: ExecutorKind; mode: RunMode; run_dir: string; max_workers?: number; command?: string; created_at: string; updated_at: string; started_at?: string; ended_at?: string; exit_code?: number; decision?: Decision; }
-export interface ProjectRecord { schema_version: number; id: string; name: string; root_path: string; agent_dir: string; created_at: string; updated_at: string; last_opened_at?: string; }
-export interface ApprovalRecord { schema_version: number; id: string; run_id: string; type: string; status: 'requested' | 'approved' | 'rejected' | 'applied' | 'failed_to_apply'; risk: 'low' | 'medium' | 'high'; summary: string; created_at: string; updated_at: string; proposal_sha256?: string; proposal_path?: string; command_sha256?: string; command_preview?: string; }
-export interface PromotionRecord { schema_version: number; id: string; run_id: string; target_type: 'agent_instruction' | 'skill' | 'workflow' | 'eval' | 'memory' | 'policy'; status: 'proposed' | 'approved' | 'applied' | 'rejected'; reason: string; target_path: string; proposal_path: string; created_at: string; updated_at: string; }
-export interface ProductIndex { schema_version: number; generated_at: string; project: ProjectRecord | null; tasks: TaskMeta[]; runs: RunMeta[]; approvals: ApprovalRecord[]; promotions: PromotionRecord[]; artifacts: { run_id: string; type: string; path: string }[]; }
-
-export const AGENT_DIR = '.agent';
-const SECRET_PATTERNS = [/^\.env(\..*)?$/, /.*\.pem$/, /.*\.key$/, /^id_rsa$/, /^id_ed25519$/, /^secrets\..*/, /^\.ssh(\/.*)?$/, /^\.config(\/.*)?$/];
-
-export function nowIso(): string { return new Date().toISOString(); }
-export function slug(input: string): string { return input.toLowerCase().replace(/[^a-z0-9가-힣]+/gi, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'item'; }
-export function uniqueId(prefix: string, label: string): string { const stamp = new Date().toISOString().replace(/[-:TZ.]/g, '').slice(0, 17); const rand = Math.random().toString(36).slice(2, 8); return `${prefix}-${stamp}-${rand}-${slug(label).slice(0, 24)}`; }
-export function projectRoot(cwd = process.cwd()): string { return realpathSync(cwd); }
-export function ensureDir(path: string): void { mkdirSync(path, { recursive: true }); }
-export function registryPath(): string { return join(homedir(), '.dominic_orchestration', 'registry.json'); }
-
-function gitNoIndexPatch(workspace: string, file: string): string { try { return execFileSync('git', ['diff', '--binary', '--no-index', '--', '/dev/null', file], { cwd: workspace, encoding: 'utf8' }); } catch (err: any) { return String(err.stdout || ''); } }
-function normalizeNoIndexPatch(patch: string): string { return patch; }
-function patchTouchedFiles(patch: string): string[] { return patch.split('\n').filter((line) => line.startsWith('diff --git ')).map((line) => line.trim().split(/\s+/)[3] || '').filter(Boolean).map((file) => file.replace(/^b\//, '')); }
-export function safeJoin(root: string, ...parts: string[]): string {
-  const realRoot = realpathSync(root);
-  const target = resolve(realRoot, ...parts);
-  const targetRel = relative(realRoot, target).replaceAll('\\', '/');
-  if (targetRel === '..' || targetRel.startsWith('../') || targetRel.startsWith('..\\')) throw new Error(`path escapes project root: ${target}`);
-  const parent = existsSync(target) ? target : dirname(target);
-  const realParent = existsSync(parent) ? realpathSync(parent) : realRoot;
-  const rel = relative(realRoot, realParent).replaceAll('\\', '/');
-  if (rel === '..' || rel.startsWith('../')) throw new Error(`path escapes project root: ${target}`);
-  const rootRel = relative(realRoot, target).replaceAll('\\', '/');
-  if (isSecretPath(rootRel)) throw new Error(`refusing secret path: ${rootRel}`);
-  return target;
-}
-
-export function isSecretPath(rootRelativePath: string): boolean {
-  const normalized = rootRelativePath.replaceAll('\\', '/');
-  return normalized.split('/').some((part, idx, arr) => {
-    const rest = arr.slice(idx).join('/');
-    return SECRET_PATTERNS.some((pattern) => pattern.test(part) || pattern.test(rest));
-  });
-}
-
-export function writeIfMissing(path: string, content: string): boolean { if (existsSync(path)) return false; ensureDir(dirname(path)); writeFileSync(path, content); return true; }
-export function yaml(meta: Record<string, unknown>): string { return Object.entries(meta).filter(([, v]) => v !== undefined).map(([k, v]) => `${k}: ${JSON.stringify(v)}`).join('\n') + '\n'; }
-export function frontmatter(meta: Record<string, unknown>, body: string): string { return `---\n${yaml(meta)}---\n\n${body.trim()}\n`; }
-export function parseFrontmatter(text: string): Record<string, string> {
-  if (!text.startsWith('---\n')) return {};
-  const end = text.indexOf('\n---', 4);
-  if (end < 0) return {};
-  const raw = text.slice(4, end).trim();
-  const out: Record<string, string> = {};
-  for (const line of raw.split('\n')) {
-    const idx = line.indexOf(':'); if (idx < 0) continue;
-    const key = line.slice(0, idx).trim(); let value: unknown = line.slice(idx + 1).trim();
-    try { value = JSON.parse(String(value)); } catch {}
-    out[key] = String(value);
-  }
-  return out;
-}
-export function readYaml(path: string): Record<string, string | number> { const out: Record<string, string | number> = {}; for (const line of readFileSync(path, 'utf8').split('\n')) { const idx = line.indexOf(':'); if (idx < 0) continue; const key = line.slice(0, idx).trim(); const raw = line.slice(idx + 1).trim(); try { out[key] = JSON.parse(raw); } catch { out[key] = raw; } } return out; }
-interface EvidenceResult { ok: boolean; output: string; error?: string; }
-function gitEvidence(args: string[], cwd = process.cwd()): EvidenceResult { try { return { ok: true, output: execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) }; } catch (err: any) { const error = String(err.stderr || err.message || err); return { ok: false, output: error, error }; } }
-export function git(args: string[], cwd = process.cwd()): string { return gitEvidence(args, cwd).output; }
 function recordEvidenceError(runDir: string, label: string, result: EvidenceResult): void { if (result.ok) return; const path = join(runDir, 'evidence-errors.json'); const existing = existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : []; existing.push({ label, ok: false, error: redact(result.error || result.output), recorded_at: nowIso() }); writeFileSync(path, JSON.stringify(existing, null, 2)); }
 
 export function loadRegistry(): ProjectRecord[] { const p = registryPath(); if (!existsSync(p)) return []; return JSON.parse(readFileSync(p, 'utf8')) as ProjectRecord[]; }
@@ -164,21 +161,6 @@ function appendGeneratedWorkerFiles(runDir: string, workerId: string, workspace:
 ## Files Changed
 ${files.map((file) => `- ${file}`).join('\n')}
 `); }
-const SECRET_VALUE_PATTERNS: RegExp[] = [
-  /-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----/g, // PEM private keys
-  /eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, // JWTs
-  /sk-(?:proj-|ant-)?[A-Za-z0-9_-]{8,}/g, // OpenAI / Anthropic
-  /gh[opsu]_[A-Za-z0-9_]{8,}/g, /github_pat_[A-Za-z0-9_]+/g, // GitHub
-  /npm_[A-Za-z0-9]{20,}/g, // npm
-  /xox[baprs]-[A-Za-z0-9-]{10,}/g, // Slack
-  /[rs]k_(?:live|test)_[A-Za-z0-9]{16,}/g, // Stripe
-  /AIza[0-9A-Za-z_-]{20,}/g, /ya29\.[0-9A-Za-z_-]{20,}/g, // Google API / OAuth
-  /(?:AKIA|ASIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|A3T[A-Z0-9])[0-9A-Z]{12,}/g, // AWS access key ids
-  /[Bb]earer\s+[A-Za-z0-9._~+/-]{20,}=*/g, // bearer tokens
-];
-const SECRET_KV_PATTERN = /(["']?(?:aws_secret_access_key|secret|secret_key|token|password|passwd|pwd|api[_-]?key|access[_-]?token|auth[_-]?token|client[_-]?secret|private[_-]?key)["']?\s*[:=]\s*["']?)([A-Za-z0-9/+_=.~-]{12,})(["']?)/gi;
-const SECRET_DB_URL_PATTERN = /((?:postgres(?:ql)?|mysql|mongodb(?:\+srv)?|redis|rediss|amqp|amqps):\/\/)[^:@\s/]+:[^@\s/]+@/g;
-export function redact(s: string): string { let out = s.replace(SECRET_DB_URL_PATTERN, '$1[REDACTED]@'); for (const re of SECRET_VALUE_PATTERNS) out = out.replace(re, '[REDACTED]'); return out.replace(SECRET_KV_PATTERN, '$1[REDACTED]$3'); }
 function requiresShellApproval(command: string, operatorProvided: boolean): boolean { if (!operatorProvided) return false; return !isReadonlyShellCommand(command); }
 function isReadonlyShellCommand(command: string): boolean { const trimmed = command.trim(); if (/[;&|<>`$(){}\[\]\n\r]/.test(trimmed)) return false; const parts = trimmed.split(/\s+/); const [cmd, sub, ...args] = parts; const safeFlags = new Set(['--short', '--branch', '--stat', '--name-only', '--name-status', '--oneline', '--decorate', '--porcelain', '--porcelain=v1', '--porcelain=v2']); if (cmd === 'pwd' && parts.length === 1) return true; if (cmd === 'ls') return args.every((a) => /^-[A-Za-z]+$/.test(a) || /^[A-Za-z0-9_./-]+$/.test(a)); if (cmd === 'cat') return args.length > 0 && args.every((a) => /^[A-Za-z0-9_./-]+$/.test(a) && !isSecretPath(a)); if (cmd !== 'git') return false; if (sub === 'worktree' && args[0] === 'list') return args.slice(1).every((a) => safeFlags.has(a)); if (!['status', 'diff', 'show', 'log', 'rev-parse', 'branch'].includes(sub || '')) return false; return args.every((a) => safeFlags.has(a) || /^[A-Za-z0-9_./:-]+$/.test(a) && !a.startsWith('--output') && a !== '-o'); }
 function commandDigest(command: string): string { return createHash('sha256').update(command).digest('hex'); }
@@ -191,7 +173,7 @@ export function cancelRun(runId: string, cwd = process.cwd()): RunMeta { const r
 function hasAdapterRuntimeEvidence(runDir: string): boolean { return readRuntimeEvents(runDir).some((event) => ['codex-adapter', 'omx-adapter', 'agy-adapter'].includes(event.source) && event.artifact_refs.length > 0); }
 function readExitCode(runDir: string): number { const summary = readRunProcessSummary(runDir); return summary.exitCode ?? (hasAdapterRuntimeEvidence(runDir) ? 0 : 1); }
 function processArtifactRefsForMode(runDir: string, mode: RunMode): string[] { const candidates = mode === 'basic' ? ['executor.process.json'] : mode === 'roles' ? ['manager.process.json', 'worker-001.process.json', 'reviewer.process.json'] : readdirSync(runDir).filter((f) => /^worker-\d+\.process\.json$/.test(f)).sort(); return candidates.filter((file) => existsSync(join(runDir, file))); }
-function runtimeTruthForRun(root: string, run: RunMeta): { label: string; css: string; evidence: string } { try { const runDir = join(root, run.run_dir); const projection = rebuildRuntimeProjection(readRuntimeEvents(runDir)); const projected = findProjectedRun(projection, run.id); const labels = projected?.labels || []; const stale = ['planning', 'dispatching', 'workers_running', 'collecting', 'reviewing', 'applying'].includes(String(run.status)) && Boolean(run.ended_at); if (stale) return { label: 'stale_not_running', css: 'stale', evidence: 'terminal evidence exists despite active metadata' }; if (run.status === 'awaiting_approval') return { label: 'approval_required', css: 'awaiting_approval', evidence: 'operator approval required before execution' }; if (labels.includes('primitive_shell') || run.executor === 'command') return { label: 'primitive_shell', css: 'primitive_shell', evidence: 'compatibility shell, not first-class Codex/OMX/agy runtime' }; const firstClassSession = projected?.sessions.find((session) => ['codex', 'omx', 'agy'].includes(String(session.adapter_kind)) && session.status === 'started'); if (firstClassSession) return { label: `${firstClassSession.adapter_kind}_runtime`, css: 'supported', evidence: `${projected?.event_count || 0} runtime events; session ${firstClassSession.session_id}` }; const label = labels[0] || run.executor || 'unproven'; return { label, css: 'unproven', evidence: projected ? `${projected.event_count} runtime events` : 'no runtime projection events' }; } catch { return { label: run.executor === 'command' ? 'primitive_shell' : 'unproven', css: 'unproven', evidence: 'projection unavailable' }; } }
+export function runtimeTruthForRun(root: string, run: RunMeta): { label: string; css: string; evidence: string } { try { const runDir = join(root, run.run_dir); const projection = rebuildRuntimeProjection(readRuntimeEvents(runDir)); const projected = findProjectedRun(projection, run.id); const labels = projected?.labels || []; const stale = ['planning', 'dispatching', 'workers_running', 'collecting', 'reviewing', 'applying'].includes(String(run.status)) && Boolean(run.ended_at); if (stale) return { label: 'stale_not_running', css: 'stale', evidence: 'terminal evidence exists despite active metadata' }; if (run.status === 'awaiting_approval') return { label: 'approval_required', css: 'awaiting_approval', evidence: 'operator approval required before execution' }; if (labels.includes('primitive_shell') || run.executor === 'command') return { label: 'primitive_shell', css: 'primitive_shell', evidence: 'compatibility shell, not first-class Codex/OMX/agy runtime' }; const firstClassSession = projected?.sessions.find((session) => ['codex', 'omx', 'agy'].includes(String(session.adapter_kind)) && session.status === 'started'); if (firstClassSession) return { label: `${firstClassSession.adapter_kind}_runtime`, css: 'supported', evidence: `${projected?.event_count || 0} runtime events; session ${firstClassSession.session_id}` }; const label = labels[0] || run.executor || 'unproven'; return { label, css: 'unproven', evidence: projected ? `${projected.event_count} runtime events` : 'no runtime projection events' }; } catch { return { label: run.executor === 'command' ? 'primitive_shell' : 'unproven', css: 'unproven', evidence: 'projection unavailable' }; } }
 
 function updateConflictAndSynthesis(runDir: string): void { const outputsDir = join(runDir, 'worker-outputs'); const outputs = existsSync(outputsDir) ? readdirSync(outputsDir).filter((f) => f.endsWith('.md')).sort() : []; const changedByWorker = new Map<string, string[]>(); const denied: string[] = []; const evidenceIssues: string[] = []; const worktreeIssues = collectWorktreeIssues(runDir); const worktreeChanges = collectWorktreeChanges(runDir, worktreeIssues); for (const output of outputs) { const workerId = output.replace(/\.md$/, ''); const text = readFileSync(join(outputsDir, output), 'utf8'); const declaredFiles = extractFilesChanged(text); const actualFiles = worktreeChanges.get(workerId) || []; const mergedFiles = new Set([...actualFiles, ...declaredFiles]); for (const file of mergedFiles) { if (isSecretPath(file)) denied.push(`${workerId}: ${file}`); const workers = changedByWorker.get(file) || []; workers.push(workerId); changedByWorker.set(file, workers); } const undeclared = actualFiles.filter((file) => !declaredFiles.includes(file)); const staleDeclared = declaredFiles.filter((file) => !actualFiles.includes(file) && !(actualFiles.includes('README.md') && file === 'README.md')); if (undeclared.length) evidenceIssues.push(`${workerId}: actual worktree changes not declared (${undeclared.join(', ')})`); if (staleDeclared.length) evidenceIssues.push(`${workerId}: declared files not present in worktree diff (${staleDeclared.join(', ')})`); } for (const [workerId, files] of worktreeChanges.entries()) { if (outputs.includes(`${workerId}.md`)) continue; for (const file of files) { if (isSecretPath(file)) denied.push(`${workerId}: ${file}`); const workers = changedByWorker.get(file) || []; workers.push(workerId); changedByWorker.set(file, workers); } if (files.length) evidenceIssues.push(`${workerId}: worktree has changes but worker output is missing`); } const overlaps = [...changedByWorker.entries()].filter(([, workers]) => new Set(workers).size > 1); const hasConflict = overlaps.length > 0 || denied.length > 0 || worktreeIssues.length > 0 || evidenceIssues.length > 0; const status = hasConflict ? 'blocked' : 'clear'; writeFileSync(join(runDir, 'conflict-report.generated.md'), ['# Conflict Report', '', `Status: ${status}`, '', `Workers reviewed: ${outputs.length}`, '', '## Overlapping Files', overlaps.length ? overlaps.map(([file, workers]) => `- ${file}: ${[...new Set(workers)].join(', ')}`).join('\n') : 'None.', '', '## Denied Paths', denied.length ? denied.map((item) => `- ${item}`).join('\n') : 'None.', '', '## Worktree Issues', worktreeIssues.length ? worktreeIssues.map((item) => `- ${item}`).join('\n') : 'None.', '', '## Evidence Mismatches', evidenceIssues.length ? evidenceIssues.map((item) => `- ${item}`).join('\n') : 'None.', '', '## Changed Files by Worker', changedByWorker.size ? [...changedByWorker.entries()].map(([file, workers]) => `- ${file}: ${workers.join(', ')}`).join('\n') : 'No changed files reported by worker outputs or worktrees.', ''].join('\n')); writeFileSync(join(runDir, 'synthesis.generated.md'), `# Synthesis\n\n## Accepted Outputs\n${outputs.map((o) => `- ${o}`).join('\n')}\n\n## Rejected Outputs\n${hasConflict ? '- Conflicting, denied, non-isolated, or mismatched worker evidence requires review before apply.' : 'None.'}\n\n## Conflicts\n${hasConflict ? 'Blocking conflicts, denied paths, worktree issues, or evidence mismatches found. See conflict-report.generated.md.' : 'No blocking conflicts detected from worker-reported changed files and actual worktree diffs.'}\n\n## Recommendation\n${hasConflict ? 'Do not apply automatically; resolve blockers first.' : 'Proceed to review.'}\n`); }
 function collectWorktreeIssues(runDir: string): string[] { const workOrdersDir = join(runDir, 'work-orders'); if (!existsSync(workOrdersDir)) return ['missing work-orders directory']; const issues: string[] = []; for (const file of readdirSync(workOrdersDir).filter((f) => f.endsWith('.yaml')).sort()) { const order = readYaml(join(workOrdersDir, file)); const workspace = String(order.isolated_workspace || ''); if (!workspace || workspace.startsWith('worktree_unavailable:') || !existsSync(workspace)) issues.push(`${file}: isolated workspace unavailable (${workspace || 'missing'})`); } return issues; }
@@ -212,7 +194,7 @@ export function listPromotions(cwd = process.cwd()): PromotionRecord[] { const d
 export function rebuildIndex(cwd = process.cwd()): ProductIndex { const root = projectRoot(cwd); ensureDir(safeJoin(root, AGENT_DIR)); const projectPath = safeJoin(root, AGENT_DIR, 'project.yaml'); const project = existsSync(projectPath) ? readYaml(projectPath) as unknown as ProjectRecord : null; const runsDir = safeJoin(root, AGENT_DIR, 'runs'); const runs = existsSync(runsDir) ? readdirSync(runsDir).filter((f) => statSync(join(runsDir, f)).isDirectory() && existsSync(join(runsDir, f, 'run.yaml'))).map((f) => normalizeRunMeta(readYaml(join(runsDir, f, 'run.yaml')) as unknown as RunMeta, join(runsDir, f))).sort((a, b) => a.id.localeCompare(b.id)) : []; const artifacts: { run_id: string; type: string; path: string }[] = []; for (const run of runs) { const dir = join(root, run.run_dir); if (!existsSync(dir)) continue; for (const rel of listFilesRecursive(dir)) artifacts.push({ run_id: run.id, type: rel, path: join(run.run_dir, rel) }); } const index: ProductIndex = { schema_version: 1, generated_at: nowIso(), project, tasks: listTasks(root), runs, approvals: listApprovals(root), promotions: listPromotions(root), artifacts }; writeFileSync(safeJoin(root, AGENT_DIR, 'index.json'), JSON.stringify(index, null, 2)); rebuildRuntimeProjectionStore(root); return index; }
 
 export function rebuildRuntimeProjectionStore(cwd = process.cwd()): RuntimeProjection { const root = projectRoot(cwd); const runsDir = safeJoin(root, AGENT_DIR, 'runs'); const events: RuntimeEventEnvelope[] = []; if (existsSync(runsDir)) { for (const runId of readdirSync(runsDir).sort()) { const dir = join(runsDir, runId); if (statSync(dir).isDirectory()) events.push(...readRuntimeEvents(dir)); } } const projection = rebuildRuntimeProjection(events); const projectionDir = safeJoin(root, AGENT_DIR, 'projection'); ensureDir(projectionDir); writeFileSync(join(projectionDir, 'runtime-projection.json'), JSON.stringify(projection, null, 2)); try { writeProjectionSqlite(join(projectionDir, 'runtime.sqlite'), projection); } catch (err: any) { writeFileSync(join(projectionDir, 'runtime-sqlite-error.txt'), String(err.message || err)); } return projection; }
-function listFilesRecursive(rootDir: string, prefix = ''): string[] { const out: string[] = []; for (const name of readdirSync(join(rootDir, prefix)).sort()) { const rel = prefix ? join(prefix, name) : name; const full = join(rootDir, rel); const st = lstatSync(full); if (st.isSymbolicLink()) continue; if (st.isDirectory()) out.push(...listFilesRecursive(rootDir, rel)); else out.push(rel); } return out; }
+export function listFilesRecursive(rootDir: string, prefix = ''): string[] { const out: string[] = []; for (const name of readdirSync(join(rootDir, prefix)).sort()) { const rel = prefix ? join(prefix, name) : name; const full = join(rootDir, rel); const st = lstatSync(full); if (st.isSymbolicLink()) continue; if (st.isDirectory()) out.push(...listFilesRecursive(rootDir, rel)); else out.push(rel); } return out; }
 export function loadIndex(cwd = process.cwd()): ProductIndex { const p = safeJoin(projectRoot(cwd), AGENT_DIR, 'index.json'); return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : rebuildIndex(cwd); }
 
 
@@ -270,20 +252,8 @@ export function applyApprovedProposal(approvalId: string, cwd = process.cwd()): 
   approval.status = 'applied'; approval.updated_at = nowIso(); writeFileSync(approvalPath, JSON.stringify(approval, null, 2)); rebuildIndex(root); return approval;
 }
 
-export interface ProductGateCheck { name: string; status: 'PASS' | 'FAIL'; evidence: string; }
-export interface ProductGateDelta { target: string; evidence: string; delta: string; status: 'PASS' | 'FAIL'; }
-export interface ProductGateReport { schema_version: number; generated_at: string; decision: 'PASS' | 'FAIL'; scope: string; completion_ceiling: number; completion_label: string; result_reality_delta: ProductGateDelta[]; checks: ProductGateCheck[]; report_path?: string; }
-function hasAll(text: string, needles: string[]): boolean { return needles.every((needle) => text.includes(needle)); }
-function readIfExists(path: string): string { return existsSync(path) ? readFileSync(path, 'utf8') : ''; }
-function gateCheck(name: string, ok: boolean, evidence: string): ProductGateCheck { return { name, status: ok ? 'PASS' : 'FAIL', evidence }; }
-function jsonIfExists(path: string): any { try { return existsSync(path) ? JSON.parse(readFileSync(path, 'utf8')) : null; } catch { return null; } }
-function commandEvidence(root: string, args: string[], mustInclude: string[]): boolean { try { const out = execFileSync(process.execPath, args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'], timeout: 15000 }); return mustInclude.every((needle) => out.includes(needle)); } catch { return false; } }
-function markdownTableRows(text: string): string[][] { return text.split('\n').filter((line) => /^\|.*\|$/.test(line.trim()) && !/^\|\s*-/.test(line.trim())).map((line) => line.trim().slice(1, -1).split('|').map((cell) => cell.trim())); }
-function hasPassingMatrixRows(roadmap: string, requiredAreas: string[]): boolean { const rows = markdownTableRows(roadmap); return requiredAreas.every((area) => rows.some((row) => row[0] === area && row.at(-1) === 'PASS')) && !rows.some((row) => row.at(-1) === 'FAIL'); }
-function countTests(testText: string): number { return [...testText.matchAll(/\btest\(/g)].length; }
-
-function runProcessJsonFiles(runDir: string): string[] { return existsSync(runDir) ? readdirSync(runDir).filter((f) => f.endsWith('.process.json')).sort() : []; }
-function readRunProcessSummary(runDir: string): { exitCode: number | null; stderr: string; stdout: string; valid: number; invalid: number; errors: string[] } {
+export function runProcessJsonFiles(runDir: string): string[] { return existsSync(runDir) ? readdirSync(runDir).filter((f) => f.endsWith('.process.json')).sort() : []; }
+export function readRunProcessSummary(runDir: string): { exitCode: number | null; stderr: string; stdout: string; valid: number; invalid: number; errors: string[] } {
   const files = runProcessJsonFiles(runDir);
   if (!files.length) return { exitCode: null, stderr: '', stdout: '', valid: 0, invalid: 0, errors: [] };
   let exitCode = 0; let stderr = ''; let stdout = ''; let valid = 0; let invalid = 0; const errors: string[] = [];
@@ -293,7 +263,7 @@ function readRunProcessSummary(runDir: string): { exitCode: number | null; stder
   if (valid === 0 || invalid > 0) exitCode = 1;
   return { exitCode, stderr, stdout, valid, invalid, errors };
 }
-function normalizeRunMeta(meta: RunMeta, runDir: string): RunMeta {
+export function normalizeRunMeta(meta: RunMeta, runDir: string): RunMeta {
   const out = { ...meta };
   const hasCancel = existsSync(join(runDir, 'cancel.requested'));
   const hasEnded = Boolean(out.ended_at);
@@ -319,202 +289,8 @@ export function reconcileRuns(cwd = process.cwd()): { checked: number; repaired:
   writeFileSync(join(agentDir, 'reconciliation.json'), JSON.stringify({ status: repaired === 0 ? 'PASS' : 'FAIL', ...result, generated_at: nowIso() }, null, 2));
   rebuildIndex(root); return result;
 }
+function readIfExists(path: string): string { return existsSync(path) ? readFileSync(path, 'utf8') : ''; }
 
-function activeStatus(status: unknown): boolean { return ['planning', 'dispatching', 'workers_running', 'collecting', 'reviewing', 'applying'].includes(String(status)); }
+export function activeStatus(status: unknown): boolean { return ['planning', 'dispatching', 'workers_running', 'collecting', 'reviewing', 'applying'].includes(String(status)); }
 
-function currentReviewInputHash(root: string): string {
-  const digest = createHash('sha256');
-  for (const rel of ['src/core.ts', 'src/cli.ts', 'src/core.test.ts', 'scripts/live-integration-smoke.mjs', 'docs/milestones/HARD_COMPLETION_GATES.md', 'docs/milestones/FULL_PRODUCT_ROADMAP.md', 'docs/milestones/DOGFOOD_REPORT.md']) {
-    const p = join(root, rel); digest.update(rel); digest.update(existsSync(p) ? readFileSync(p) : 'missing');
-  }
-  return digest.digest('hex');
-}
-function sha256Text(text: string): string { return createHash('sha256').update(text).digest('hex'); }
-function reviewArtifactOk(root: string, reviewGate: any): boolean {
-  if (!reviewGate || reviewGate.status !== 'PASS') return false;
-  const inputHash = currentReviewInputHash(root);
-  if (reviewGate.input_sha256 !== inputHash) return false;
-  const cr = reviewGate.codeReview;
-  if (cr?.recommendation !== 'APPROVE' || cr?.architectStatus !== 'CLEAR') return false;
-  const reviewer = cr.independentReview?.codeReviewer;
-  const architect = cr.independentReview?.architect;
-  const reviewerPath = reviewer?.artifact_path;
-  const architectPath = architect?.artifact_path;
-  if (!reviewerPath || !architectPath || reviewerPath === architectPath) return false;
-  const invalidReviewText = (text: string): boolean => /\b(fake|placeholder|stub|dummy|todo|lorem)\b/i.test(text) || text.trim().split(/\s+/).length < 25;
-  const validAgentId = (id: unknown): boolean => typeof id === 'string' && /^019[a-f0-9]{5}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(id);
-  const validIso = (x: unknown): boolean => typeof x === 'string' && !Number.isNaN(Date.parse(x));
-  const reviewerFull = join(root, reviewerPath);
-  const architectFull = join(root, architectPath);
-  if (typeof reviewerPath !== 'string' || typeof architectPath !== 'string' || reviewerPath.startsWith('/') || architectPath.startsWith('/') || reviewerPath.includes('..') || architectPath.includes('..')) return false;
-  if (!existsSync(reviewerFull) || !existsSync(architectFull)) return false;
-  const reviewerText = readFileSync(reviewerFull, 'utf8');
-  const architectText = readFileSync(architectFull, 'utf8');
-  const reviewerSha = sha256Text(reviewerText);
-  const architectSha = sha256Text(architectText);
-  if (invalidReviewText(reviewerText) || invalidReviewText(architectText)) return false;
-  if (!/code-reviewer/i.test(reviewerText) || !/recommendation\s*:\s*APPROVE/i.test(reviewerText)) return false;
-  if (!/architect/i.test(architectText) || !/architectural status\s*:\s*CLEAR/i.test(architectText)) return false;
-  for (const [entry, role, sha] of [[reviewer, 'code-reviewer', reviewerSha], [architect, 'architect', architectSha]] as const) {
-    if (entry?.agentRole !== role) return false;
-    if (entry?.artifact_sha256 !== sha) return false;
-    if (entry?.reviewed_input_sha256 !== inputHash) return false;
-    if (!validAgentId(entry?.agent_id)) return false;
-    if (entry?.source !== 'codex-native-subagent') return false;
-    if (entry?.status !== 'completed') return false;
-    if (!validIso(entry?.completed_at)) return false;
-    if (!Array.isArray(entry?.commands) || entry.commands.length < 2) return false;
-    const notificationPath = entry?.notification_path;
-    if (typeof notificationPath !== 'string' || notificationPath.startsWith('/') || notificationPath.includes('..')) return false;
-    const notification = jsonIfExists(join(root, notificationPath));
-    const completedText = String(notification?.status?.completed || '');
-    if (notification?.agent_path !== entry.agent_id) return false;
-    if (sha256Text(completedText) !== sha) return false;
-    if (completedText !== (role === 'code-reviewer' ? reviewerText : architectText)) return false;
-    if (role === 'code-reviewer' && !/Recommendation\s*:\s*APPROVE/i.test(completedText)) return false;
-    if (role === 'architect' && !/Architectural Status\s*:\s*CLEAR/i.test(completedText)) return false;
-  }
-  return true;
-}
-function hardGateRows(text: string): { total: number; fail: number; pass: number } {
-  const rows = markdownTableRows(text).filter((row) => row.length >= 3 && row[0] !== 'Gate');
-  return { total: rows.length, fail: rows.filter((row) => row.at(-1) === 'FAIL').length, pass: rows.filter((row) => row.at(-1) === 'PASS').length };
-}
-function contradictoryRunEvidence(root: string): string[] {
-  const dir = join(root, AGENT_DIR, 'runs');
-  if (!existsSync(dir)) return [];
-  const out: string[] = [];
-  for (const runId of readdirSync(dir).filter((f) => existsSync(join(dir, f, 'run.yaml'))).sort()) {
-    const runDir = join(dir, runId);
-    const meta = readYaml(join(runDir, 'run.yaml')) as unknown as RunMeta;
-    const hasEnded = Boolean(meta.ended_at);
-    const hasCancel = existsSync(join(runDir, 'cancel.requested'));
-    const hasProcess = readdirSync(runDir).some((f) => f.endsWith('.process.json'));
-    if (activeStatus(meta.status) && (hasEnded || hasCancel)) out.push(`${runId}: active status ${meta.status} with ended/cancel evidence`);
-    if (meta.status === 'created' && hasProcess) out.push(`${runId}: created status with process evidence`);
-    const cmdPath = join(runDir, 'executor-command.txt');
-    const cmd = readIfExists(cmdPath).trim();
-    if (/^(진행해|다시|해봐|좋아|ㅇㅋ|오케이)(\s|$)/.test(cmd)) out.push(`${runId}: natural-language operator reply captured as command (${cmd.slice(0, 40)})`);
-  }
-  return out;
-}
-
-function dogfoodEvidence(rootDir: string, dogfood: string): { ok: boolean; root: string; basicRun: string; multiRun: string; approval: string; evidence: string } {
-  const root = dogfood.match(/root=([^\s]+)/)?.[1] || '';
-  const basicRun = dogfood.match(/basic_run=([^\s]+)/)?.[1] || '';
-  const multiRun = dogfood.match(/multi_run=([^\s]+)/)?.[1] || '';
-  const approval = dogfood.match(/approval=([^\s]+)/)?.[1] || '';
-  const basicDir = root && basicRun ? join(root, AGENT_DIR, 'runs', basicRun) : '';
-  const multiDir = root && multiRun ? join(root, AGENT_DIR, 'runs', multiRun) : '';
-  const approvalPath = root && approval ? join(root, AGENT_DIR, 'approvals', `${approval}.json`) : '';
-  const basicYaml = basicDir && existsSync(join(basicDir, 'run.yaml')) ? readYaml(join(basicDir, 'run.yaml')) : {};
-  const multiYaml = multiDir && existsSync(join(multiDir, 'run.yaml')) ? readYaml(join(multiDir, 'run.yaml')) : {};
-  const basicProcess = basicDir ? jsonIfExists(join(basicDir, 'executor.process.json')) : null;
-  const scheduler = multiDir ? jsonIfExists(join(multiDir, 'scheduler.json')) : null;
-  const approvalJson = approvalPath ? jsonIfExists(approvalPath) : null;
-  const manifestPath = approvalJson?.proposal_path ? join(root, String(approvalJson.proposal_path), 'manifest.json') : '';
-  const manifest = manifestPath ? jsonIfExists(manifestPath) : null;
-  const patchFiles = manifestPath && Array.isArray(manifest?.patches) ? manifest.patches.map((patch: string) => join(dirname(manifestPath), patch)) : [];
-  const basicOk = basicYaml.id === basicRun && basicYaml.mode === 'basic' && basicYaml.status === 'completed' && basicYaml.decision === 'pass' && Number(basicYaml.exit_code) === 0 && basicProcess?.label === 'executor' && Number(basicProcess?.exit_code) === 0 && String(basicProcess?.stdout || '').includes('Dominic Orchestration task adapter executed') && /## Decision\npass/.test(readIfExists(join(basicDir, 'review.md')));
-  const multiOk = multiYaml.id === multiRun && multiYaml.mode === 'multi' && multiYaml.status === 'completed' && multiYaml.decision === 'pass' && Number(multiYaml.exit_code) === 0 && Number(multiYaml.max_workers) >= 2 && scheduler?.strategy === 'bounded-parallel' && Array.isArray(scheduler?.workers) && scheduler.workers.length >= 2 && Boolean(scheduler?.ended_at) && /Status: clear/.test(readIfExists(join(multiDir, 'conflict-report.generated.md'))) && /worker-001/.test(readIfExists(join(multiDir, 'conflict-report.generated.md'))) && /worker-002/.test(readIfExists(join(multiDir, 'conflict-report.generated.md')));
-  const patchesOk = patchFiles.length >= 1 && patchFiles.every((patch: string) => existsSync(patch) && readFileSync(patch, 'utf8').trim().startsWith('diff --git '));
-  const patchDigest = patchesOk ? (() => { const digest = createHash('sha256'); for (const patch of patchFiles) digest.update(readFileSync(patch)); return digest.digest('hex'); })() : '';
-  const applyOk = approvalJson?.id === approval && approvalJson?.run_id === multiRun && approvalJson?.type === 'apply_proposal' && ['approved', 'applied'].includes(String(approvalJson?.status)) && manifest?.run_id === multiRun && /^[a-f0-9]{64}$/.test(String(manifest?.sha256 || '')) && manifest?.sha256 === approvalJson?.proposal_sha256 && manifest?.sha256 === patchDigest && patchesOk;
-  const legacyOk = Boolean(root && basicRun && multiRun && approval && basicOk && multiOk && applyOk);
-  const liveReport = jsonIfExists(join(rootDir, AGENT_DIR, 'live-integration-smoke.json'));
-  const liveOk = liveReport?.status === 'PASS' && typeof liveReport?.run_id === 'string' && liveReport?.exit_code === 0 && liveReport?.decision === 'pass' && liveReport?.natural_language_ignored === true && liveReport?.ui_permission_boundary === true;
-  const ok = legacyOk || liveOk;
-  const reasons = [basicOk ? '' : 'basic run content invalid', multiOk ? '' : 'multi run content invalid', applyOk ? '' : 'apply proposal content invalid'].filter(Boolean).join('; ');
-  return { ok, root, basicRun, multiRun, approval, evidence: legacyOk ? `resolved coherent dogfood artifacts at ${root}` : liveOk ? `resolved live web/CLI integration artifact ${join(AGENT_DIR, 'live-integration-smoke.json')}` : `missing/unresolved dogfood artifacts root=${root || 'missing'} basic=${basicRun || 'missing'} multi=${multiRun || 'missing'} approval=${approval || 'missing'} ${reasons}`.trim() };
-}
-function deltaRow(target: string, ok: boolean, evidence: string, passDelta: string, failDelta: string): ProductGateDelta { return { target, evidence, delta: ok ? passDelta : failDelta, status: ok ? 'PASS' : 'FAIL' }; }
-export function runProductGate(cwd = process.cwd(), options: { write?: boolean } = {}): ProductGateReport {
-  const root = projectRoot(cwd);
-  const liveReconciliation = reconcileRuns(root);
-  const prd = readIfExists(join(root, 'dominic_orchestration_PRD.md'));
-  const standard = readIfExists(join(root, 'docs', 'milestones', 'PRODUCT_COMPLETION_STANDARD.md'));
-  const roadmap = readIfExists(join(root, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'));
-  const rerun = readIfExists(join(root, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'));
-  const dogfood = readIfExists(join(root, 'docs', 'milestones', 'DOGFOOD_REPORT.md'));
-  const hardGates = readIfExists(join(root, 'docs', 'milestones', 'HARD_COMPLETION_GATES.md'));
-  const packageJson = jsonIfExists(join(root, 'package.json'));
-  const tests = readIfExists(join(root, 'src', 'core.test.ts'));
-  const helpOk = existsSync(join(root, 'dist', 'cli.js')) && commandEvidence(root, ['dist/cli.js', '--help'], ['agent quality gate [--write]', 'agent run create|start|collect|cancel|latest', 'agent apply propose|approved']);
-  const versionOk = existsSync(join(root, 'dist', 'cli.js')) && commandEvidence(root, ['dist/cli.js', '--version'], ['dominic-orchestration']);
-  const requiredRows = ['Installable CLI', 'Web UI', 'Project registry', 'Durable index', 'v0 run lifecycle', 'v1 role execution', 'Executor adapter', 'Policy/approval', 'Promotion proposals', 'v2 scheduler', 'v2 worktrees', 'Conflict detection', 'Apply/merge proposal', 'Dogfood', 'Scope integrity', 'Anti-self-deception critic'];
-  const reportHasDelta = hasAll(rerun, ['Result-Reality Delta', '| Original PRD / v0-v2 target | Current runnable evidence | Delta |', 'Forbidden completion claim', 'Allowed completion claim']);
-  const prdScopeOk = hasAll(prd, ['로컬 웹서비스', '로컬 에이전트 작업', 'v0: Single Run + Review', 'v1: Manager + Worker + Reviewer', 'v2: Bounded Multi-Worker']);
-  const acceptanceOk = hasPassingMatrixRows(roadmap, requiredRows);
-  const dogfoodResolved = dogfoodEvidence(root, dogfood);
-  const executionOk = dogfoodResolved.ok && (hasAll(dogfood, ['FINAL_PRODUCT_SMOKE_PASS', 'basic_run=', 'multi_run=', 'approval=']) || hasAll(dogfood, ['LIVE_INTEGRATION_SMOKE_PASS', 'live_integration_run='])) && hasAll(tests, ['executor.process.json', 'scheduler.json', 'worker-001.process.json', 'roles mode passes distinct ROLE context']);
-  const evidenceOk = hasAll(tests, ['actual worktree changes not declared', 'declared files not present in worktree diff', 'multi mode detects actual worktree conflicts', 'multi mode blocks stale declared files absent from actual worktree diff']);
-  const safetyOk = hasAll(tests, ['unsafe-host auth does not leak tokens', 'readonly shell allowlist rejects mutating git output flags', 'secret path detection and safeJoin reject unsafe paths', 'shell mutation approvals are bound to the exact command digest', 'applyApprovedProposal checks whole bundle before applying']);
-  const regressionOk = countTests(tests) >= 49 && hasAll(tests, ['fake string-only repo cannot pass the product gate', 'product gate durable report contains report_path', 'hard completion ceiling requires independent review and reconciliation artifacts']);
-  const hardRows = hardGateRows(hardGates);
-  const contradictoryRuns = contradictoryRunEvidence(root);
-  const hardGateDocOk = hasAll(hardGates, ['CLAIM_LOCK: FORBID_90_95_UNTIL_ALL_HARD_GATES_PASS', 'CURRENT_COMPLETION_CEILING: 95', 'Local-Web State Truth Gate', 'Real Agent Runtime Gate', 'Operator Intent Boundary Gate', 'Live Integration Gate']);
-  const liveSmokeOk = existsSync(join(root, 'scripts', 'live-integration-smoke.mjs')) && commandEvidence(root, ['scripts/live-integration-smoke.mjs'], ['LIVE_INTEGRATION_SMOKE_PASS']) && jsonIfExists(join(root, AGENT_DIR, 'live-integration-smoke.json'))?.status === 'PASS';
-  const forbiddenClaimsRemain = hardRows.fail > 0 && /\| .* \| .* \| PASS \|/.test(roadmap);
-  const reconciliationGate = jsonIfExists(join(root, AGENT_DIR, 'reconciliation.json'));
-  const reconciliationOk = liveReconciliation.repaired === 0 && reconciliationGate?.status === 'PASS' && Number(reconciliationGate?.repaired || 0) === 0;
-  const reviewGate = jsonIfExists(join(root, AGENT_DIR, 'independent-review-gate.json'));
-  const independentReviewOk = reviewArtifactOk(root, reviewGate);
-  const hardGatesAllPass = hardGateDocOk && hardRows.total >= 7 && hardRows.fail === 0 && hardRows.pass >= 7 && contradictoryRuns.length === 0 && reconciliationOk && liveSmokeOk && independentReviewOk && !forbiddenClaimsRemain;
-  const resultRealityDelta: ProductGateDelta[] = [
-    deltaRow('Original PRD scope: local webservice, task/run/worker/review/promotion, v0-v2 bounded flow', prdScopeOk, 'dominic_orchestration_PRD.md required scope anchors', 'Claimed local v0-v2 scope is PRD-derived.', 'Cannot prove claimed scope from original PRD.'),
-    deltaRow('Runnable operator surface: installable CLI and command help/version', Boolean(packageJson?.bin?.agent === './dist/cli.js') && helpOk && versionOk, 'package.json bin + dist/cli.js --help/--version', 'Runnable CLI evidence exists.', 'CLI/package evidence is missing or not runnable.'),
-    deltaRow('Acceptance matrix: every PRD-scoped row passes without FAIL', acceptanceOk, 'docs/milestones/FULL_PRODUCT_ROADMAP.md parsed table rows', 'Matrix has all required PASS rows and no FAIL rows.', 'Acceptance matrix is incomplete or contains FAIL rows.'),
-    deltaRow('Real execution: dogfood run ids plus process/scheduler/role regressions', executionOk, `${dogfoodResolved.evidence}; DOGFOOD_REPORT.md + src/core.test.ts behavioral tests`, 'Execution evidence is stronger than prose.', 'Execution evidence is missing or prose-only.'),
-    deltaRow('Evidence integrity: worker output checked against actual worktree diff', evidenceOk, 'src/core.test.ts mismatch/conflict tests', 'Worker prose is not the sole truth source.', 'No deterministic mismatch/conflict regression evidence.'),
-    deltaRow('Safety: command/control boundaries covered by adversarial tests', safetyOk, 'src/core.test.ts safety and approval tests', 'Policy/safety claims have adversarial tests.', 'Policy/safety claims lack adversarial tests.'),
-    deltaRow('Anti-rubber-stamp regression: fake string-only repo fails', regressionOk, 'src/core.test.ts positive and negative product gate tests', 'The gate has negative tests against string-only self-certification.', 'The gate lacks negative anti-rubber-stamp tests.'),
-    deltaRow('Hard completion ceiling: no 90/95 claim while live UI/runtime gates fail', hardGatesAllPass, `docs/milestones/HARD_COMPLETION_GATES.md rows=${hardRows.total} fail=${hardRows.fail}; contradictory_runs=${contradictoryRuns.length}; live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk}`, 'All hard gates pass, so the completion ceiling can be lifted.', `Hard gates block completion inflation: ${hardRows.fail} declared FAIL rows; ${contradictoryRuns.length} contradictory run artifacts.`)
-  ];
-  const deltaOk = resultRealityDelta.every((row) => row.status === 'PASS');
-  const checks: ProductGateCheck[] = [
-    gateCheck('PRD Scope Integrity Gate', prdScopeOk && deltaOk, 'Original PRD scope and the Result-Reality Delta report must both exist; local-first scope must be PRD-derived, not invented after implementation.'),
-    gateCheck('Anti-Self-Deception Critic Gate', hasAll(standard, ['Anti-Self-Deception Critic Gate', 'Scope Integrity Gate', 'rubber-stamp', '원 PRD', 'Result-Reality Delta']) && deltaOk && (!rerun || reportHasDelta), 'The repo must document the rubber-stamp failure mode and include an explicit PRD-vs-result delta plus allowed/forbidden completion wording.'),
-    gateCheck('Product Completeness Gate', Boolean(packageJson?.bin?.agent === './dist/cli.js') && helpOk && versionOk && acceptanceOk, 'Package bin, built CLI help/version, and every PRD-scoped acceptance matrix row must pass without FAIL rows.'),
-    gateCheck('Real Execution Gate', executionOk, 'Execution claims require dogfood run identifiers plus process/scheduler/role regression evidence.'),
-    gateCheck('Evidence Integrity Gate', evidenceOk, 'Worker prose must be tested against actual worktree diff mismatches and conflicts.'),
-    gateCheck('Safety and Policy Gate', safetyOk, 'Security/policy gates must be backed by adversarial tests, not just source-code strings.'),
-    gateCheck('Operator UX Gate', helpOk && hasAll(rerun, ['CLI/Web controls', 'agent quality gate --write']) && hasAll(roadmap, ['UI shows worker lanes', 'Run detail UI showing all required evidence']), 'CLI help and reports must expose task/run/approval/product gate controls without manual .agent editing.'),
-    gateCheck('Regression Gate', regressionOk, 'Regression tests must include positive and negative anti-rubber-stamp fixtures plus durable report-path coverage.'),
-    gateCheck('Dogfood Gate', dogfoodResolved.ok && (hasAll(dogfood, ['FINAL_PRODUCT_SMOKE_PASS', 'WEB_CSRF_SMOKE_PASS', 'FINAL_POLICY_EVIDENCE_PASS']) || hasAll(dogfood, ['LIVE_INTEGRATION_SMOKE_PASS', 'natural-language command ignored'])), 'Dogfood must record real product use and policy/web smoke evidence.'),
-    gateCheck('Hard Completion Ceiling Gate', hardGatesAllPass, hardGatesAllPass ? 'All hard gates pass and no contradictory run artifacts exist.' : `90/95 claims forbidden: hard gate rows fail=${hardRows.fail}, pass=${hardRows.pass}, live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk}, forbidden_claims=${forbiddenClaimsRemain}, contradictory run artifacts=${contradictoryRuns.slice(0, 5).join('; ') || 'none'}`)
-  ];
-  const decision = checks.every((check) => check.status === 'PASS') ? 'PASS' : 'FAIL';
-  const completionCeiling = hardGatesAllPass ? 95 : 60;
-  const completionLabel = hardGatesAllPass ? 'PRD-scoped completion candidate' : 'Prototype / control-plane scaffold with hard blockers; 90/95 claims forbidden';
-  const report: ProductGateReport = { schema_version: 1, generated_at: nowIso(), decision, scope: 'PRD-scoped local v0-v2 product; no 90/95 claim allowed unless Hard Completion Ceiling Gate passes.', completion_ceiling: completionCeiling, completion_label: completionLabel, result_reality_delta: resultRealityDelta, checks };
-  if (options.write) {
-    const dir = safeJoin(root, AGENT_DIR, 'product-gates'); ensureDir(dir);
-    const reportPath = join(dir, `product-gate-${nowIso().replace(/[-:TZ.]/g, '').slice(0, 14)}.json`);
-    report.report_path = relative(root, reportPath);
-    writeFileSync(reportPath, JSON.stringify(report, null, 2));
-    rebuildIndex(root);
-  }
-  return report;
-}
-
-export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''): string {
-  const index = loadIndex(cwd);
-  const csrf = csrfToken ? `<input type="hidden" name="csrf" value="${attr(csrfToken)}">` : '';
-  const auth = authToken ? `<input type="hidden" name="auth" value="${attr(authToken)}">` : '';
-  const hidden = csrf + auth;
-  const requestedApprovals = index.approvals.filter((a) => a.status === 'requested');
-  const openTasks = index.tasks.filter((t) => !['done', 'cancelled', 'abandoned'].includes(t.status));
-  const activeStatuses = ['planning', 'dispatching', 'workers_running', 'collecting', 'reviewing', 'applying'];
-  const waitingRuns = index.runs.filter((r) => ['created', 'awaiting_approval', 'changes_requested'].includes(String(r.status)) || String(r.decision || '') === 'changes_requested');
-  const activeRuns = index.runs.filter((r) => activeStatuses.includes(String(r.status)) && !r.ended_at);
-  const completedRuns = index.runs.filter((r) => ['completed', 'failed', 'cancelled', 'timed_out'].includes(String(r.status)) || (activeStatuses.includes(String(r.status)) && Boolean(r.ended_at))).slice(-8).reverse();
-  const approvalPanel = requestedApprovals.length ? requestedApprovals.map((a) => `<div class="decision-item"><div><strong>${esc(a.type)}</strong><p>${esc(a.summary)}</p>${a.command_preview ? `<small>Command waiting: ${esc(a.command_preview)}</small>` : ''}<small>${esc(a.risk)} risk · ${esc(a.id)}</small></div><div class="actions"><form method="POST" action="/api/approvals/${attr(a.id)}/approve">${hidden}<button class="primary">Approve</button></form><form method="POST" action="/api/approvals/${attr(a.id)}/reject">${hidden}<button>Reject</button></form>${a.type === 'apply_proposal' && a.status === 'approved' ? `<form method="POST" action="/api/approvals/${attr(a.id)}/apply">${hidden}<button>Apply Approved</button></form>` : ''}</div></div>`).join('') : '<p class="empty">No approval waiting for you.</p>';
-  const taskPanel = openTasks.length ? openTasks.map((t) => `<div class="task-line"><div><strong>${attr(t.title)}</strong><small>${esc(t.status)} · ${esc(t.id)}</small></div><form method="POST" action="/api/runs">${hidden}<input type="hidden" name="taskId" value="${attr(t.id)}"><select name="mode"><option>basic</option><option>roles</option><option>multi</option></select><button class="primary">Create run</button></form><details><summary>Edit</summary><form method="POST" action="/api/tasks/${attr(t.id)}/update">${hidden}<input name="title" value="${attr(t.title)}"><select name="status"><option>${esc(t.status)}</option><option>ready</option><option>running</option><option>done</option><option>blocked</option><option>cancelled</option></select><button>Update Task</button></form><form method="POST" action="/api/tasks/${attr(t.id)}/archive">${hidden}<button>Archive</button></form></details></div>`).join('') : '<p class="empty">No open task. Create one above.</p>';
-  const runCard = (r: RunMeta): string => { const truth = runtimeTruthForRun(projectRoot(cwd), r); const needsApproval = requestedApprovals.some((a) => a.run_id === r.id); const awaitingCopy = needsApproval ? 'Waiting for your approval above; this is not a completed result.' : 'Not a completed result; approval may already be handled, so start with a real command, collect, or cancel.'; return `<article class="run-card"><header><a href="/run/${attr(r.id)}">${esc(r.id)}</a><span class="pill">${esc(String(r.mode))}</span><span class="pill ${esc(String(r.status))}">${esc(String(r.status))}</span><span class="pill ${esc(truth.css)}">${esc(truth.label)}</span></header><p>${esc(r.task_id)}</p><small>Runtime truth: ${esc(truth.evidence)}</small>${r.status === 'awaiting_approval' ? `<p class="warning">${esc(awaitingCopy)}</p>` : ''}<div class="actions"><form method="POST" action="/api/runs/${attr(r.id)}/start">${hidden}<button class="primary">Start task adapter</button><details><summary>Advanced shell command</summary><input name="command" placeholder="Explicit shell only; natural-language replies are ignored"><label class="check"><input type="checkbox" name="confirmCommand" value="yes"> Run this exact shell command</label></details></form><form method="POST" action="/api/runs/${attr(r.id)}/collect">${hidden}<button>Collect</button></form><form method="POST" action="/api/runs/${attr(r.id)}/cancel">${hidden}<button>Cancel</button></form><form method="POST" action="/api/runs/${attr(r.id)}/apply-proposal">${hidden}<button>Propose Apply</button></form></div></article>`; };
-  return page('Dominic Orchestration', `<header class="topbar"><div><h1>Dominic Orchestration</h1><p>Operator input on top. Agent work below.</p></div><a class="ghost" href="/">Refresh</a></header><main><section class="operator-zone"><div class="section-title"><span>01</span><div><h2>Your input / permissions</h2><p>여기는 네가 입력하거나 승인해야 진행되는 것만 둔다.</p></div></div><div class="operator-grid"><div class="panel"><h3>Tool / permission boundary</h3><p><strong>Allowed without approval:</strong> git status/diff/log/show, ls/cat safe paths, task adapter execution.</p><p><strong>Approval required:</strong> shell mutation, package install, git commit/push, apply/merge proposal, network/unsafe host.</p><p><strong>Blocked by design:</strong> secret paths, path traversal, natural-language replies as shell commands.</p></div><div class="panel"><h3>Create Task</h3><form class="stack" method="POST" action="/api/tasks">${hidden}<input name="title" placeholder="해야 할 일을 한 줄로 적어라" required><button class="primary">Create Task</button></form></div><div class="panel urgent"><h3>Approval Queue</h3>${approvalPanel}</div></div><div class="panel"><h3>Task Board — choose what should run</h3>${taskPanel}</div></section><section class="agent-zone"><div class="section-title"><span>02</span><div><h2>Agent / LLM work</h2><p>에이전트가 수행 중인 것, 다음에 수행할 것, 끝난 증거를 아래에서 본다.</p></div></div><div class="lane"><h3>Running now</h3>${activeRuns.length ? activeRuns.map(runCard).join('') : '<p class="empty">Nothing running.</p>'}</div><div class="lane"><h3>Ready / waiting to run</h3>${waitingRuns.length ? waitingRuns.map(runCard).join('') : '<p class="empty">No run waiting. Create a run from a task above.</p>'}</div><div class="lane"><h3>Recent results</h3>${completedRuns.length ? completedRuns.map(runCard).join('') : '<p class="empty">No completed runs yet.</p>'}</div></section></main>`);
-}
-export function renderRun(runId: string, cwd = process.cwd()): string { if (!/^run-[A-Za-z0-9가-힣-]+$/.test(runId)) throw new Error(`invalid run id: ${runId}`); const root = projectRoot(cwd); const runsDir = safeJoin(root, AGENT_DIR, 'runs'); const runDir = safeJoin(runsDir, runId); const relToRuns = relative(realpathSync(runsDir), realpathSync(runDir)).replaceAll('\\', '/'); if (relToRuns === '..' || relToRuns.startsWith('../')) throw new Error(`invalid run path: ${runId}`); const names = listFilesRecursive(runDir).filter((f) => { if (f.includes('/.git/') || isSecretPath(f)) return false; const full = join(runDir, f); const real = realpathSync(full); const rel = relative(realpathSync(runDir), real).replaceAll('\\', '/'); return !(rel === '..' || rel.startsWith('../') || isSecretPath(relative(root, real).replaceAll('\\', '/'))); }).sort(); const meta = readYaml(join(runDir, 'run.yaml')) as unknown as RunMeta; const relatedApprovals = listApprovals(root).filter((a) => a.run_id === runId); const requestedApproval = relatedApprovals.some((a) => a.status === 'requested'); const processFiles = names.filter((n) => n.endsWith('.process.json')); const processSummary = processFiles.map((n) => { try { const p = JSON.parse(readFileSync(join(runDir, n), 'utf8')); return `${n}: exit ${p.exit_code}${p.stderr ? ` · ${String(p.stderr).trim().split('\n')[0]}` : ''}`; } catch { return n; } }).join('\n') || 'No process evidence yet.'; const staleActiveNotice = ['planning', 'dispatching', 'workers_running', 'collecting', 'reviewing', 'applying'].includes(String(meta.status)) && Boolean(meta.ended_at) ? '<div class="notice danger"><strong>Not running.</strong><p>This run has terminal process evidence but stale active metadata. Treat the process log, ended_at, and cancel marker as truth.</p></div>' : ''; const approvalNotice = meta.status === 'awaiting_approval' ? `<div class="notice danger"><strong>Not a result yet.</strong><p>${requestedApproval ? 'This run is waiting for operator approval. Review the approval queue before treating it as work output.' : 'This run is in an awaiting-approval state, but no requested approval remains. It is stale or already approved without a valid completed execution; start with a real command, collect failure evidence, or cancel.'}</p></div>` : ''; return page(runId, `<a href="/">← back</a><h1>${esc(runId)}</h1><section class="panel"><h2>Run status summary</h2><p>Status: <strong>${esc(String(meta.status))}</strong> · Mode: ${esc(String(meta.mode))} · Task: ${esc(String(meta.task_id))}</p><p><a href="/api/runs/${attr(runId)}/events">Event stream (SSE)</a> · projection-backed runtime evidence below</p><pre>${esc(processSummary)}</pre></section>${staleActiveNotice}${approvalNotice}${names.map(n=>`<h2>${esc(n)}</h2><pre>${esc(redact(readFileSync(join(runDir,n),'utf8')))}</pre>`).join('')}`); }
-function page(title: string, body: string): string { return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>:root{color-scheme:light;--bg:#f6f4ef;--ink:#171511;--muted:#6f6a60;--line:#ded8cc;--panel:#fffdf8;--accent:#1f5eff;--danger:#b42318}*{box-sizing:border-box}body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:var(--bg);color:var(--ink)}a{color:inherit}.topbar{display:flex;justify-content:space-between;align-items:flex-start;padding:28px 34px;border-bottom:1px solid var(--line);background:#fffdf8cc;position:sticky;top:0;z-index:2;backdrop-filter:blur(12px)}h1{font-size:28px;margin:0 0 4px}h2,h3{margin:0}p{color:var(--muted);margin:.35rem 0}.ghost{border:1px solid var(--line);border-radius:999px;padding:9px 14px;text-decoration:none;background:white}main{display:grid;grid-template-columns:minmax(360px,42%) 1fr;min-height:calc(100vh - 92px)}.operator-zone{padding:28px 30px;border-right:1px solid var(--line);background:#fffaf0}.agent-zone{padding:28px 30px}.section-title{display:flex;gap:14px;align-items:flex-start;margin-bottom:20px}.section-title span{font-size:12px;font-weight:800;letter-spacing:.08em;color:white;background:var(--ink);border-radius:999px;padding:6px 8px}.operator-grid{display:grid;grid-template-columns:1fr;gap:14px}.panel,.lane{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px;margin-bottom:16px;box-shadow:0 1px 0 rgba(0,0,0,.03)}.urgent{border-color:#f1b8b1}.stack{display:grid;gap:10px}.decision-item,.task-line,.run-card{display:grid;gap:12px;border-top:1px solid var(--line);padding:14px 0}.decision-item:first-of-type,.task-line:first-of-type,.run-card:first-of-type{border-top:0}.task-line{grid-template-columns:1fr auto auto;align-items:center}.run-card header{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.run-card p{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.check{display:block;color:var(--muted);font-size:12px;margin-top:8px}input,select,button{font:inherit;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:white}button{cursor:pointer}button.primary{background:var(--accent);border-color:var(--accent);color:white;font-weight:700}.pill{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 8px;color:var(--muted);background:white}.pill.failed,.pill.blocked,.pill.awaiting_approval,.pill.primitive_shell,.pill.stale,.pill.unproven{color:var(--danger);border-color:#f1b8b1;background:#fff1ef}.warning{color:var(--danger);font-weight:700}.notice{border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0;background:white}.notice.danger{border-color:#f1b8b1;background:#fff1ef}small{display:block;color:var(--muted);font-size:12px;margin-top:3px}.empty{padding:18px;border:1px dashed var(--line);border-radius:14px;text-align:center}details summary{cursor:pointer;color:var(--muted)}pre{background:#111;color:#eee;padding:1rem;overflow:auto;white-space:pre-wrap;border-radius:14px}@media(max-width:900px){main{grid-template-columns:1fr}.operator-zone{border-right:0;border-bottom:1px solid var(--line)}.task-line{grid-template-columns:1fr}.topbar{position:static}}</style></head><body>${body}</body></html>`; }
-function esc(s: string): string { return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]!)); }
-function attr(s: string): string { return esc(s).replace(/[\s"']/g, (c) => ({ '"': '&quot;', "'": '&#39;', ' ': '&#32;', '\t': '&#9;', '\n': '&#10;', '\r': '&#13;' }[c] || '&#32;')); }
 export function cleanupWorktrees(cwd = process.cwd()): void { const root = projectRoot(cwd); const base = resolve(dirname(root), `${basename(root)}.agent-worktrees`); const failures: string[] = []; try { const list = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' }); for (const line of list.split('\n')) { if (!line.startsWith('worktree ')) continue; const worktree = line.slice('worktree '.length).trim(); if (worktree && worktree.startsWith(base)) { try { execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (err: any) { failures.push(`${worktree}: ${String(err.stderr || err.message || err).trim()}`); } } } try { execFileSync('git', ['worktree', 'prune'], { cwd: root, stdio: ['ignore', 'pipe', 'pipe'] }); } catch (err: any) { failures.push(`prune: ${String(err.stderr || err.message || err).trim()}`); } const remaining = execFileSync('git', ['worktree', 'list', '--porcelain'], { cwd: root, encoding: 'utf8' }).split('\n').filter((line) => line.startsWith('worktree ') && line.slice('worktree '.length).trim().startsWith(base)); if (remaining.length) failures.push(`registered worktrees remain: ${remaining.join(', ')}`); } catch (err: any) { failures.push(String(err.stderr || err.message || err).trim()); } if (existsSync(base)) rmSync(base, { recursive: true, force: true }); if (existsSync(base)) failures.push(`filesystem worktree base remains: ${base}`); if (failures.length) throw new Error(`worktree cleanup failed: ${failures.join('; ')}`); }

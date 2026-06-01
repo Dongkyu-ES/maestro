@@ -5,7 +5,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addProject, addTask, applyApprovedProposal, cancelRun, collectRun, createApproval, createRun, extractFilesChanged, initProject, isSecretPath, listApprovals, listProjects, listTasks, loadIndex, proposeApply, reconcileRuns, redact, renderHtml, renderRun, resolveApproval, safeJoin, startRun, updateTask } from './core.js';
+import { addProject, addTask, applyApprovedProposal, cancelRun, collectRun, createApproval, createRun, extractFilesChanged, initProject, isSecretPath, listApprovals, listProjects, listTasks, loadIndex, proposeApply, reconcileRuns, redact, resolveApproval, safeJoin, startRun, updateTask } from './core.js';
+import { renderHtml, renderRun } from './view.js';
 
 
 
@@ -570,7 +571,7 @@ test('product gate rejects forged manual independent review artifacts', async ()
     const fp = join(process.cwd(), rel); digest.update(rel); digest.update(existsSync(fp) ? readFileSync(fp) : 'missing');
   }
   writeFileSync(join(process.cwd(), '.agent', 'independent-review-gate.json'), JSON.stringify({ status: 'PASS', input_sha256: digest.digest('hex'), codeReview: { recommendation: 'APPROVE', architectStatus: 'CLEAR', independentReview: { codeReviewer: { agentRole: 'code-reviewer', artifact_path: '.agent/review-gates/forged-code-reviewer.md', evidence: 'manual approve' }, architect: { agentRole: 'architect', artifact_path: '.agent/review-gates/forged-architect.md', evidence: 'manual clear' } } } }, null, 2));
-  const report = (await import('./core.js')).runProductGate(process.cwd());
+  const report = (await import('./product-gate.js')).runProductGate(process.cwd());
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.checks.some((check) => check.name === 'Hard Completion Ceiling Gate' && check.status === 'FAIL'), true);
 });
@@ -587,7 +588,7 @@ test('product gate rejects metadata-complete review forgery without notification
   writeFileSync(join(reviewDir, 'metadata-forged-architect.md'), architectText);
   const inputHash = currentReviewInputHashForTest(process.cwd());
   writeFileSync(join(process.cwd(), '.agent', 'independent-review-gate.json'), JSON.stringify({ status: 'PASS', input_sha256: inputHash, codeReview: { recommendation: 'APPROVE', architectStatus: 'CLEAR', independentReview: { codeReviewer: { agentRole: 'code-reviewer', agent_id: reviewerId, source: 'codex-native-subagent', status: 'completed', completed_at: '2026-06-01T00:00:00.000Z', reviewed_input_sha256: inputHash, artifact_path: '.agent/review-gates/metadata-forged-code-reviewer.md', artifact_sha256: createHash('sha256').update(reviewerText).digest('hex'), notification_path: `.agent/review-gates/subagent-notifications/${reviewerId}.json`, commands: ['npm test', 'scripts/live-integration-smoke.mjs'] }, architect: { agentRole: 'architect', agent_id: architectId, source: 'codex-native-subagent', status: 'completed', completed_at: '2026-06-01T00:00:00.000Z', reviewed_input_sha256: inputHash, artifact_path: '.agent/review-gates/metadata-forged-architect.md', artifact_sha256: createHash('sha256').update(architectText).digest('hex'), notification_path: `.agent/review-gates/subagent-notifications/${architectId}.json`, commands: ['npm test', 'node dist/cli.js quality gate --write'] } } } }, null, 2));
-  const report = (await import('./core.js')).runProductGate(process.cwd());
+  const report = (await import('./product-gate.js')).runProductGate(process.cwd());
   assert.equal(report.decision, 'FAIL');
 });
 
@@ -945,10 +946,10 @@ test('hard completion ceiling requires independent review and reconciliation art
   const reviewPath = join(process.cwd(), '.agent', 'independent-review-gate.json');
   rmSync(reviewPath, { force: true });
   reconcileRuns(process.cwd());
-  const withoutReview = (await import('./core.js')).runProductGate(process.cwd());
+  const withoutReview = (await import('./product-gate.js')).runProductGate(process.cwd());
   assert.equal(withoutReview.decision, 'FAIL');
   writePassingReviewGate(process.cwd());
-  const report = (await import('./core.js')).runProductGate(process.cwd());
+  const report = (await import('./product-gate.js')).runProductGate(process.cwd());
   assert.equal(report.decision, 'PASS');
   assert.equal(report.completion_ceiling, 95);
   assert.match(report.completion_label, /completion candidate/);
@@ -967,7 +968,7 @@ test('fake string-only repo cannot pass the product gate', async () => {
   writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), 'FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS basic_run= multi_run= approval=');
   writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'), 'Result-Reality Delta | Original PRD / v0-v2 target | Current runnable evidence | Delta | Forbidden completion claim Allowed completion claim Why the previous loop failed implementation-friendly grading Final wording guard');
   writeFileSync(join(dir, 'src', 'core.test.ts'), 'test( fake ) executor.process.json scheduler.json worker-001.process.json actual worktree changes not declared declared files not present in worktree diff unsafe-host auth does not leak tokens hard completion ceiling requires independent review and reconciliation artifacts fake string-only repo cannot pass the product gate product gate durable report contains report_path after hard gates pass');
-  const report = (await import('./core.js')).runProductGate(dir);
+  const report = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.checks.some((check) => check.name === 'Product Completeness Gate' && check.status === 'FAIL'), true);
   assert.equal(report.result_reality_delta.some((row) => row.status === 'FAIL'), true);
@@ -976,7 +977,7 @@ test('fake string-only repo cannot pass the product gate', async () => {
 test('product gate durable report contains report_path after hard gates pass', async () => {
   reconcileRuns(process.cwd());
   writePassingReviewGate(process.cwd());
-  const report = (await import('./core.js')).runProductGate(process.cwd(), { write: true });
+  const report = (await import('./product-gate.js')).runProductGate(process.cwd(), { write: true });
   assert.equal(report.decision, 'PASS');
   assert.equal(report.completion_ceiling, 95);
   assert.ok(report.report_path);
@@ -1000,7 +1001,7 @@ test('shaped scaffold with fake CLI and dogfood strings still fails without dogf
   writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'), 'Result-Reality Delta | Original PRD / v0-v2 target | Current runnable evidence | Delta | Forbidden completion claim Allowed completion claim Why the previous loop failed implementation-friendly grading Final wording guard CLI/Web controls agent quality gate --write');
   writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), 'FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS root=/tmp/missing-dogfood basic_run=run-fake multi_run=run-fake2 approval=approval-fake');
   writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path after hard gates pass hard completion ceiling requires independent review and reconciliation artifacts');
-  const report = (await import('./core.js')).runProductGate(dir);
+  const report = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.checks.some((check) => check.name === 'Dogfood Gate' && check.status === 'FAIL'), true);
   assert.equal(report.result_reality_delta.some((row) => row.target.startsWith('Real execution') && row.status === 'FAIL'), true);
@@ -1030,7 +1031,7 @@ test('minimal fake dogfood artifacts still fail coherence checks', async () => {
   writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n' + rows.map((r) => `| ${r} | x | x | PASS |`).join('\n') + '\nUI shows worker lanes Run detail UI showing all required evidence');
   writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), `FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS root=${dogRoot} basic_run=${basic} multi_run=${multi} approval=${approval}`);
   writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path after hard gates pass hard completion ceiling requires independent review and reconciliation artifacts');
-  const report = (await import('./core.js')).runProductGate(dir);
+  const report = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.result_reality_delta.some((row) => row.target.startsWith('Real execution') && row.status === 'FAIL'), true);
 });
@@ -1065,7 +1066,7 @@ test('forged dogfood proposal digest fails product gate', async () => {
   writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n' + rows.map((r) => `| ${r} | x | x | PASS |`).join('\n') + '\nUI shows worker lanes Run detail UI showing all required evidence');
   writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), `FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS root=${dogRoot} basic_run=${basic} multi_run=${multi} approval=${approval}`);
   writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path after hard gates pass hard completion ceiling requires independent review and reconciliation artifacts');
-  const report = (await import('./core.js')).runProductGate(dir);
+  const report = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.result_reality_delta.some((row) => row.target.startsWith('Real execution') && row.status === 'FAIL'), true);
 });
