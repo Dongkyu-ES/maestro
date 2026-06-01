@@ -260,8 +260,26 @@ test('task update ignores undefined fields and default run command is not persis
   const runYaml = readFileSync(join(dir, '.agent', 'runs', run.id, 'run.yaml'), 'utf8');
   assert.doesNotMatch(runYaml, /undefined/);
   await startRun(run.id, {}, dir);
+  const commandText = readFileSync(join(dir, '.agent', 'runs', run.id, 'executor-command.txt'), 'utf8');
+  assert.match(commandText, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.doesNotMatch(commandText, /^node\s/);
   collectRun(run.id, dir);
   assert.equal(readFileSync(join(dir, '.agent', 'runs', run.id, 'executor.process.json'), 'utf8').includes('Dominic Orchestration executor smoke'), true);
+});
+
+test('run UI distinguishes approval waits from completed results', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('operator approval task', dir);
+  const run = createRun(task.id, {}, dir);
+  const blocked = await startRun(run.id, { command: 'python3 -c "open(\"side.txt\",\"w\").write(\"x\")"' }, dir);
+  assert.equal(blocked.status, 'awaiting_approval');
+  const home = renderHtml(dir);
+  assert.match(home, /Command waiting:/);
+  assert.match(home, /Waiting for your approval above; this is not a completed result/);
+  const detail = renderRun(run.id, dir);
+  assert.match(detail, /Not a result yet/);
+  assert.match(detail, /No process evidence yet/);
 });
 
 test('blocked multi-worker run cannot create apply proposal', async () => {
