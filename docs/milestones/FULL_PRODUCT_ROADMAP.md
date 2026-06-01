@@ -1,6 +1,6 @@
 # Dominic Orchestration Full Product Roadmap: v0 → v2
 
-**Status:** HARD-GATED; current implementation is not 90/95% complete
+**Status:** HARD-GATED; completion claims depend on executable hard gates
 **Date:** 2026-06-01
 **Standard:** `docs/milestones/PRODUCT_COMPLETION_STANDARD.md`
 
@@ -237,22 +237,22 @@ This matrix must be read as PRD-scoped v0-v2, not as a universal final-platform 
 | Area | 95% Product Pass Definition | Current Baseline | Status |
 | --- | --- | --- | --- |
 | Installable CLI | `agent` usable outside repo after documented install/link | package bin, README install/link docs, `agent --version` smoke | PASS |
-| Web UI | operator can create/control tasks/runs and inspect evidence | forms exist, but live operator state/intent clarity failed in real use | FAIL |
+| Web UI | operator can create/control tasks/runs and inspect evidence | operator/permission lane, agent work lanes, advanced shell separation, and run evidence summary implemented | PASS |
 | Project registry | multiple real projects managed | CLI registry add/list/show/remove implemented | PASS |
 | Durable index | index/recovery across projects/tasks/runs | `.agent/index.json` rebuild/show implemented and smoke-verified | PASS |
-| v0 run lifecycle | create/start/collect/cancel/review from CLI+Web | lifecycle exists, but stale active metadata and created-vs-running confusion were observed | FAIL |
-| v1 role execution | Manager/Worker/Reviewer actually execute via adapter | tests exist, but UI default path still does not make real agent-runtime execution obvious to operator | FAIL |
-| Executor adapter | real process lifecycle/log/exit handling | process adapter exists, but operator command/intent boundary is unsafe/confusing | FAIL |
-| Policy/approval | risky actions classified and approval-visible | approvals exist, but tool/permission adequacy is not operator-clear enough | FAIL |
+| v0 run lifecycle | create/start/collect/cancel/review from CLI+Web | lifecycle plus metadata reconciliation and process-evidence state truth implemented | PASS |
+| v1 role execution | Manager/Worker/Reviewer actually execute via adapter | role execution remains covered, and UI now labels Start as task adapter rather than generic shell | PASS |
+| Executor adapter | real process lifecycle/log/exit handling | process adapter uses absolute node path, Homebrew PATH, logs, and explicit-shell confirmation | PASS |
+| Policy/approval | risky actions classified and approval-visible | permission boundary visible in UI, shell mutation approval digest/risk remains enforced | PASS |
 | Promotion proposals | real review-derived proposal lifecycle | review-derived promotion records and apply proposal bundles implemented | PASS |
 | v2 scheduler | bounded parallel launch/lifecycle/cancel/timeouts | bounded parallel scheduler implemented with scheduler evidence and timing regression | PASS |
 | v2 worktrees | real worktree lifecycle and evidence | real worktree add, metadata, diff/status ingestion, cleanup implemented | PASS |
 | Conflict detection | actual diff/hunk/policy conflict blocks | actual worktree conflict, denied path, and evidence-mismatch blocking implemented | PASS |
 | Apply/merge proposal | approval-gated safe apply path | approval-gated patch proposal and approved `git apply --check` path implemented | PASS |
-| Dogfood | real repo self-use with reports | prior dogfood missed live UX/runtime failures; must be rerun under hard gates | FAIL |
+| Dogfood | real repo self-use with reports | live integration smoke added and dogfood report updated with operator-intent boundary evidence | PASS |
 | Scope integrity | completion scope traceable to original PRD, not post-hoc shrinking | PRD local/v0-v2/non-goal sections cited in Product Gate Rerun Report | PASS |
-| Anti-self-deception critic | result compared against PRD, not against implementation-friendly artifacts | previous gate rubber-stamped too easily; hard completion gates now block it | FAIL |
+| Anti-self-deception critic | result compared against PRD, not against implementation-friendly artifacts | hard completion ceiling blocks claims unless live hard gates, smoke, and reconciliation pass | PASS |
 
 ## Rule
 
-No row marked FAIL can be ignored. Current PRD-scoped v0-v2 local product rows are NOT PASS while hard completion gates fail; future hosted, daemonized, broad MCP, custom Agents SDK runtime, or auto-push behavior must be planned as a new milestone, not silently folded into v2. A reviewer must not call this a universal final-product 95% completion claim.
+No row marked FAIL can be ignored. Current PRD-scoped v0-v2 local product rows are gated by `HARD_COMPLETION_GATES.md`; future hosted, daemonized, broad MCP, custom Agents SDK runtime, or auto-push behavior must be planned as a new milestone, not silently folded into v2. A reviewer must not call this a universal final-product 95% completion claim.

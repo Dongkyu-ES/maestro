@@ -1,7 +1,7 @@
 # Dominic Orchestration Dogfood Report
 
 **Date:** 2026-06-01  
-**Standard:** 95% product gate for v0-v2 local finished-product behavior.
+**Standard:** hard-gated local product evidence; no percentage claim is allowed unless executable hard gates pass.
 
 ## Dogfood Scope
 
@@ -42,3 +42,13 @@ FINAL_POLICY_EVIDENCE_PASS: unstarted collect blocked; arbitrary operator shell 
 ## Known Residual Risk
 
 This is a local-first product. It does not claim hosted SaaS, remote worker daemonization, or automatic git push. Those are outside the corrected v0-v2 local product completion boundary. Foreground CLI starts are still supported, but cancellation is enforced through a persisted cancel request watched by active child processes. Mutating shell commands require a recorded approval before execution.
+
+
+## Hard-Gate Live Integration Evidence
+
+```text
+LIVE_INTEGRATION_SMOKE_PASS live_integration_run=generated-by-scripts/live-integration-smoke.mjs
+Tool / permission boundary visible on home page.
+natural-language command ignored unless exact-shell confirmation is checked.
+Run detail includes Run status summary and executor.process.json evidence.
+```

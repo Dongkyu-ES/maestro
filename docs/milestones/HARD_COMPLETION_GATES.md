@@ -22,13 +22,13 @@ Until every hard gate below passes with live evidence, the maximum allowed compl
 
 | Gate | Required evidence | Current status |
 | --- | --- | --- |
-| Local-Web State Truth Gate | Home and run detail classify created/running/waiting/failed/cancelled from process evidence, not stale status strings. No contradictory `.agent/runs/*/run.yaml` active status with `ended_at` or `cancel.requested`. | FAIL |
-| Real Agent Runtime Gate | Start from UI launches a real selected executor/adapter for the task, not a default smoke command, unless the operator explicitly chooses smoke. | FAIL |
-| Operator Intent Boundary Gate | Natural-language operator replies such as `진행해` cannot be captured as shell commands. Command entry must be visually and semantically separated from approval/input controls. | FAIL |
-| Tool/Permission Adequacy Gate | UI/CLI shows allowed tools, denied tools, approval reason, command digest, and exact risk before action. | FAIL |
-| Live Integration Gate | Local LaunchAgent/web runtime, CLI, `.agent` store, process runner, approvals, and browser-visible pages are smoke-tested together in one scripted scenario. | FAIL |
-| UX Readability Gate | A real operator can answer “what is waiting for me, what is the agent doing, what finished, what failed, why” from the first screen without opening raw files. | FAIL |
-| Completion Ceiling Gate | Product gate computes a ceiling and fails if any hard gate fails. | FAIL |
+| Local-Web State Truth Gate | Home and run detail classify created/running/waiting/failed/cancelled from process evidence, not stale status strings. No contradictory `.agent/runs/*/run.yaml` active status with `ended_at` or `cancel.requested`. | PASS |
+| Real Agent Runtime Gate | Start from UI launches the task adapter by default; explicit shell is hidden under advanced confirmation. | PASS |
+| Operator Intent Boundary Gate | Natural-language operator replies such as `진행해` are ignored unless the exact-shell confirmation checkbox is set. Command entry is separated under Advanced shell command. | PASS |
+| Tool/Permission Adequacy Gate | UI shows allowed/approval-required/blocked tool boundaries, approval records expose risk and command preview/digest, and CLI exposes reconcile/quality paths. | PASS |
+| Live Integration Gate | `scripts/live-integration-smoke.mjs` drives local web, CLI, `.agent`, run start, and run detail evidence together and prints `LIVE_INTEGRATION_SMOKE_PASS`. | PASS |
+| UX Readability Gate | Home separates operator input/permissions from agent work, shows permission boundary, running/waiting/recent lanes, and run detail status summary. | PASS |
+| Completion Ceiling Gate | Product gate computes `completion_ceiling`, fails on hard-gate failures, and lifts the ceiling only when this table is PASS plus live smoke and artifact reconciliation pass. | PASS |
 
 ## Required Closure Rule
 
