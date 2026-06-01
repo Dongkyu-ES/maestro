@@ -1,19 +1,22 @@
 # Current Baseline Gap Report
 
 **Date:** 2026-06-01  
-**Verdict:** Prior scaffold-level completion was invalid; current implementation has been reworked into a runnable local v0-v2 product with remaining risks tracked explicitly.
+**Verdict:** Prior scaffold-level completion was invalid. Current implementation has since been reworked into a PRD-scoped local v0-v2 completion candidate with product gate PASS; remaining gaps are runtime breadth/audit cleanliness, not the original scaffold gaps.
 
-## What Exists
+## What Exists Now
 
-- TypeScript CLI prototype.
-- `.agent/` file artifact generation.
-- Local HTML viewer for existing artifacts.
-- Tests for basic artifact lifecycle and v2 worktree conflict evidence.
-- Milestone docs and reports from the prior scaffold-level pass.
+- Installable TypeScript CLI and local `agent web` control plane.
+- `.agent/` file-backed ledger plus `events.jsonl` runtime event ledger.
+- Runtime projection and run detail UI/SSE event endpoint.
+- Project/task/run/approval/apply/worktree/product-gate CLI and Web flows.
+- Process-backed execution, v1 role execution evidence, v2 bounded worktree scheduler/conflict/apply evidence.
+- Runtime adapter layer for shell, Codex, OMX, and agy evidence.
+- Codex app-server lifecycle proof harness for resume/fork/interrupt.
+- Full-target gate plus separate verifier; latest product gate PASS with completion ceiling 95 for PRD-scoped local v0-v2.
 
-## Invalidated Baseline Gaps
+## Previously Invalidated Baseline Gaps
 
-The previous scaffold/prototype was not a 95% complete product because:
+The previous scaffold/prototype was not a 95% complete product because the following were missing at that time. These are retained as historical correction anchors, not current status:
 
 1. Web UI is not a full operator control plane.
 2. Project registry is missing.
@@ -28,7 +31,7 @@ The previous scaffold/prototype was not a 95% complete product because:
 
 ## Corrective Action
 
-Use `FULL_PRODUCT_ROADMAP.md` and `PRODUCT_COMPLETION_STANDARD.md` as the controlling standard. Treat the current code as baseline infrastructure only.
+Use `FULL_PRODUCT_ROADMAP.md`, `PRODUCT_COMPLETION_STANDARD.md`, and `HARD_COMPLETION_GATES.md` as the controlling standard. The current code is no longer baseline infrastructure only; it is a gated PRD-scoped local v0-v2 candidate.
 
 
 ## 2026-06-01 Progress Update
@@ -56,4 +59,7 @@ Closed in the current implementation:
 Remaining residual risk:
 
 - This is local-first orchestration, not hosted SaaS or daemonized remote execution.
+- OMX/agy adapters are evidence/detection adapters, not full session lifecycle controllers.
+- Codex app-server resume/fork/interrupt is proven through a target harness, not an always-on multi-session daemon.
+- UI agreement is currently server-render smoke plus SSE endpoint visibility, not a full browser-client E2E suite.
 - Policy enforcement is intentionally focused on local evidence boundaries, CSRF-protected local web controls, injection-safe stored metadata rendering, strict path containment, secret/symlink-safe run rendering, fail-closed worker isolation, validated task/run states, and isolated multi-worker-only approval-gated apply; mutating operator-provided shell commands require an approval record before execution; non-mutating commands remain local operator-authorized execution.

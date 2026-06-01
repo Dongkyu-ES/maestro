@@ -1,6 +1,8 @@
 # Dominic Orchestration Full Product Roadmap: v0 → v2
 
-**Status:** HARD-GATED; completion claims depend on executable hard gates
+> **CORRECTION (2026-06-02):** The "PASS candidate / all matrix rows PASS" status below was found inflated by an independent critique (`INDEPENDENT_CRITIQUE_REPORT.md`). Actual delivery against the PRD is ~30–35%: a solid v0 control plane plus **scaffolded** v1/v2 plumbing. The acceptance-matrix PASS rows are partly self-certifying (the product gate string-matches this very table). Real v1 role execution, executor session control, and the PRD's promotion/learning loop are stubbed. Read the matrix below as "plumbing exists", not "capability delivered".
+
+**Status:** DISPUTED — v0 done; v1/v2 scaffolded. See `INDEPENDENT_CRITIQUE_REPORT.md`
 **Date:** 2026-06-01
 **Standard:** `docs/milestones/PRODUCT_COMPLETION_STANDARD.md`
 
@@ -12,13 +14,14 @@ Every completion report must include a Result-Reality Delta and pass the Scope I
 
 ## Current Baseline
 
-The current repository contains a useful scaffold/prototype:
+The current repository has moved beyond the original scaffold/prototype baseline:
 
-- CLI commands exist.
-- `.agent/` artifacts are created.
-- tests cover baseline run creation, v1 role artifact preservation, v2 worktree conflict detection, and web evidence visibility.
+- CLI/Web operator control flows exist.
+- `.agent/` artifacts, `events.jsonl`, projection, approvals, runtime proof artifacts, and product gates are created and verified.
+- Tests cover baseline lifecycle, policy boundaries, v1 role behavior, v2 worktree conflict/apply behavior, runtime architecture, full-target gate, and verifier behavior.
+- Latest product gate evidence records PASS with `completion_ceiling: 95` for the PRD-scoped local v0-v2 claim.
 
-This baseline is **not** v0-v2 completion under the corrected standard. After live UI/runtime failures, it is explicitly capped below 90% until `docs/milestones/HARD_COMPLETION_GATES.md` passes.
+This remains **PRD-scoped local v0-v2**, not a universal hosted/remote/broad-MCP agent platform. Broader runtime ambitions require a new milestone.
 
 ## v0 Product Foundation
 

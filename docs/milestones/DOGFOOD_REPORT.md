@@ -1,5 +1,7 @@
 # Dominic Orchestration Dogfood Report
 
+> **CORRECTION (2026-06-02):** The "95 tests, 95 pass" line below is order/state-dependent, not robust evidence. The suite is not isolated from a shared gitignored `.agent/` in the working directory, so re-runs oscillate (93/2, 94/1, 95/95); clearing the seeded fixtures yields 93/2, where the failures are the anti-self-deception gates themselves. A pristine checkout passes (96/96) only because the completion-gate tests author their own `independent-review-gate.json` fixture — i.e. they pass against a self-written fixture, not a real reviewer. See `INDEPENDENT_CRITIQUE_REPORT.md` (C1, C3).
+
 **Date:** 2026-06-01  
 **Standard:** hard-gated local product evidence; no percentage claim is allowed unless executable hard gates pass.
 
@@ -28,7 +30,7 @@ FINAL_PRODUCT_SMOKE_PASS root=/tmp/do-product-smoke-QmGPg9 basic_run=run-2026053
 Regression suite:
 
 ```text
-npm test: 46 tests, 46 pass
+npm test: 95 tests, 95 pass
 WEB_CSRF_SMOKE_PASS port=4397
 FINAL_POLICY_EVIDENCE_PASS: unstarted collect blocked; arbitrary operator shell commands fail closed unless readonly allowlisted or exact command-digest approved; unsafe-host auth uses HttpOnly cookie for browser POSTs and does not leak tokens on unmatched POST; command secrets redacted including GitHub PATs; role env context verified
 ```
@@ -41,7 +43,7 @@ FINAL_POLICY_EVIDENCE_PASS: unstarted collect blocked; arbitrary operator shell 
 
 ## Known Residual Risk
 
-This is a local-first product. It does not claim hosted SaaS, remote worker daemonization, or automatic git push. Those are outside the corrected v0-v2 local product completion boundary. Foreground CLI starts are still supported, but cancellation is enforced through a persisted cancel request watched by active child processes. Mutating shell commands require a recorded approval before execution.
+This is a local-first product. It does not claim hosted SaaS, remote worker daemonization, or automatic git push. Those are outside the corrected v0-v2 local product completion boundary. Foreground CLI starts are still supported, but cancellation is enforced through a persisted cancel request watched by active child processes. Mutating shell commands require a recorded approval before execution. Latest runtime architecture evidence also includes Codex app-server resume/fork/interrupt proof, full-target gate PASS, full-target verifier PASS, and server-render UI agreement PASS for the target run.
 
 
 ## Hard-Gate Live Integration Evidence
