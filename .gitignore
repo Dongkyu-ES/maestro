@@ -1,5 +1,6 @@
 # Runtime / orchestration local state
 .omx/
+.omc/
 .agent/
 .agent/logs/
 .agent/cache/

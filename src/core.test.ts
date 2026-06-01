@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addProject, addTask, applyApprovedProposal, cancelRun, collectRun, createApproval, createRun, extractFilesChanged, initProject, isSecretPath, listApprovals, listProjects, listTasks, loadIndex, proposeApply, reconcileRuns, renderHtml, renderRun, resolveApproval, safeJoin, startRun, updateTask } from './core.js';
+import { addProject, addTask, applyApprovedProposal, cancelRun, collectRun, createApproval, createRun, extractFilesChanged, initProject, isSecretPath, listApprovals, listProjects, listTasks, loadIndex, proposeApply, reconcileRuns, redact, renderHtml, renderRun, resolveApproval, safeJoin, startRun, updateTask } from './core.js';
 
 
 
@@ -918,6 +918,26 @@ test('secret path detection and safeJoin reject unsafe paths', () => {
   assert.equal(isSecretPath('src/index.ts'), false);
   assert.throws(() => safeJoin(dir, '..', 'escape.txt'), /escapes project root/);
   assert.throws(() => safeJoin(dir, '.env'), /refusing secret path/);
+});
+
+test('redact masks multi-vendor secret formats, not just OpenAI/GitHub', () => {
+  const leaky = [
+    'sk-ABCDEFGH12345678', 'sk-ant-api03-ABCDEFGH12345678', 'ghp_1234567890abcdefTOKEN', 'github_pat_11ABCDEFG0abcdefghij',
+    'npm_abcdefghijklmnopqrstuvwxyz0123456789', 'xoxb-123456789012-abcdefghijklmnop', 'sk_live_abcdefghijklmnop12345678',
+    'AKIAIOSFODNN7EXAMPLE', 'AIzaSyA1234567890abcdefghijklmnopqrstuv', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.abcDEF123456',
+    'aws_secret_access_key=wJalrXUtnFEMIK7MDENGbPxRfiCYEXAMPLEKEY', 'password: SuperSecret12345',
+  ];
+  for (const secret of leaky) {
+    const masked = redact(`prefix ${secret} suffix`);
+    const token = secret.split(/[:=]/).pop()!.trim();
+    assert.ok(!masked.includes(token), `redact leaked: ${secret} -> ${masked}`);
+    assert.match(masked, /\[REDACTED\]/);
+  }
+  const pem = '-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEA\n-----END RSA PRIVATE KEY-----';
+  assert.ok(!redact(pem).includes('MIIEowIBAAKCAQEA'));
+  assert.equal(redact('postgres://admin:hunter2@db.internal:5432/app'), 'postgres://[REDACTED]@db.internal:5432/app');
+  // non-secret text must pass through unchanged
+  assert.equal(redact('Dominic Orchestration task adapter executed'), 'Dominic Orchestration task adapter executed');
 });
 
 

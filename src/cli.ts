@@ -3,7 +3,13 @@ import { createServer } from 'node:http';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 import { parse as parseQuery } from 'node:querystring';
 import { existsSync, readFileSync } from 'node:fs';
-import { addProject, addTask, applyApprovedProposal, cancelRun, cleanupWorktrees, collectRun, createApproval, createRun, initProject, latestRunId, listApprovals, listProjects, listTasks, loadIndex, proposeApply, rebuildIndex, reconcileRuns, removeProject, renderHtml, renderRun, resolveApproval, runProductGate, startRun, taskPath, updateTask } from './core.js';
+import { addProject, addTask, applyApprovedProposal, cancelRun, cleanupWorktrees, collectRun, createApproval, createRun, initProject, latestRunId, listApprovals, listProjects, listTasks, loadIndex, proposeApply, rebuildIndex, rebuildRuntimeProjectionStore, reconcileRuns, removeProject, renderHtml, renderRun, resolveApproval, runPath, runProductGate, startRun, taskPath, updateTask } from './core.js';
+import { readRuntimeEvents } from './events/ledger.js';
+import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
+import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
+import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
+import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
+import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
 
 function arg(name: string, fallback?: string): string | undefined { const idx = process.argv.indexOf(name); return idx >= 0 ? process.argv[idx + 1] : fallback; }
 function has(name: string): boolean { return process.argv.includes(name); }
@@ -18,6 +24,12 @@ function usage(): string { return `usage:
   agent index rebuild|show
   agent task add|list|show|status|update|archive
   agent run create|start|collect|cancel|latest
+  agent runtime projection
+  agent runtime full-target-gate <run-id> [--append-pass-event]
+  agent runtime m8-boundary-evidence <run-id>
+  agent runtime codex-lifecycle-proof <run-id> --thread-id <thread-id>
+  agent runtime ui-agreement <run-id>
+  agent runtime verify-full-target <run-id> [--append-verified-event]
   agent review latest
   agent approvals
   agent approval request|approve|reject
@@ -45,11 +57,17 @@ async function main() {
     if (cmd === 'task' && sub === 'status') { const id = rest[0]; const status = rest[1] as any; if (!id || !status) throw new Error('usage: agent task status <task-id> <status>'); console.log(JSON.stringify(updateTask(id, { status }), null, 2)); return; }
     if (cmd === 'task' && sub === 'update') { const id = rest[0]; if (!id) throw new Error('usage: agent task update <task-id> [--title title] [--status status]'); console.log(JSON.stringify(updateTask(id, { title: arg('--title'), status: arg('--status') as any }), null, 2)); return; }
     if (cmd === 'task' && sub === 'archive') { const id = rest[0]; if (!id) throw new Error('usage: agent task archive <task-id>'); console.log(JSON.stringify(updateTask(id, { status: 'abandoned' }), null, 2)); return; }
-    if (cmd === 'run' && sub === 'create') { const id = firstNonFlag(rest); if (!id) throw new Error('usage: agent run create <task-id> [--mode roles|multi] [--max-workers N] [--command cmd]'); const mode = (arg('--mode', has('--multi') ? 'multi' : has('--roles') ? 'roles' : 'basic') || 'basic') as any; const maxWorkers = Number(arg('--max-workers', '2')); const command = arg('--command'); const run = createRun(id, { mode, maxWorkers, command }); console.log(`run: ${run.id}`); console.log(`prompt: ${run.run_dir}/prompt.md`); return; }
+    if (cmd === 'run' && sub === 'create') { const id = firstNonFlag(rest); if (!id) throw new Error('usage: agent run create <task-id> [--mode roles|multi] [--executor command|codex|omx|agy] [--max-workers N] [--command cmd]'); const mode = (arg('--mode', has('--multi') ? 'multi' : has('--roles') ? 'roles' : 'basic') || 'basic') as any; const maxWorkers = Number(arg('--max-workers', '2')); const command = arg('--command'); const executor = (arg('--executor', 'command') || 'command') as any; const run = createRun(id, { mode, executor, maxWorkers, command }); console.log(`run: ${run.id}`); console.log(`prompt: ${run.run_dir}/prompt.md`); return; }
     if (cmd === 'run' && sub === 'start') { const id = rest[0] || latestRunId(); if (!id) throw new Error('usage: agent run start <run-id> [--command cmd]'); const run = await startRun(id, { command: arg('--command'), timeoutMs: Number(arg('--timeout-ms', '30000')) }); console.log(`started: ${run.id}\nstatus: ${run.status}`); return; }
     if (cmd === 'run' && sub === 'collect') { const id = rest[0] || latestRunId(); if (!id) throw new Error('usage: agent run collect <run-id>'); const run = collectRun(id); console.log(`collected: ${run.id}\nstatus: ${run.status}\ndecision: ${run.decision}`); return; }
     if (cmd === 'run' && sub === 'cancel') { const id = rest[0] || latestRunId(); if (!id) throw new Error('usage: agent run cancel <run-id>'); cancelRun(id); console.log(`cancelled: ${id}`); return; }
     if (cmd === 'run' && sub === 'latest') { console.log(latestRunId() || 'no runs'); return; }
+    if (cmd === 'runtime' && sub === 'projection') { console.log(JSON.stringify(rebuildRuntimeProjectionStore(), null, 2)); return; }
+    if (cmd === 'runtime' && sub === 'full-target-gate') { const id = rest[0] || latestRunId(); if (!id) throw new Error('usage: agent runtime full-target-gate <run-id> [--append-pass-event]'); const report = writeFullTargetGateArtifact({ root: process.cwd(), agentDir: '.agent', runId: id, appendPassEvent: has('--append-pass-event') }); console.log(JSON.stringify(report, null, 2)); if (report.decision !== 'PASS') process.exitCode = 2; return; }
+    if (cmd === 'runtime' && sub === 'm8-boundary-evidence') { const id = rest[0] || latestRunId(); if (!id) throw new Error('usage: agent runtime m8-boundary-evidence <run-id>'); console.log(JSON.stringify(appendM8BoundaryEvidence({ root: process.cwd(), agentDir: '.agent', runId: id }), null, 2)); return; }
+    if (cmd === 'runtime' && sub === 'codex-lifecycle-proof') { const id = firstNonFlag(rest) || latestRunId(); const threadId = arg('--thread-id'); if (!id || !threadId) throw new Error('usage: agent runtime codex-lifecycle-proof <run-id> --thread-id <thread-id>'); const report = await exerciseCodexAppServerLifecycle({ root: process.cwd(), agentDir: '.agent', runId: id, threadId }); console.log(JSON.stringify(report, null, 2)); if (report.decision !== 'PASS') process.exitCode = 2; return; }
+    if (cmd === 'runtime' && sub === 'ui-agreement') { const id = rest[0] || latestRunId(); if (!id) throw new Error('usage: agent runtime ui-agreement <run-id>'); const report = writeUiAgreementSmoke({ root: process.cwd(), agentDir: '.agent', runId: id }); console.log(JSON.stringify(report, null, 2)); if (report.status !== 'PASS') process.exitCode = 2; return; }
+    if (cmd === 'runtime' && sub === 'verify-full-target') { const id = rest[0] || latestRunId(); if (!id) throw new Error('usage: agent runtime verify-full-target <run-id> [--append-verified-event]'); const report = verifyFullTargetGateArtifact({ agentDir: '.agent', runId: id, appendVerifiedEvent: has('--append-verified-event') }); console.log(JSON.stringify(report, null, 2)); if (report.decision !== 'PASS') process.exitCode = 2; return; }
     if (cmd === 'review' && sub === 'latest') { const id = latestRunId(); if (!id) throw new Error('no runs'); console.log(readFileSync(`.agent/runs/${id}/review.md`, 'utf8')); return; }
     if (cmd === 'approvals' && !sub) { for (const a of listApprovals()) console.log(`${a.id}\t${a.status}\t${a.risk}\t${a.type}\t${a.summary}`); return; }
     if (cmd === 'approval' && (sub === 'approve' || sub === 'reject')) { const id = rest[0]; if (!id) throw new Error(`usage: agent approval ${sub} <id>`); console.log(JSON.stringify(resolveApproval(id, sub === 'approve' ? 'approved' : 'rejected'), null, 2)); return; }
@@ -74,7 +92,7 @@ async function serveWeb(): Promise<void> {
       if (req.method === 'POST' && url.pathname === '/api/tasks') { const body = await requirePostAuth(); addTask(body.title || 'Untitled task'); redirect(res); return; }
       const taskUpdateMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/update$/); if (req.method === 'POST' && taskUpdateMatch) { const body = await requirePostAuth(); updateTask(taskUpdateMatch[1], { title: body.title || undefined, status: body.status as any || undefined }); redirect(res); return; }
       const taskArchiveMatch = url.pathname.match(/^\/api\/tasks\/([^/]+)\/archive$/); if (req.method === 'POST' && taskArchiveMatch) { await requirePostAuth(); updateTask(taskArchiveMatch[1], { status: 'abandoned' }); redirect(res); return; }
-      if (req.method === 'POST' && url.pathname === '/api/runs') { const body = await requirePostAuth(); createRun(body.taskId, { mode: (body.mode || 'basic') as any }); redirect(res); return; }
+      if (req.method === 'POST' && url.pathname === '/api/runs') { const body = await requirePostAuth(); createRun(body.taskId, { mode: (body.mode || 'basic') as any, source: 'web' }); redirect(res); return; }
       const startMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/start$/); if (req.method === 'POST' && startMatch) { const body = await requirePostAuth(); await startRun(startMatch[1], { command: body.confirmCommand === 'yes' ? body.command || undefined : undefined }); redirect(res, `/run/${startMatch[1]}`); return; }
       const collectMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/collect$/); if (req.method === 'POST' && collectMatch) { await requirePostAuth(); collectRun(collectMatch[1]); redirect(res, `/run/${collectMatch[1]}`); return; }
       const cancelMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/cancel$/); if (req.method === 'POST' && cancelMatch) { await requirePostAuth(); cancelRun(cancelMatch[1]); redirect(res, `/run/${cancelMatch[1]}`); return; }
@@ -82,6 +100,7 @@ async function serveWeb(): Promise<void> {
       const approveMatch = url.pathname.match(/^\/api\/approvals\/([^/]+)\/approve$/); if (req.method === 'POST' && approveMatch) { await requirePostAuth(); resolveApproval(approveMatch[1], 'approved'); redirect(res); return; }
       const rejectMatch = url.pathname.match(/^\/api\/approvals\/([^/]+)\/reject$/); if (req.method === 'POST' && rejectMatch) { await requirePostAuth(); resolveApproval(rejectMatch[1], 'rejected'); redirect(res); return; }
       const applyMatch = url.pathname.match(/^\/api\/approvals\/([^/]+)\/apply$/); if (req.method === 'POST' && applyMatch) { await requirePostAuth(); applyApprovedProposal(applyMatch[1]); redirect(res); return; }
+      const eventStreamMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/events$/); if (req.method === 'GET' && eventStreamMatch) { requirePageAuth(); res.writeHead(200, { 'content-type': 'text/event-stream; charset=utf-8', 'cache-control': 'no-cache, no-transform', connection: 'keep-alive' }); let sent = 0; const send = () => { const events = readRuntimeEvents(runPath(eventStreamMatch[1])); for (const event of events.slice(sent)) res.write(`event: runtime\\ndata: ${JSON.stringify(event)}\\n\\n`); sent = events.length; }; send(); const timer = setInterval(send, 500); const end = setTimeout(() => { clearInterval(timer); res.end(); }, 30000); req.on('close', () => { clearInterval(timer); clearTimeout(end); }); return; }
       if (req.method !== 'GET') { res.statusCode = 404; res.end('not found'); return; } requirePageAuth(); res.setHeader('content-type', 'text/html; charset=utf-8'); if (url.pathname.startsWith('/run/')) res.end(renderRun(decodeURIComponent(url.pathname.slice(5)))); else if (url.pathname === '/') res.end(renderHtml(process.cwd(), csrfToken)); else { res.statusCode = 404; res.end('not found'); }
     } catch (err: any) { res.statusCode = 500; res.end(String(err.message || err)); }
   });
