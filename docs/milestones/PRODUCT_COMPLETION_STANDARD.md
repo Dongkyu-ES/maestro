@@ -196,3 +196,14 @@ Restate original PRD target and non-goals
 ```
 
 No milestone can be marked complete while a blocker-resolution task remains open.
+
+
+## 7. Hard Completion Ceiling Override
+
+`docs/milestones/HARD_COMPLETION_GATES.md` is part of this standard. If any hard gate in that file is FAIL, then:
+
+- `agent quality gate --write` must return FAIL;
+- completion claims of 90%+, 95%+, 완제품, or v0-v2 complete are forbidden;
+- reports must use the label `Prototype / control-plane scaffold with blockers`;
+- the maximum completion ceiling is the value declared in `CURRENT_COMPLETION_CEILING`;
+- a few follow-up fixes cannot raise the ceiling unless the executable hard gate and live-web smoke evidence both pass.

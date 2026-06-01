@@ -229,7 +229,7 @@ export function applyApprovedProposal(approvalId: string, cwd = process.cwd()): 
 
 export interface ProductGateCheck { name: string; status: 'PASS' | 'FAIL'; evidence: string; }
 export interface ProductGateDelta { target: string; evidence: string; delta: string; status: 'PASS' | 'FAIL'; }
-export interface ProductGateReport { schema_version: number; generated_at: string; decision: 'PASS' | 'FAIL'; scope: string; result_reality_delta: ProductGateDelta[]; checks: ProductGateCheck[]; report_path?: string; }
+export interface ProductGateReport { schema_version: number; generated_at: string; decision: 'PASS' | 'FAIL'; scope: string; completion_ceiling: number; completion_label: string; result_reality_delta: ProductGateDelta[]; checks: ProductGateCheck[]; report_path?: string; }
 function hasAll(text: string, needles: string[]): boolean { return needles.every((needle) => text.includes(needle)); }
 function readIfExists(path: string): string { return existsSync(path) ? readFileSync(path, 'utf8') : ''; }
 function gateCheck(name: string, ok: boolean, evidence: string): ProductGateCheck { return { name, status: ok ? 'PASS' : 'FAIL', evidence }; }
@@ -238,6 +238,30 @@ function commandEvidence(root: string, args: string[], mustInclude: string[]): b
 function markdownTableRows(text: string): string[][] { return text.split('\n').filter((line) => /^\|.*\|$/.test(line.trim()) && !/^\|\s*-/.test(line.trim())).map((line) => line.trim().slice(1, -1).split('|').map((cell) => cell.trim())); }
 function hasPassingMatrixRows(roadmap: string, requiredAreas: string[]): boolean { const rows = markdownTableRows(roadmap); return requiredAreas.every((area) => rows.some((row) => row[0] === area && row.at(-1) === 'PASS')) && !rows.some((row) => row.at(-1) === 'FAIL'); }
 function countTests(testText: string): number { return [...testText.matchAll(/\btest\(/g)].length; }
+
+function activeStatus(status: unknown): boolean { return ['planning', 'dispatching', 'workers_running', 'collecting', 'reviewing', 'applying'].includes(String(status)); }
+function hardGateRows(text: string): { total: number; fail: number; pass: number } {
+  const rows = markdownTableRows(text).filter((row) => row.length >= 3 && row[0] !== 'Gate');
+  return { total: rows.length, fail: rows.filter((row) => row.at(-1) === 'FAIL').length, pass: rows.filter((row) => row.at(-1) === 'PASS').length };
+}
+function contradictoryRunEvidence(root: string): string[] {
+  const dir = join(root, AGENT_DIR, 'runs');
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const runId of readdirSync(dir).filter((f) => existsSync(join(dir, f, 'run.yaml'))).sort()) {
+    const runDir = join(dir, runId);
+    const meta = readYaml(join(runDir, 'run.yaml')) as unknown as RunMeta;
+    const hasEnded = Boolean(meta.ended_at);
+    const hasCancel = existsSync(join(runDir, 'cancel.requested'));
+    const hasProcess = readdirSync(runDir).some((f) => f.endsWith('.process.json'));
+    if (activeStatus(meta.status) && (hasEnded || hasCancel)) out.push(`${runId}: active status ${meta.status} with ended/cancel evidence`);
+    if (meta.status === 'created' && hasProcess) out.push(`${runId}: created status with process evidence`);
+    const cmdPath = join(runDir, 'executor-command.txt');
+    const cmd = readIfExists(cmdPath).trim();
+    if (/^(진행해|다시|해봐|좋아|ㅇㅋ|오케이)(\s|$)/.test(cmd)) out.push(`${runId}: natural-language operator reply captured as command (${cmd.slice(0, 40)})`);
+  }
+  return out;
+}
 
 function dogfoodEvidence(dogfood: string): { ok: boolean; root: string; basicRun: string; multiRun: string; approval: string; evidence: string } {
   const root = dogfood.match(/root=([^\s]+)/)?.[1] || '';
@@ -272,6 +296,7 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
   const roadmap = readIfExists(join(root, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'));
   const rerun = readIfExists(join(root, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'));
   const dogfood = readIfExists(join(root, 'docs', 'milestones', 'DOGFOOD_REPORT.md'));
+  const hardGates = readIfExists(join(root, 'docs', 'milestones', 'HARD_COMPLETION_GATES.md'));
   const packageJson = jsonIfExists(join(root, 'package.json'));
   const tests = readIfExists(join(root, 'src', 'core.test.ts'));
   const helpOk = existsSync(join(root, 'dist', 'cli.js')) && commandEvidence(root, ['dist/cli.js', '--help'], ['agent quality gate [--write]', 'agent run create|start|collect|cancel|latest', 'agent apply propose|approved']);
@@ -285,6 +310,10 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
   const evidenceOk = hasAll(tests, ['actual worktree changes not declared', 'declared files not present in worktree diff', 'multi mode detects actual worktree conflicts', 'multi mode blocks stale declared files absent from actual worktree diff']);
   const safetyOk = hasAll(tests, ['unsafe-host auth does not leak tokens', 'readonly shell allowlist rejects mutating git output flags', 'secret path detection and safeJoin reject unsafe paths', 'shell mutation approvals are bound to the exact command digest', 'applyApprovedProposal checks whole bundle before applying']);
   const regressionOk = countTests(tests) >= 49 && hasAll(tests, ['fake string-only repo cannot pass the product gate', 'product gate durable report contains report_path', 'Anti-self-deception product gate rejects rubber-stamp criteria']);
+  const hardRows = hardGateRows(hardGates);
+  const contradictoryRuns = contradictoryRunEvidence(root);
+  const hardGateDocOk = hasAll(hardGates, ['CLAIM_LOCK: FORBID_90_95_UNTIL_ALL_HARD_GATES_PASS', 'CURRENT_COMPLETION_CEILING: 60', 'Local-Web State Truth Gate', 'Real Agent Runtime Gate', 'Operator Intent Boundary Gate', 'Live Integration Gate']);
+  const hardGatesAllPass = hardGateDocOk && hardRows.total >= 7 && hardRows.fail === 0 && hardRows.pass >= 7 && contradictoryRuns.length === 0;
   const resultRealityDelta: ProductGateDelta[] = [
     deltaRow('Original PRD scope: local webservice, task/run/worker/review/promotion, v0-v2 bounded flow', prdScopeOk, 'dominic_orchestration_PRD.md required scope anchors', 'Claimed local v0-v2 scope is PRD-derived.', 'Cannot prove claimed scope from original PRD.'),
     deltaRow('Runnable operator surface: installable CLI and command help/version', Boolean(packageJson?.bin?.agent === './dist/cli.js') && helpOk && versionOk, 'package.json bin + dist/cli.js --help/--version', 'Runnable CLI evidence exists.', 'CLI/package evidence is missing or not runnable.'),
@@ -292,7 +321,8 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     deltaRow('Real execution: dogfood run ids plus process/scheduler/role regressions', executionOk, `${dogfoodResolved.evidence}; DOGFOOD_REPORT.md + src/core.test.ts behavioral tests`, 'Execution evidence is stronger than prose.', 'Execution evidence is missing or prose-only.'),
     deltaRow('Evidence integrity: worker output checked against actual worktree diff', evidenceOk, 'src/core.test.ts mismatch/conflict tests', 'Worker prose is not the sole truth source.', 'No deterministic mismatch/conflict regression evidence.'),
     deltaRow('Safety: command/control boundaries covered by adversarial tests', safetyOk, 'src/core.test.ts safety and approval tests', 'Policy/safety claims have adversarial tests.', 'Policy/safety claims lack adversarial tests.'),
-    deltaRow('Anti-rubber-stamp regression: fake string-only repo fails', regressionOk, 'src/core.test.ts positive and negative product gate tests', 'The gate has negative tests against string-only self-certification.', 'The gate lacks negative anti-rubber-stamp tests.')
+    deltaRow('Anti-rubber-stamp regression: fake string-only repo fails', regressionOk, 'src/core.test.ts positive and negative product gate tests', 'The gate has negative tests against string-only self-certification.', 'The gate lacks negative anti-rubber-stamp tests.'),
+    deltaRow('Hard completion ceiling: no 90/95 claim while live UI/runtime gates fail', hardGatesAllPass, `docs/milestones/HARD_COMPLETION_GATES.md rows=${hardRows.total} fail=${hardRows.fail}; contradictory_runs=${contradictoryRuns.length}`, 'All hard gates pass, so the completion ceiling can be lifted.', `Hard gates block completion inflation: ${hardRows.fail} declared FAIL rows; ${contradictoryRuns.length} contradictory run artifacts.`)
   ];
   const deltaOk = resultRealityDelta.every((row) => row.status === 'PASS');
   const checks: ProductGateCheck[] = [
@@ -304,10 +334,13 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     gateCheck('Safety and Policy Gate', safetyOk, 'Security/policy gates must be backed by adversarial tests, not just source-code strings.'),
     gateCheck('Operator UX Gate', helpOk && hasAll(rerun, ['CLI/Web controls', 'agent quality gate --write']) && hasAll(roadmap, ['UI shows worker lanes', 'Run detail UI showing all required evidence']), 'CLI help and reports must expose task/run/approval/product gate controls without manual .agent editing.'),
     gateCheck('Regression Gate', regressionOk, 'Regression tests must include positive and negative anti-rubber-stamp fixtures plus durable report-path coverage.'),
-    gateCheck('Dogfood Gate', dogfoodResolved.ok && hasAll(dogfood, ['FINAL_PRODUCT_SMOKE_PASS', 'WEB_CSRF_SMOKE_PASS', 'FINAL_POLICY_EVIDENCE_PASS']), 'Dogfood must record real product use and policy/web smoke evidence.')
+    gateCheck('Dogfood Gate', dogfoodResolved.ok && hasAll(dogfood, ['FINAL_PRODUCT_SMOKE_PASS', 'WEB_CSRF_SMOKE_PASS', 'FINAL_POLICY_EVIDENCE_PASS']), 'Dogfood must record real product use and policy/web smoke evidence.'),
+    gateCheck('Hard Completion Ceiling Gate', hardGatesAllPass, hardGatesAllPass ? 'All hard gates pass and no contradictory run artifacts exist.' : `90/95 claims forbidden: hard gate rows fail=${hardRows.fail}, pass=${hardRows.pass}, contradictory run artifacts=${contradictoryRuns.slice(0, 5).join('; ') || 'none'}`)
   ];
   const decision = checks.every((check) => check.status === 'PASS') ? 'PASS' : 'FAIL';
-  const report: ProductGateReport = { schema_version: 1, generated_at: nowIso(), decision, scope: 'PRD-scoped local v0-v2 product; no claim of hosted SaaS, v3 custom runtime, or automatic push.', result_reality_delta: resultRealityDelta, checks };
+  const completionCeiling = hardGatesAllPass ? 95 : 60;
+  const completionLabel = hardGatesAllPass ? 'PRD-scoped completion candidate' : 'Prototype / control-plane scaffold with hard blockers; 90/95 claims forbidden';
+  const report: ProductGateReport = { schema_version: 1, generated_at: nowIso(), decision, scope: 'PRD-scoped local v0-v2 product; no 90/95 claim allowed unless Hard Completion Ceiling Gate passes.', completion_ceiling: completionCeiling, completion_label: completionLabel, result_reality_delta: resultRealityDelta, checks };
   if (options.write) {
     const dir = safeJoin(root, AGENT_DIR, 'product-gates'); ensureDir(dir);
     const reportPath = join(dir, `product-gate-${nowIso().replace(/[-:TZ.]/g, '').slice(0, 14)}.json`);

@@ -746,12 +746,13 @@ test('secret path detection and safeJoin reject unsafe paths', () => {
 });
 
 
-test('Anti-self-deception product gate rejects rubber-stamp criteria and passes current PRD-scoped evidence', async () => {
+test('hard completion ceiling prevents current repo from claiming 90 or 95 percent completion', async () => {
   const report = (await import('./core.js')).runProductGate(process.cwd());
-  assert.equal(report.decision, 'PASS');
-  assert.equal(report.checks.some((check) => check.name === 'Anti-Self-Deception Critic Gate' && check.status === 'PASS'), true);
-  assert.equal(report.checks.some((check) => check.name === 'PRD Scope Integrity Gate' && check.status === 'PASS'), true);
-  assert.equal(report.result_reality_delta.every((row) => row.status === 'PASS'), true);
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.completion_ceiling <= 60, true);
+  assert.match(report.completion_label, /Prototype|hard blockers|90\/95 claims forbidden/);
+  assert.equal(report.checks.some((check) => check.name === 'Hard Completion Ceiling Gate' && check.status === 'FAIL'), true);
+  assert.equal(report.result_reality_delta.some((row) => /Hard completion ceiling/.test(row.target) && row.status === 'FAIL'), true);
 });
 
 
@@ -764,16 +765,17 @@ test('fake string-only repo cannot pass the product gate', async () => {
   writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n| Installable CLI | x | x | PASS |');
   writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), 'FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS basic_run= multi_run= approval=');
   writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'), 'Result-Reality Delta | Original PRD / v0-v2 target | Current runnable evidence | Delta | Forbidden completion claim Allowed completion claim Why the previous loop failed implementation-friendly grading Final wording guard');
-  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test( fake ) executor.process.json scheduler.json worker-001.process.json actual worktree changes not declared declared files not present in worktree diff unsafe-host auth does not leak tokens Anti-self-deception product gate rejects rubber-stamp criteria fake string-only repo cannot pass the product gate product gate durable report contains report_path');
+  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test( fake ) executor.process.json scheduler.json worker-001.process.json actual worktree changes not declared declared files not present in worktree diff unsafe-host auth does not leak tokens hard completion ceiling prevents current repo from claiming 90 or 95 percent completion fake string-only repo cannot pass the product gate product gate durable report contains report_path even when hard gates fail');
   const report = (await import('./core.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.checks.some((check) => check.name === 'Product Completeness Gate' && check.status === 'FAIL'), true);
   assert.equal(report.result_reality_delta.some((row) => row.status === 'FAIL'), true);
 });
 
-test('product gate durable report contains report_path', async () => {
+test('product gate durable report contains report_path even when hard gates fail', async () => {
   const report = (await import('./core.js')).runProductGate(process.cwd(), { write: true });
-  assert.equal(report.decision, 'PASS');
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.completion_ceiling <= 60, true);
   assert.ok(report.report_path);
   const written = JSON.parse(readFileSync(join(process.cwd(), report.report_path), 'utf8'));
   assert.equal(written.report_path, report.report_path);
@@ -794,7 +796,7 @@ test('shaped scaffold with fake CLI and dogfood strings still fails without dogf
   writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n' + rows.map((r) => `| ${r} | x | x | PASS |`).join('\n') + '\nUI shows worker lanes Run detail UI showing all required evidence');
   writeFileSync(join(dir, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'), 'Result-Reality Delta | Original PRD / v0-v2 target | Current runnable evidence | Delta | Forbidden completion claim Allowed completion claim Why the previous loop failed implementation-friendly grading Final wording guard CLI/Web controls agent quality gate --write');
   writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), 'FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS root=/tmp/missing-dogfood basic_run=run-fake multi_run=run-fake2 approval=approval-fake');
-  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path Anti-self-deception product gate rejects rubber-stamp criteria');
+  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path even when hard gates fail hard completion ceiling prevents current repo from claiming 90 or 95 percent completion');
   const report = (await import('./core.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.checks.some((check) => check.name === 'Dogfood Gate' && check.status === 'FAIL'), true);
@@ -824,7 +826,7 @@ test('minimal fake dogfood artifacts still fail coherence checks', async () => {
   const rows = ['Installable CLI','Web UI','Project registry','Durable index','v0 run lifecycle','v1 role execution','Executor adapter','Policy/approval','Promotion proposals','v2 scheduler','v2 worktrees','Conflict detection','Apply/merge proposal','Dogfood','Scope integrity','Anti-self-deception critic'];
   writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n' + rows.map((r) => `| ${r} | x | x | PASS |`).join('\n') + '\nUI shows worker lanes Run detail UI showing all required evidence');
   writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), `FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS root=${dogRoot} basic_run=${basic} multi_run=${multi} approval=${approval}`);
-  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path Anti-self-deception product gate rejects rubber-stamp criteria');
+  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path even when hard gates fail hard completion ceiling prevents current repo from claiming 90 or 95 percent completion');
   const report = (await import('./core.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.result_reality_delta.some((row) => row.target.startsWith('Real execution') && row.status === 'FAIL'), true);
@@ -859,7 +861,7 @@ test('forged dogfood proposal digest fails product gate', async () => {
   const rows = ['Installable CLI','Web UI','Project registry','Durable index','v0 run lifecycle','v1 role execution','Executor adapter','Policy/approval','Promotion proposals','v2 scheduler','v2 worktrees','Conflict detection','Apply/merge proposal','Dogfood','Scope integrity','Anti-self-deception critic'];
   writeFileSync(join(dir, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'), '| Area | 95% Product Pass Definition | Current Baseline | Status |\n| --- | --- | --- | --- |\n' + rows.map((r) => `| ${r} | x | x | PASS |`).join('\n') + '\nUI shows worker lanes Run detail UI showing all required evidence');
   writeFileSync(join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'), `FINAL_PRODUCT_SMOKE_PASS WEB_CSRF_SMOKE_PASS FINAL_POLICY_EVIDENCE_PASS root=${dogRoot} basic_run=${basic} multi_run=${multi} approval=${approval}`);
-  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path Anti-self-deception product gate rejects rubber-stamp criteria');
+  writeFileSync(join(dir, 'src', 'core.test.ts'), 'test('.repeat(49) + ' executor.process.json scheduler.json worker-001.process.json roles mode passes distinct ROLE context actual worktree changes not declared declared files not present in worktree diff multi mode detects actual worktree conflicts multi mode blocks stale declared files absent from actual worktree diff unsafe-host auth does not leak tokens readonly shell allowlist rejects mutating git output flags secret path detection and safeJoin reject unsafe paths shell mutation approvals are bound to the exact command digest applyApprovedProposal checks whole bundle before applying fake string-only repo cannot pass the product gate product gate durable report contains report_path even when hard gates fail hard completion ceiling prevents current repo from claiming 90 or 95 percent completion');
   const report = (await import('./core.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.result_reality_delta.some((row) => row.target.startsWith('Real execution') && row.status === 'FAIL'), true);

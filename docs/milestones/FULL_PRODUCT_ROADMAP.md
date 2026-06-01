@@ -1,6 +1,6 @@
 # Dominic Orchestration Full Product Roadmap: v0 → v2
 
-**Status:** Corrected PRD-scoped v0-v2 product plan with anti-self-deception gate
+**Status:** HARD-GATED; current implementation is not 90/95% complete
 **Date:** 2026-06-01
 **Standard:** `docs/milestones/PRODUCT_COMPLETION_STANDARD.md`
 
@@ -18,7 +18,7 @@ The current repository contains a useful scaffold/prototype:
 - `.agent/` artifacts are created.
 - tests cover baseline run creation, v1 role artifact preservation, v2 worktree conflict detection, and web evidence visibility.
 
-This baseline is **not** v0-v2 completion under the corrected standard.
+This baseline is **not** v0-v2 completion under the corrected standard. After live UI/runtime failures, it is explicitly capped below 90% until `docs/milestones/HARD_COMPLETION_GATES.md` passes.
 
 ## v0 Product Foundation
 
@@ -237,22 +237,22 @@ This matrix must be read as PRD-scoped v0-v2, not as a universal final-platform 
 | Area | 95% Product Pass Definition | Current Baseline | Status |
 | --- | --- | --- | --- |
 | Installable CLI | `agent` usable outside repo after documented install/link | package bin, README install/link docs, `agent --version` smoke | PASS |
-| Web UI | operator can create/control tasks/runs and inspect evidence | create task/run/start/collect/cancel/apply proposal/approval forms and evidence viewer | PASS |
+| Web UI | operator can create/control tasks/runs and inspect evidence | forms exist, but live operator state/intent clarity failed in real use | FAIL |
 | Project registry | multiple real projects managed | CLI registry add/list/show/remove implemented | PASS |
 | Durable index | index/recovery across projects/tasks/runs | `.agent/index.json` rebuild/show implemented and smoke-verified | PASS |
-| v0 run lifecycle | create/start/collect/cancel/review from CLI+Web | create/start/collect/cancel/review implemented in CLI and Web | PASS |
-| v1 role execution | Manager/Worker/Reviewer actually execute via adapter | process-backed manager/worker/reviewer execution logs implemented and tested | PASS |
-| Executor adapter | real process lifecycle/log/exit handling | shell command adapter with stdout/stderr/exit JSON, timeout, redaction implemented | PASS |
-| Policy/approval | risky actions classified and approval-visible | shell-mutation approval, approval records, approve/reject/apply UI, approval-gated apply implemented | PASS |
+| v0 run lifecycle | create/start/collect/cancel/review from CLI+Web | lifecycle exists, but stale active metadata and created-vs-running confusion were observed | FAIL |
+| v1 role execution | Manager/Worker/Reviewer actually execute via adapter | tests exist, but UI default path still does not make real agent-runtime execution obvious to operator | FAIL |
+| Executor adapter | real process lifecycle/log/exit handling | process adapter exists, but operator command/intent boundary is unsafe/confusing | FAIL |
+| Policy/approval | risky actions classified and approval-visible | approvals exist, but tool/permission adequacy is not operator-clear enough | FAIL |
 | Promotion proposals | real review-derived proposal lifecycle | review-derived promotion records and apply proposal bundles implemented | PASS |
 | v2 scheduler | bounded parallel launch/lifecycle/cancel/timeouts | bounded parallel scheduler implemented with scheduler evidence and timing regression | PASS |
 | v2 worktrees | real worktree lifecycle and evidence | real worktree add, metadata, diff/status ingestion, cleanup implemented | PASS |
 | Conflict detection | actual diff/hunk/policy conflict blocks | actual worktree conflict, denied path, and evidence-mismatch blocking implemented | PASS |
 | Apply/merge proposal | approval-gated safe apply path | approval-gated patch proposal and approved `git apply --check` path implemented | PASS |
-| Dogfood | real repo self-use with reports | fresh-repo product smoke and repo regression evidence recorded | PASS |
+| Dogfood | real repo self-use with reports | prior dogfood missed live UX/runtime failures; must be rerun under hard gates | FAIL |
 | Scope integrity | completion scope traceable to original PRD, not post-hoc shrinking | PRD local/v0-v2/non-goal sections cited in Product Gate Rerun Report | PASS |
-| Anti-self-deception critic | result compared against PRD, not against implementation-friendly artifacts | Scope Integrity + Anti-Self-Deception gates added and executable product gate implemented | PASS |
+| Anti-self-deception critic | result compared against PRD, not against implementation-friendly artifacts | previous gate rubber-stamped too easily; hard completion gates now block it | FAIL |
 
 ## Rule
 
-No row marked FAIL can be ignored. Current PRD-scoped v0-v2 local product rows are PASS only under the original PRD boundary; future hosted, daemonized, broad MCP, custom Agents SDK runtime, or auto-push behavior must be planned as a new milestone, not silently folded into v2. A reviewer must not call this a universal final-product 95% completion claim.
+No row marked FAIL can be ignored. Current PRD-scoped v0-v2 local product rows are NOT PASS while hard completion gates fail; future hosted, daemonized, broad MCP, custom Agents SDK runtime, or auto-push behavior must be planned as a new milestone, not silently folded into v2. A reviewer must not call this a universal final-product 95% completion claim.
