@@ -1,6 +1,8 @@
 # Hard Completion Gates: No 90/95% Inflation
 
 > **CORRECTION (2026-06-02):** An independent critique found this "PASS / ceiling 95" status was itself inflated. From a clean `.agent/` state the gates here FAIL, and the decisive "independent review" gate is satisfiable by a hand-authored fixture (`.agent/independent-review-gate.json`), not a real reviewer. Treat the product as a **v0 prototype**, not a "completion candidate", until the integrity fixes in `INDEPENDENT_CRITIQUE_REPORT.md` (C1–C4) are addressed. The PASS rows below reflect a seeded local machine, not reproducible evidence.
+>
+> **PROVENANCE FIX (2026-06-02):** The independent-review gate now additionally requires an HMAC-SHA256 signature (`provenance.signature`) over `input_sha256:reviewer_artifact_sha256:architect_artifact_sha256`. The signing key is read from `AGENT_REVIEW_HMAC_KEY` (env) or `~/.dominic_orchestration/review-signing.key` — both deliberately **outside the project repo** — so a hand-authored `.agent/independent-review-gate.json` checked in with the code can no longer lift the ceiling without the secret. The legitimate flow signs via `agent runtime sign-review`. Honest caveat: this provenance is only as independent as **key custody** — anyone holding the key can still sign, so for true independence keep the key in CI secrets owned by a separate party, never in the implementer's working tree. Without any key present the gate fails closed (the ceiling cannot be lifted).
 
 **Status:** DISPUTED — see `INDEPENDENT_CRITIQUE_REPORT.md`; clean-state gate result is FAIL / ceiling 60
 **Created:** 2026-06-01

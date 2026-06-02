@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -52,6 +52,7 @@ function currentReviewInputHashForTest(dir = process.cwd()): string {
 }
 
 function writePassingReviewGate(dir = process.cwd()): void {
+  process.env.AGENT_REVIEW_HMAC_KEY ||= 'test-review-hmac-key';
   const reviewDir = join(dir, '.agent', 'review-gates');
   const notificationDir = join(reviewDir, 'subagent-notifications');
   mkdirSync(notificationDir, { recursive: true });
@@ -74,12 +75,18 @@ function writePassingReviewGate(dir = process.cwd()): void {
     JSON.stringify({ agent_path: architectId, status: { completed: architectText } }, null, 2),
   );
   const inputHash = currentReviewInputHashForTest(dir);
+  const reviewerSha = createHash('sha256').update(reviewerText).digest('hex');
+  const architectSha = createHash('sha256').update(architectText).digest('hex');
+  const provenanceSignature = createHmac('sha256', process.env.AGENT_REVIEW_HMAC_KEY as string)
+    .update(`${inputHash}:${reviewerSha}:${architectSha}`)
+    .digest('hex');
   writeFileSync(
     join(dir, '.agent', 'independent-review-gate.json'),
     JSON.stringify(
       {
         status: 'PASS',
         input_sha256: inputHash,
+        provenance: { algorithm: 'HMAC-SHA256', signature: provenanceSignature },
         codeReview: {
           recommendation: 'APPROVE',
           architectStatus: 'CLEAR',
@@ -92,7 +99,7 @@ function writePassingReviewGate(dir = process.cwd()): void {
               completed_at: '2026-06-01T00:00:00.000Z',
               reviewed_input_sha256: inputHash,
               artifact_path: '.agent/review-gates/code-reviewer.md',
-              artifact_sha256: createHash('sha256').update(reviewerText).digest('hex'),
+              artifact_sha256: reviewerSha,
               notification_path: `.agent/review-gates/subagent-notifications/${reviewerId}.json`,
               commands: ['npm test', 'scripts/live-integration-smoke.mjs'],
               evidence: 'artifact-backed approve',
@@ -105,7 +112,7 @@ function writePassingReviewGate(dir = process.cwd()): void {
               completed_at: '2026-06-01T00:00:00.000Z',
               reviewed_input_sha256: inputHash,
               artifact_path: '.agent/review-gates/architect.md',
-              artifact_sha256: createHash('sha256').update(architectText).digest('hex'),
+              artifact_sha256: architectSha,
               notification_path: `.agent/review-gates/subagent-notifications/${architectId}.json`,
               commands: ['npm test', 'node dist/cli.js quality gate --write'],
               evidence: 'artifact-backed clear',
@@ -1417,6 +1424,36 @@ test('hard completion ceiling requires independent review and reconciliation art
     report.result_reality_delta.some((row) => /Hard completion ceiling/.test(row.target) && row.status === 'PASS'),
     true,
   );
+});
+
+test('hand-authored review gate without a valid provenance signature cannot lift the ceiling', async () => {
+  reconcileRuns(process.cwd());
+  writePassingReviewGate(process.cwd());
+  const gatePath = join(process.cwd(), '.agent', 'independent-review-gate.json');
+  const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+  // Strip provenance entirely: a fully internally-consistent fixture that no
+  // signer ever touched must be rejected.
+  delete gate.provenance;
+  writeFileSync(gatePath, JSON.stringify(gate, null, 2));
+  const unsigned = (await import('./product-gate.js')).runProductGate(process.cwd());
+  assert.notEqual(unsigned.completion_ceiling, 95);
+  assert.equal(
+    unsigned.result_reality_delta.some(
+      (row) => /Hard completion ceiling/.test(row.target) && row.status === 'FAIL',
+    ),
+    true,
+  );
+  // Now plant a wrong signature: still rejected.
+  gate.provenance = { algorithm: 'HMAC-SHA256', signature: 'f'.repeat(64) };
+  writeFileSync(gatePath, JSON.stringify(gate, null, 2));
+  const forged = (await import('./product-gate.js')).runProductGate(process.cwd());
+  assert.notEqual(forged.completion_ceiling, 95);
+  assert.equal(
+    forged.checks.some((check) => check.name === 'Hard Completion Ceiling Gate' && check.status === 'FAIL'),
+    true,
+  );
+  // Restore a valid signature so later tests sharing the cwd still pass.
+  writePassingReviewGate(process.cwd());
 });
 
 test('fake string-only repo cannot pass the product gate', async () => {

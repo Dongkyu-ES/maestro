@@ -1,9 +1,20 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { activeStatus, rebuildIndex, reconcileRuns } from './core.js';
-import { AGENT_DIR, ensureDir, nowIso, projectRoot, type RunMeta, readYaml, safeJoin, sha256Text } from './util.js';
+import {
+  AGENT_DIR,
+  ensureDir,
+  nowIso,
+  projectRoot,
+  type RunMeta,
+  readYaml,
+  reviewProvenanceKey,
+  reviewProvenanceSignature,
+  safeJoin,
+  sha256Text,
+} from './util.js';
 
 export interface ProductGateCheck {
   name: string;
@@ -79,7 +90,7 @@ function countTests(testText: string): number {
   return [...testText.matchAll(/\btest\(/g)].length;
 }
 
-function currentReviewInputHash(root: string): string {
+export function currentReviewInputHash(root: string): string {
   const digest = createHash('sha256');
   for (const rel of [
     'src/core.ts',
@@ -154,6 +165,15 @@ function reviewArtifactOk(root: string, reviewGate: any): boolean {
     if (role === 'code-reviewer' && !/Recommendation\s*:\s*APPROVE/i.test(completedText)) return false;
     if (role === 'architect' && !/Architectural Status\s*:\s*CLEAR/i.test(completedText)) return false;
   }
+  const key = reviewProvenanceKey();
+  if (!key) return false;
+  const prov = reviewGate.provenance;
+  if (prov?.algorithm !== 'HMAC-SHA256' || typeof prov?.signature !== 'string' || !/^[a-f0-9]{64}$/i.test(prov.signature))
+    return false;
+  const expected = reviewProvenanceSignature(key, inputHash, reviewerSha, architectSha);
+  const actualBuf = Buffer.from(prov.signature, 'hex');
+  const expectedBuf = Buffer.from(expected, 'hex');
+  if (actualBuf.length !== expectedBuf.length || !timingSafeEqual(actualBuf, expectedBuf)) return false;
   return true;
 }
 function hardGateRows(text: string): { total: number; fail: number; pass: number } {
@@ -402,6 +422,13 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     Number(reconciliationGate?.repaired || 0) === 0;
   const reviewGate = jsonIfExists(join(root, AGENT_DIR, 'independent-review-gate.json'));
   const independentReviewOk = reviewArtifactOk(root, reviewGate);
+  const provenanceState = !reviewProvenanceKey()
+    ? 'no-signing-key'
+    : reviewGate?.provenance?.algorithm === 'HMAC-SHA256' && typeof reviewGate?.provenance?.signature === 'string'
+      ? independentReviewOk
+        ? 'signed'
+        : 'signature-invalid'
+      : 'unsigned';
   const hardGatesAllPass =
     hardGateDocOk &&
     hardRows.total >= 7 &&
@@ -465,7 +492,7 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     deltaRow(
       'Hard completion ceiling: no 90/95 claim while live UI/runtime gates fail',
       hardGatesAllPass,
-      `docs/milestones/HARD_COMPLETION_GATES.md rows=${hardRows.total} fail=${hardRows.fail}; contradictory_runs=${contradictoryRuns.length}; live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk}`,
+      `docs/milestones/HARD_COMPLETION_GATES.md rows=${hardRows.total} fail=${hardRows.fail}; contradictory_runs=${contradictoryRuns.length}; live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk} (provenance=${provenanceState})`,
       'All hard gates pass, so the completion ceiling can be lifted.',
       `Hard gates block completion inflation: ${hardRows.fail} declared FAIL rows; ${contradictoryRuns.length} contradictory run artifacts.`,
     ),
@@ -534,7 +561,7 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
       hardGatesAllPass,
       hardGatesAllPass
         ? 'All hard gates pass and no contradictory run artifacts exist.'
-        : `90/95 claims forbidden: hard gate rows fail=${hardRows.fail}, pass=${hardRows.pass}, live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk}, forbidden_claims=${forbiddenClaimsRemain}, contradictory run artifacts=${contradictoryRuns.slice(0, 5).join('; ') || 'none'}`,
+        : `90/95 claims forbidden: hard gate rows fail=${hardRows.fail}, pass=${hardRows.pass}, live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk} (provenance=${provenanceState}), forbidden_claims=${forbiddenClaimsRemain}, contradictory run artifacts=${contradictoryRuns.slice(0, 5).join('; ') || 'none'}`,
     ),
   ];
   const decision = checks.every((check) => check.status === 'PASS') ? 'PASS' : 'FAIL';

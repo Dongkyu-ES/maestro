@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
+import { join } from 'node:path';
 import { parse as parseQuery } from 'node:querystring';
 import {
   addProject,
@@ -38,7 +39,8 @@ import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
-import { runProductGate } from './product-gate.js';
+import { currentReviewInputHash, runProductGate } from './product-gate.js';
+import { reviewProvenanceKey, reviewProvenanceSignature, sha256Text } from './util.js';
 import { renderHtml, renderRun } from './view.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -83,6 +85,7 @@ function usage(): string {
   agent runtime codex-lifecycle-proof <run-id> --thread-id <thread-id>
   agent runtime ui-agreement <run-id>
   agent runtime verify-full-target <run-id> [--append-verified-event]
+  agent runtime sign-review
   agent review latest
   agent approvals
   agent approval request|approve|reject
@@ -278,6 +281,31 @@ async function main() {
       });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'runtime' && sub === 'sign-review') {
+      const root = process.cwd();
+      const gatePath = join(root, '.agent', 'independent-review-gate.json');
+      if (!existsSync(gatePath)) throw new Error(`missing review gate: ${gatePath}`);
+      const key = reviewProvenanceKey();
+      if (!key)
+        throw new Error(
+          'no signing key configured: set AGENT_REVIEW_HMAC_KEY or create ~/.dominic_orchestration/review-signing.key',
+        );
+      const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+      const inputHash = currentReviewInputHash(root);
+      const reviewer = gate?.codeReview?.independentReview?.codeReviewer;
+      const architect = gate?.codeReview?.independentReview?.architect;
+      const reviewerPath = reviewer?.artifact_path;
+      const architectPath = architect?.artifact_path;
+      if (typeof reviewerPath !== 'string' || typeof architectPath !== 'string')
+        throw new Error('review gate is missing reviewer/architect artifact_path entries');
+      const reviewerSha = sha256Text(readFileSync(join(root, reviewerPath), 'utf8'));
+      const architectSha = sha256Text(readFileSync(join(root, architectPath), 'utf8'));
+      const signature = reviewProvenanceSignature(key, inputHash, reviewerSha, architectSha);
+      gate.provenance = { algorithm: 'HMAC-SHA256', signature };
+      writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}\n`);
+      console.log(signature);
       return;
     }
     if (cmd === 'review' && sub === 'latest') {

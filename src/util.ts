@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
@@ -288,4 +288,21 @@ export function redact(s: string): string {
 }
 export function sha256Text(text: string): string {
   return createHash('sha256').update(text).digest('hex');
+}
+
+export function reviewProvenanceKey(): string {
+  const env = process.env.AGENT_REVIEW_HMAC_KEY;
+  if (typeof env === 'string' && env.trim()) return env.trim();
+  const keyFile = join(homedir(), '.dominic_orchestration', 'review-signing.key');
+  if (existsSync(keyFile)) return readFileSync(keyFile, 'utf8').trim();
+  return '';
+}
+
+export function reviewProvenanceSignature(
+  key: string,
+  inputHash: string,
+  reviewerSha: string,
+  architectSha: string,
+): string {
+  return createHmac('sha256', key).update(`${inputHash}:${reviewerSha}:${architectSha}`).digest('hex');
 }
