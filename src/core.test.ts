@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash, createHmac } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import {
   addProject,
@@ -125,6 +125,70 @@ function writePassingReviewGate(dir = process.cwd()): void {
     ),
   );
 }
+
+// Tests in this file live in src/, so the project root is one level up.
+const gateRepoRoot = new URL('..', import.meta.url).pathname;
+const gateRepoTempDirs: string[] = [];
+
+// Build a fully self-contained synthesized repo for product-gate tests. It copies
+// the real gate-input files plus the built dist/ into a temp dir and writes every
+// .agent fixture the gate needs to PASS, so runProductGate(dir) is deterministic
+// regardless of the live repo's gitignored .agent state or test order.
+function buildGateRepo(): string {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-gate-repo-'));
+  gateRepoTempDirs.push(dir);
+  const files = [
+    'dominic_orchestration_PRD.md',
+    'docs/milestones/PRODUCT_COMPLETION_STANDARD.md',
+    'docs/milestones/FULL_PRODUCT_ROADMAP.md',
+    'docs/milestones/DOGFOOD_REPORT.md',
+    'docs/milestones/HARD_COMPLETION_GATES.md',
+    'docs/milestones/PRODUCT_GATE_RERUN_REPORT.md',
+    'package.json',
+    'src/core.ts',
+    'src/cli.ts',
+    'src/core.test.ts',
+    'scripts/live-integration-smoke.mjs',
+  ];
+  for (const rel of files) {
+    const src = join(gateRepoRoot, rel);
+    const dest = join(dir, rel);
+    mkdirSync(dirname(dest), { recursive: true });
+    cpSync(src, dest);
+  }
+  // The gate runs dist/cli.js --help/--version and the live-smoke script runs the
+  // built CLI, so the whole compiled output is required.
+  cpSync(join(gateRepoRoot, 'dist'), join(dir, 'dist'), { recursive: true });
+  // Signed, internally consistent independent-review gate (sets the test HMAC key).
+  writePassingReviewGate(dir);
+  // Live integration smoke artifact dogfoodEvidence/liveOk reads before the gate
+  // re-runs the smoke script itself.
+  writeFileSync(
+    join(dir, '.agent', 'live-integration-smoke.json'),
+    JSON.stringify(
+      {
+        status: 'PASS',
+        root: dir,
+        run_id: 'run-gate-repo-fixture',
+        exit_code: 0,
+        decision: 'pass',
+        natural_language_ignored: true,
+        ui_permission_boundary: true,
+        created_at: '2026-06-01T00:00:00.000Z',
+      },
+      null,
+      2,
+    ),
+  );
+  // reconciliation.json is regenerated as PASS by runProductGate -> reconcileRuns
+  // because the temp repo has no .agent/runs; no need to pre-write it.
+  return dir;
+}
+
+function cleanupGateRepos(): void {
+  for (const dir of gateRepoTempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+}
+process.on('exit', cleanupGateRepos);
 
 function gitInit(dir: string): void {
   execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
@@ -852,7 +916,8 @@ test('reconcileRuns overwrites stale pass decision when process evidence is malf
 });
 
 test('product gate rejects forged manual independent review artifacts', async () => {
-  const reviewDir = join(process.cwd(), '.agent', 'review-gates');
+  const dir = buildGateRepo();
+  const reviewDir = join(dir, '.agent', 'review-gates');
   mkdirSync(reviewDir, { recursive: true });
   const reviewerArtifact = join(reviewDir, 'forged-code-reviewer.md');
   const architectArtifact = join(reviewDir, 'forged-architect.md');
@@ -864,26 +929,12 @@ test('product gate rejects forged manual independent review artifacts', async ()
     architectArtifact,
     'architect independent review\nArchitectural Status: CLEAR\nEvidence: This text intentionally looks plausible and contains enough words to prove metadata provenance is required, not just a regex over clearing prose.\n',
   );
-  const digest = createHash('sha256');
-  for (const rel of [
-    'src/core.ts',
-    'src/cli.ts',
-    'src/core.test.ts',
-    'scripts/live-integration-smoke.mjs',
-    'docs/milestones/HARD_COMPLETION_GATES.md',
-    'docs/milestones/FULL_PRODUCT_ROADMAP.md',
-    'docs/milestones/DOGFOOD_REPORT.md',
-  ]) {
-    const fp = join(process.cwd(), rel);
-    digest.update(rel);
-    digest.update(existsSync(fp) ? readFileSync(fp) : 'missing');
-  }
   writeFileSync(
-    join(process.cwd(), '.agent', 'independent-review-gate.json'),
+    join(dir, '.agent', 'independent-review-gate.json'),
     JSON.stringify(
       {
         status: 'PASS',
-        input_sha256: digest.digest('hex'),
+        input_sha256: currentReviewInputHashForTest(dir),
         codeReview: {
           recommendation: 'APPROVE',
           architectStatus: 'CLEAR',
@@ -905,7 +956,7 @@ test('product gate rejects forged manual independent review artifacts', async ()
       2,
     ),
   );
-  const report = (await import('./product-gate.js')).runProductGate(process.cwd());
+  const report = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
   assert.equal(
     report.checks.some((check) => check.name === 'Hard Completion Ceiling Gate' && check.status === 'FAIL'),
@@ -914,7 +965,8 @@ test('product gate rejects forged manual independent review artifacts', async ()
 });
 
 test('product gate rejects metadata-complete review forgery without notification envelope', async () => {
-  const reviewDir = join(process.cwd(), '.agent', 'review-gates');
+  const dir = buildGateRepo();
+  const reviewDir = join(dir, '.agent', 'review-gates');
   mkdirSync(reviewDir, { recursive: true });
   const reviewerId = '019e1111-1111-7111-8111-111111111111';
   const architectId = '019e2222-2222-7222-8222-222222222222';
@@ -924,9 +976,9 @@ test('product gate rejects metadata-complete review forgery without notification
     'architect independent review\nArchitectural Status: CLEAR\nEvidence: plausible enough architecture text with commands quality gate and live smoke, but there is no matching subagent notification envelope.\n';
   writeFileSync(join(reviewDir, 'metadata-forged-code-reviewer.md'), reviewerText);
   writeFileSync(join(reviewDir, 'metadata-forged-architect.md'), architectText);
-  const inputHash = currentReviewInputHashForTest(process.cwd());
+  const inputHash = currentReviewInputHashForTest(dir);
   writeFileSync(
-    join(process.cwd(), '.agent', 'independent-review-gate.json'),
+    join(dir, '.agent', 'independent-review-gate.json'),
     JSON.stringify(
       {
         status: 'PASS',
@@ -966,7 +1018,7 @@ test('product gate rejects metadata-complete review forgery without notification
       2,
     ),
   );
-  const report = (await import('./product-gate.js')).runProductGate(process.cwd());
+  const report = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(report.decision, 'FAIL');
 });
 
@@ -1406,13 +1458,13 @@ test('redact masks multi-vendor secret formats, not just OpenAI/GitHub', () => {
 });
 
 test('hard completion ceiling requires independent review and reconciliation artifacts', async () => {
-  const reviewPath = join(process.cwd(), '.agent', 'independent-review-gate.json');
+  const dir = buildGateRepo();
+  const reviewPath = join(dir, '.agent', 'independent-review-gate.json');
   rmSync(reviewPath, { force: true });
-  reconcileRuns(process.cwd());
-  const withoutReview = (await import('./product-gate.js')).runProductGate(process.cwd());
+  const withoutReview = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(withoutReview.decision, 'FAIL');
-  writePassingReviewGate(process.cwd());
-  const report = (await import('./product-gate.js')).runProductGate(process.cwd());
+  writePassingReviewGate(dir);
+  const report = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(report.decision, 'PASS');
   assert.equal(report.completion_ceiling, 95);
   assert.match(report.completion_label, /completion candidate/);
@@ -1427,15 +1479,14 @@ test('hard completion ceiling requires independent review and reconciliation art
 });
 
 test('hand-authored review gate without a valid provenance signature cannot lift the ceiling', async () => {
-  reconcileRuns(process.cwd());
-  writePassingReviewGate(process.cwd());
-  const gatePath = join(process.cwd(), '.agent', 'independent-review-gate.json');
+  const dir = buildGateRepo();
+  const gatePath = join(dir, '.agent', 'independent-review-gate.json');
   const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
   // Strip provenance entirely: a fully internally-consistent fixture that no
   // signer ever touched must be rejected.
   delete gate.provenance;
   writeFileSync(gatePath, JSON.stringify(gate, null, 2));
-  const unsigned = (await import('./product-gate.js')).runProductGate(process.cwd());
+  const unsigned = (await import('./product-gate.js')).runProductGate(dir);
   assert.notEqual(unsigned.completion_ceiling, 95);
   assert.equal(
     unsigned.result_reality_delta.some(
@@ -1446,14 +1497,12 @@ test('hand-authored review gate without a valid provenance signature cannot lift
   // Now plant a wrong signature: still rejected.
   gate.provenance = { algorithm: 'HMAC-SHA256', signature: 'f'.repeat(64) };
   writeFileSync(gatePath, JSON.stringify(gate, null, 2));
-  const forged = (await import('./product-gate.js')).runProductGate(process.cwd());
+  const forged = (await import('./product-gate.js')).runProductGate(dir);
   assert.notEqual(forged.completion_ceiling, 95);
   assert.equal(
     forged.checks.some((check) => check.name === 'Hard Completion Ceiling Gate' && check.status === 'FAIL'),
     true,
   );
-  // Restore a valid signature so later tests sharing the cwd still pass.
-  writePassingReviewGate(process.cwd());
 });
 
 test('fake string-only repo cannot pass the product gate', async () => {
@@ -1497,13 +1546,12 @@ test('fake string-only repo cannot pass the product gate', async () => {
 });
 
 test('product gate durable report contains report_path after hard gates pass', async () => {
-  reconcileRuns(process.cwd());
-  writePassingReviewGate(process.cwd());
-  const report = (await import('./product-gate.js')).runProductGate(process.cwd(), { write: true });
+  const dir = buildGateRepo();
+  const report = (await import('./product-gate.js')).runProductGate(dir, { write: true });
   assert.equal(report.decision, 'PASS');
   assert.equal(report.completion_ceiling, 95);
   assert.ok(report.report_path);
-  const written = JSON.parse(readFileSync(join(process.cwd(), report.report_path), 'utf8'));
+  const written = JSON.parse(readFileSync(join(dir, report.report_path), 'utf8'));
   assert.equal(written.report_path, report.report_path);
   assert.ok(Array.isArray(written.result_reality_delta));
 });
