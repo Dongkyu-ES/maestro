@@ -6,6 +6,7 @@ import { parse as parseQuery } from 'node:querystring';
 import {
   addProject,
   addTask,
+  applyApprovedPromotion,
   applyApprovedProposal,
   cancelRun,
   cleanupWorktrees,
@@ -15,6 +16,7 @@ import {
   initProject,
   latestRunId,
   listApprovals,
+  listPromotions,
   listProjects,
   listTasks,
   loadIndex,
@@ -24,6 +26,7 @@ import {
   reconcileRuns,
   removeProject,
   resolveApproval,
+  resolvePromotion,
   runPath,
   startRun,
   taskPath,
@@ -84,6 +87,8 @@ function usage(): string {
   agent approvals
   agent approval request|approve|reject
   agent apply propose|approved
+  agent promotions
+  agent promotion approve|reject|apply <id>
   agent worktrees cleanup
   agent maintenance reconcile-runs
   agent quality gate [--write]
@@ -313,6 +318,22 @@ async function main() {
       const id = rest[0];
       if (!id) throw new Error('usage: agent apply approved <approval-id>');
       console.log(JSON.stringify(applyApprovedProposal(id), null, 2));
+      return;
+    }
+    if (cmd === 'promotions' && !sub) {
+      for (const p of listPromotions()) console.log(`${p.id}\t${p.status}\t${p.target_type}\t${p.reason}`);
+      return;
+    }
+    if (cmd === 'promotion' && (sub === 'approve' || sub === 'reject')) {
+      const id = rest[0];
+      if (!id) throw new Error(`usage: agent promotion ${sub} <id>`);
+      console.log(JSON.stringify(resolvePromotion(id, sub === 'approve' ? 'approved' : 'rejected'), null, 2));
+      return;
+    }
+    if (cmd === 'promotion' && sub === 'apply') {
+      const id = rest[0];
+      if (!id) throw new Error('usage: agent promotion apply <id>');
+      console.log(JSON.stringify(applyApprovedPromotion(id), null, 2));
       return;
     }
     if (cmd === 'worktrees' && sub === 'cleanup') {

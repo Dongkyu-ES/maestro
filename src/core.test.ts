@@ -8,6 +8,7 @@ import test from 'node:test';
 import {
   addProject,
   addTask,
+  applyApprovedPromotion,
   applyApprovedProposal,
   cancelRun,
   collectRun,
@@ -17,6 +18,7 @@ import {
   initProject,
   isSecretPath,
   listApprovals,
+  listPromotions,
   listProjects,
   listTasks,
   loadIndex,
@@ -24,6 +26,7 @@ import {
   reconcileRuns,
   redact,
   resolveApproval,
+  resolvePromotion,
   safeJoin,
   startRun,
   updateTask,
@@ -172,6 +175,124 @@ test('init, task, basic run lifecycle creates v0 artifacts', async () => {
   ]) {
     assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, artifact)), true, artifact);
   }
+});
+
+test('promotion engine classifies a passing run into a memory candidate', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('passing task', dir);
+  const run = createRun(task.id, {}, dir);
+  await startRun(run.id, {}, dir);
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'pass');
+  const promotions = listPromotions(dir).filter((p) => p.run_id === run.id);
+  const memory = promotions.find((p) => p.target_type === 'memory');
+  assert.ok(memory, 'passing run yields a memory candidate');
+  assert.equal(memory!.status, 'proposed');
+  assert.equal(memory!.target_path, '.agent/memory/project-facts.md');
+  assert.equal(existsSync(memory!.proposal_path), true);
+  // A clean pass must not spam policy/agent_instruction guards.
+  assert.equal(
+    promotions.some((p) => p.target_type === 'policy' || p.target_type === 'agent_instruction'),
+    false,
+  );
+});
+
+test('promotion engine classifies a blocked run into policy and agent_instruction candidates', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('blocked task', dir);
+  const run = createRun(task.id, { mode: 'multi', maxWorkers: 2 }, dir);
+  await startForEvidence(run, dir);
+  const base = join(dir, '.agent', 'runs', run.id, 'worker-outputs');
+  writeFileSync(join(base, 'worker-001.md'), '# Worker Output\n\n## Files Changed\n- src/shared.ts\n');
+  writeFileSync(join(base, 'worker-002.md'), '# Worker Output\n\n## Files Changed\n- src/shared.ts\n');
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'blocked');
+  const promotions = listPromotions(dir).filter((p) => p.run_id === run.id);
+  assert.ok(
+    promotions.some((p) => p.target_type === 'policy'),
+    'blocked run with System Patch Suggestions yields a policy candidate',
+  );
+  assert.ok(
+    promotions.some((p) => p.target_type === 'agent_instruction'),
+    'blocked run yields an agent_instruction candidate',
+  );
+  assert.ok(promotions.every((p) => p.status === 'proposed'));
+});
+
+test('promotion engine classifies a multi run into a workflow candidate', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('workflow task', dir);
+  const run = createRun(task.id, { mode: 'multi', maxWorkers: 2 }, dir);
+  await startForEvidence(run, dir);
+  const base = join(dir, '.agent', 'runs', run.id, 'worker-outputs');
+  const order1 = readFileSync(join(dir, '.agent', 'runs', run.id, 'work-orders', 'worker-001.yaml'), 'utf8');
+  const order2 = readFileSync(join(dir, '.agent', 'runs', run.id, 'work-orders', 'worker-002.yaml'), 'utf8');
+  const ws1 = order1.match(/isolated_workspace: "([^"]+)"/)![1];
+  const ws2 = order2.match(/isolated_workspace: "([^"]+)"/)![1];
+  writeFileSync(join(ws1, 'wf-a.txt'), 'worker 1');
+  writeFileSync(join(ws2, 'wf-b.txt'), 'worker 2');
+  writeFileSync(join(base, 'worker-001.md'), '# Worker Output\n\n## Files Changed\n- wf-a.txt\n');
+  writeFileSync(join(base, 'worker-002.md'), '# Worker Output\n\n## Files Changed\n- wf-b.txt\n');
+  collectRun(run.id, dir);
+  const promotions = listPromotions(dir).filter((p) => p.run_id === run.id);
+  assert.ok(
+    promotions.some((p) => p.target_type === 'workflow'),
+    'multi run with a scheduler/work-orders yields a workflow candidate',
+  );
+});
+
+test('applyApprovedPromotion writes the target artifact and sets status applied', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('apply memory task', dir);
+  const run = createRun(task.id, {}, dir);
+  await startRun(run.id, {}, dir);
+  collectRun(run.id, dir);
+  const memory = listPromotions(dir).find((p) => p.run_id === run.id && p.target_type === 'memory');
+  assert.ok(memory);
+  resolvePromotion(memory!.id, 'approved', dir);
+  const applied = applyApprovedPromotion(memory!.id, dir);
+  assert.equal(applied.status, 'applied');
+  assert.equal(applied.applied_path, '.agent/memory/project-facts.md');
+  const factsPath = join(dir, '.agent', 'memory', 'project-facts.md');
+  assert.equal(existsSync(factsPath), true);
+  assert.match(readFileSync(factsPath, 'utf8'), new RegExp(`<!-- promotion:${memory!.id} -->`));
+  // Idempotent: re-applying is a safe no-op and does not duplicate content.
+  const before = readFileSync(factsPath, 'utf8');
+  const again = applyApprovedPromotion(memory!.id, dir);
+  assert.equal(again.status, 'applied');
+  assert.equal(readFileSync(factsPath, 'utf8'), before);
+});
+
+test('applyApprovedPromotion throws when the promotion is only proposed', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('proposed only task', dir);
+  const run = createRun(task.id, {}, dir);
+  await startRun(run.id, {}, dir);
+  collectRun(run.id, dir);
+  const memory = listPromotions(dir).find((p) => p.run_id === run.id && p.target_type === 'memory');
+  assert.ok(memory);
+  assert.equal(memory!.status, 'proposed');
+  assert.throws(() => applyApprovedPromotion(memory!.id, dir), /not approved/);
+});
+
+test('a rejected promotion cannot be applied', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('rejected task', dir);
+  const run = createRun(task.id, {}, dir);
+  await startRun(run.id, {}, dir);
+  collectRun(run.id, dir);
+  const memory = listPromotions(dir).find((p) => p.run_id === run.id && p.target_type === 'memory');
+  assert.ok(memory);
+  const rejected = resolvePromotion(memory!.id, 'rejected', dir);
+  assert.equal(rejected.status, 'rejected');
+  assert.throws(() => applyApprovedPromotion(memory!.id, dir), /not approved/);
+  assert.equal(existsSync(join(dir, '.agent', 'memory', 'project-facts.md')), false);
 });
 
 test('roles mode creates and preserves v1 artifacts during collect', async () => {

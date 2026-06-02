@@ -92,6 +92,7 @@ export interface PromotionRecord {
   reason: string;
   target_path: string;
   proposal_path: string;
+  applied_path?: string;
   created_at: string;
   updated_at: string;
 }
