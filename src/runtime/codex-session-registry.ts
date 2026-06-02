@@ -1,8 +1,14 @@
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
 
-export type CodexSessionStatus = 'planned' | 'detected' | 'launched_unproven' | 'attached_unproven' | 'unsupported' | 'supported';
+export type CodexSessionStatus =
+  | 'planned'
+  | 'detected'
+  | 'launched_unproven'
+  | 'attached_unproven'
+  | 'unsupported'
+  | 'supported';
 
 export interface CodexSessionRecord {
   schema_version: 1;
@@ -20,9 +26,14 @@ export interface CodexSessionRecord {
   notes: string[];
 }
 
-export interface CodexSessionRegistry { schema_version: 1; sessions: CodexSessionRecord[]; }
+export interface CodexSessionRegistry {
+  schema_version: 1;
+  sessions: CodexSessionRecord[];
+}
 
-export function codexSessionRegistryPath(agentDir: string): string { return join(agentDir, 'runtime', 'codex-sessions.json'); }
+export function codexSessionRegistryPath(agentDir: string): string {
+  return join(agentDir, 'runtime', 'codex-sessions.json');
+}
 
 export function readCodexSessionRegistry(agentDir: string): CodexSessionRegistry {
   const path = codexSessionRegistryPath(agentDir);
@@ -36,10 +47,17 @@ export function writeCodexSessionRegistry(agentDir: string, registry: CodexSessi
   writeFileSync(path, JSON.stringify(registry, null, 2));
 }
 
-export function upsertCodexSession(agentDir: string, record: Omit<CodexSessionRecord, 'schema_version' | 'session_id' | 'created_at' | 'updated_at'> & { session_id?: string }): CodexSessionRecord {
+export function upsertCodexSession(
+  agentDir: string,
+  record: Omit<CodexSessionRecord, 'schema_version' | 'session_id' | 'created_at' | 'updated_at'> & {
+    session_id?: string;
+  },
+): CodexSessionRecord {
   const now = new Date().toISOString();
   const registry = readCodexSessionRegistry(agentDir);
-  const existing = record.session_id ? registry.sessions.find((session) => session.session_id === record.session_id) : undefined;
+  const existing = record.session_id
+    ? registry.sessions.find((session) => session.session_id === record.session_id)
+    : undefined;
   const next: CodexSessionRecord = {
     schema_version: 1,
     session_id: record.session_id || `codex-${record.run_id}-${randomUUID()}`,
@@ -57,8 +75,13 @@ export function upsertCodexSession(agentDir: string, record: Omit<CodexSessionRe
   };
   const sessions = registry.sessions.filter((session) => session.session_id !== next.session_id);
   sessions.push(next);
-  writeCodexSessionRegistry(agentDir, { schema_version: 1, sessions: sessions.sort((a, b) => a.session_id.localeCompare(b.session_id)) });
+  writeCodexSessionRegistry(agentDir, {
+    schema_version: 1,
+    sessions: sessions.sort((a, b) => a.session_id.localeCompare(b.session_id)),
+  });
   return next;
 }
 
-export function sha256Text(text: string): string { return createHash('sha256').update(text).digest('hex'); }
+export function sha256Text(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}

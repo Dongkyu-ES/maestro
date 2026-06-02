@@ -2,7 +2,16 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-export type RuntimeEventSource = 'web' | 'runtime-manager' | 'codex-adapter' | 'omx-adapter' | 'agy-adapter' | 'shell-adapter' | 'permission-broker' | 'harness' | 'memory';
+export type RuntimeEventSource =
+  | 'web'
+  | 'runtime-manager'
+  | 'codex-adapter'
+  | 'omx-adapter'
+  | 'agy-adapter'
+  | 'shell-adapter'
+  | 'permission-broker'
+  | 'harness'
+  | 'memory';
 
 export interface RuntimeEventEnvelope {
   schema_version: 1;
@@ -38,7 +47,10 @@ export function sanitizeJsonValue(value: unknown): unknown {
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map(sanitizeJsonValue).filter((item) => item !== undefined);
   const out: Record<string, unknown> = {};
-  for (const [key, item] of Object.entries(value as Record<string, unknown>)) { const clean = sanitizeJsonValue(item); if (clean !== undefined) out[key] = clean; }
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    const clean = sanitizeJsonValue(item);
+    if (clean !== undefined) out[key] = clean;
+  }
   return out;
 }
 
@@ -46,19 +58,27 @@ export function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
   const obj = value as Record<string, unknown>;
-  return `{${Object.keys(obj).sort().map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`).join(',')}}`;
+  return `{${Object.keys(obj)
+    .sort()
+    .map((k) => `${JSON.stringify(k)}:${stableJson(obj[k])}`)
+    .join(',')}}`;
 }
 
 export function payloadHash(payload: Record<string, unknown>): string {
   return createHash('sha256').update(stableJson(payload)).digest('hex');
 }
 
-export function eventLedgerPath(runDir: string): string { return join(runDir, 'events.jsonl'); }
+export function eventLedgerPath(runDir: string): string {
+  return join(runDir, 'events.jsonl');
+}
 
 export function readRuntimeEvents(runDir: string): RuntimeEventEnvelope[] {
   const path = eventLedgerPath(runDir);
   if (!existsSync(path)) return [];
-  return readFileSync(path, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line) as RuntimeEventEnvelope);
+  return readFileSync(path, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as RuntimeEventEnvelope);
 }
 
 export function appendRuntimeEvent(runDir: string, input: AppendRuntimeEventInput): RuntimeEventEnvelope {
@@ -90,9 +110,11 @@ export function appendRuntimeEvent(runDir: string, input: AppendRuntimeEventInpu
 
 export function validateRuntimeEvent(event: RuntimeEventEnvelope, previous?: RuntimeEventEnvelope): void {
   if (event.schema_version !== 1) throw new Error('invalid event schema_version');
-  if (!event.event_id || !event.run_id || !event.correlation_id || !event.timestamp || !event.source || !event.type) throw new Error('runtime event missing required envelope fields');
+  if (!event.event_id || !event.run_id || !event.correlation_id || !event.timestamp || !event.source || !event.type)
+    throw new Error('runtime event missing required envelope fields');
   if (!Number.isInteger(event.sequence) || event.sequence < 1) throw new Error('invalid event sequence');
-  if (previous && event.sequence !== previous.sequence + 1) throw new Error(`non-contiguous event sequence: ${previous.sequence} -> ${event.sequence}`);
+  if (previous && event.sequence !== previous.sequence + 1)
+    throw new Error(`non-contiguous event sequence: ${previous.sequence} -> ${event.sequence}`);
   if (event.payload_sha256 !== payloadHash(event.payload)) throw new Error('payload hash mismatch');
   if (!Array.isArray(event.artifact_refs)) throw new Error('artifact_refs must be an array');
 }
@@ -101,7 +123,8 @@ export function validateRuntimeLedger(events: RuntimeEventEnvelope[]): void {
   let previous: RuntimeEventEnvelope | undefined;
   const seen = new Set<string>();
   for (const event of events) {
-    if (seen.has(`${event.run_id}:${event.sequence}`)) throw new Error(`duplicate event sequence for ${event.run_id}:${event.sequence}`);
+    if (seen.has(`${event.run_id}:${event.sequence}`))
+      throw new Error(`duplicate event sequence for ${event.run_id}:${event.sequence}`);
     validateRuntimeEvent(event, previous);
     seen.add(`${event.run_id}:${event.sequence}`);
     previous = event;

@@ -9,9 +9,13 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test dist/**/*.test.js",
-    "lint": "npm run build"
+    "lint": "biome lint src scripts",
+    "format": "biome format --write src scripts",
+    "check": "biome check --write src scripts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.4.16",
     "@types/node": "^22.15.29",
     "typescript": "^5.8.3"
   }

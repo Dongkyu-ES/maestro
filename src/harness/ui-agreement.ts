@@ -10,7 +10,11 @@ export interface UiAgreementSmokeReport {
   checks: Record<string, boolean>;
 }
 
-export function writeUiAgreementSmoke(options: { root: string; agentDir: string; runId: string }): UiAgreementSmokeReport {
+export function writeUiAgreementSmoke(options: {
+  root: string;
+  agentDir: string;
+  runId: string;
+}): UiAgreementSmokeReport {
   const html = renderRun(options.runId, options.root);
   const checks = {
     run_id_visible: html.includes(options.runId),

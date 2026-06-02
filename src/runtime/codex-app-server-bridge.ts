@@ -1,4 +1,4 @@
-import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
+import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -36,22 +36,68 @@ export class CodexAppServerJsonRpcBridge {
     const response = await this.transport.request('thread/resume', { threadId: target.threadId });
     const thread = threadFromResponse(response);
     const ok = thread?.id === target.threadId;
-    return writeProof(target, 'resume', { method: 'thread/resume', params: { threadId: target.threadId }, response }, ok, ok ? `resumed thread ${thread?.id}` : 'thread/resume response did not match target thread');
+    return writeProof(
+      target,
+      'resume',
+      { method: 'thread/resume', params: { threadId: target.threadId }, response },
+      ok,
+      ok ? `resumed thread ${thread?.id}` : 'thread/resume response did not match target thread',
+    );
   }
 
   async proveFork(target: CodexLifecycleTarget): Promise<CodexLifecycleProofResult> {
-    const response = await this.transport.request('thread/fork', { threadId: target.threadId, ephemeral: target.forkEphemeral || undefined });
+    const response = await this.transport.request('thread/fork', {
+      threadId: target.threadId,
+      ephemeral: target.forkEphemeral || undefined,
+    });
     const thread = threadFromResponse(response);
     const ok = Boolean(thread?.id && thread.id !== target.threadId && thread.forkedFromId === target.threadId);
-    return writeProof(target, 'fork', { method: 'thread/fork', params: { threadId: target.threadId, ephemeral: target.forkEphemeral || undefined }, response }, ok, ok ? `forked ${target.threadId} -> ${thread?.id}` : 'thread/fork response did not prove forkedFromId linkage');
+    return writeProof(
+      target,
+      'fork',
+      {
+        method: 'thread/fork',
+        params: { threadId: target.threadId, ephemeral: target.forkEphemeral || undefined },
+        response,
+      },
+      ok,
+      ok ? `forked ${target.threadId} -> ${thread?.id}` : 'thread/fork response did not prove forkedFromId linkage',
+    );
   }
 
   async proveInterrupt(target: CodexLifecycleTarget): Promise<CodexLifecycleProofResult> {
-    if (!target.turnId) return writeProof(target, 'interrupt', { method: 'turn/interrupt', params: { threadId: target.threadId, turnId: null }, response: null }, false, 'interrupt requires target turnId');
-    const response = await this.transport.request('turn/interrupt', { threadId: target.threadId, turnId: target.turnId });
+    if (!target.turnId)
+      return writeProof(
+        target,
+        'interrupt',
+        { method: 'turn/interrupt', params: { threadId: target.threadId, turnId: null }, response: null },
+        false,
+        'interrupt requires target turnId',
+      );
+    const response = await this.transport.request('turn/interrupt', {
+      threadId: target.threadId,
+      turnId: target.turnId,
+    });
     const readResponse = await this.transport.request('thread/read', { threadId: target.threadId, includeTurns: true });
     const interrupted = hasTurnStatus(readResponse, target.turnId, 'interrupted');
-    return writeProof(target, 'interrupt', { method: 'turn/interrupt', params: { threadId: target.threadId, turnId: target.turnId }, response, verification: { method: 'thread/read', params: { threadId: target.threadId, includeTurns: true }, response: readResponse } }, interrupted, interrupted ? `interrupted turn ${target.turnId}` : 'thread/read verification did not show requested turn as interrupted');
+    return writeProof(
+      target,
+      'interrupt',
+      {
+        method: 'turn/interrupt',
+        params: { threadId: target.threadId, turnId: target.turnId },
+        response,
+        verification: {
+          method: 'thread/read',
+          params: { threadId: target.threadId, includeTurns: true },
+          response: readResponse,
+        },
+      },
+      interrupted,
+      interrupted
+        ? `interrupted turn ${target.turnId}`
+        : 'thread/read verification did not show requested turn as interrupted',
+    );
   }
 
   async close(): Promise<void> {
@@ -62,10 +108,17 @@ export class CodexAppServerJsonRpcBridge {
 export class CodexAppServerStdioTransport implements JsonRpcTransport {
   private readonly child: ChildProcessWithoutNullStreams;
   private nextId = 1;
-  private readonly pending = new Map<number, { resolve: (value: unknown) => void; reject: (err: Error) => void; timeout: NodeJS.Timeout }>();
+  private readonly pending = new Map<
+    number,
+    { resolve: (value: unknown) => void; reject: (err: Error) => void; timeout: NodeJS.Timeout }
+  >();
   private buffer = '';
 
-  constructor(command = 'codex', args = ['app-server', '--listen', 'stdio://'], private readonly requestTimeoutMs = 30000) {
+  constructor(
+    command = 'codex',
+    args = ['app-server', '--listen', 'stdio://'],
+    private readonly requestTimeoutMs = 30000,
+  ) {
     this.child = spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'] });
     this.child.stdout.on('data', (chunk) => this.onData(chunk.toString()));
     this.child.stderr.on('data', (chunk) => {
@@ -73,7 +126,10 @@ export class CodexAppServerStdioTransport implements JsonRpcTransport {
     });
     this.child.on('exit', (code, signal) => {
       const err = new Error(`codex app-server exited code=${code} signal=${signal}`);
-      for (const item of this.pending.values()) { clearTimeout(item.timeout); item.reject(err); }
+      for (const item of this.pending.values()) {
+        clearTimeout(item.timeout);
+        item.reject(err);
+      }
       this.pending.clear();
     });
   }
@@ -106,7 +162,11 @@ export class CodexAppServerStdioTransport implements JsonRpcTransport {
       this.buffer = this.buffer.slice(idx + 1);
       if (!line) continue;
       let msg: any;
-      try { msg = JSON.parse(line); } catch { continue; }
+      try {
+        msg = JSON.parse(line);
+      } catch {
+        continue;
+      }
       if (typeof msg.id !== 'number') continue;
       const pending = this.pending.get(msg.id);
       if (!pending) continue;
@@ -128,23 +188,40 @@ function hasTurnStatus(response: unknown, turnId: string, status: string): boole
   return Array.isArray(turns) && turns.some((turn) => turn?.id === turnId && turn?.status === status);
 }
 
-function writeProof(target: CodexLifecycleTarget, verb: CodexLifecycleProofResult['verb'], raw: Record<string, unknown>, ok: boolean, reason: string): CodexLifecycleProofResult {
+function writeProof(
+  target: CodexLifecycleTarget,
+  verb: CodexLifecycleProofResult['verb'],
+  raw: Record<string, unknown>,
+  ok: boolean,
+  reason: string,
+): CodexLifecycleProofResult {
   mkdirSync(target.runDir, { recursive: true });
   const artifactRef = `codex-app-server-${verb}-proof.json`;
   const artifact = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
-      verb,
-      target: { run_id: target.runId, thread_id: target.threadId, turn_id: target.turnId, session_id: target.sessionId },
-      response_thread_id: threadFromResponse(raw.response)?.id,
-      response_forked_from_id: threadFromResponse(raw.response)?.forkedFromId,
-      status: ok ? 'supported' : 'unproven',
-      reason,
-      raw,
+    verb,
+    target: { run_id: target.runId, thread_id: target.threadId, turn_id: target.turnId, session_id: target.sessionId },
+    response_thread_id: threadFromResponse(raw.response)?.id,
+    response_forked_from_id: threadFromResponse(raw.response)?.forkedFromId,
+    status: ok ? 'supported' : 'unproven',
+    reason,
+    raw,
   };
   writeFileSync(join(target.runDir, artifactRef), JSON.stringify(artifact, null, 2));
-  const sha256 = createHash('sha256').update(readFileSync(join(target.runDir, artifactRef))).digest('hex');
-  if (!ok) return { verb, status: 'unproven', artifactRef, reason, targetThreadId: target.threadId, responseThreadId: threadFromResponse(raw.response)?.id, turnId: target.turnId };
+  const sha256 = createHash('sha256')
+    .update(readFileSync(join(target.runDir, artifactRef)))
+    .digest('hex');
+  if (!ok)
+    return {
+      verb,
+      status: 'unproven',
+      artifactRef,
+      reason,
+      targetThreadId: target.threadId,
+      responseThreadId: threadFromResponse(raw.response)?.id,
+      turnId: target.turnId,
+    };
   const event = appendRuntimeEvent(target.runDir, {
     runId: target.runId,
     sessionId: target.sessionId,
@@ -164,5 +241,14 @@ function writeProof(target: CodexLifecycleTarget, verb: CodexLifecycleProofResul
     },
     artifactRefs: [artifactRef],
   });
-  return { verb, status: 'supported', event, artifactRef, reason, targetThreadId: target.threadId, responseThreadId: threadFromResponse(raw.response)?.id, turnId: target.turnId };
+  return {
+    verb,
+    status: 'supported',
+    event,
+    artifactRef,
+    reason,
+    targetThreadId: target.threadId,
+    responseThreadId: threadFromResponse(raw.response)?.id,
+    turnId: target.turnId,
+  };
 }

@@ -1,45 +1,59 @@
-import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { addTask, createRun, listApprovals, rebuildRuntimeProjectionStore, resolveApproval, startRun } from './core.js';
-import { renderHtml, renderRun } from './view.js';
-import { appendRuntimeEvent, payloadHash, readRuntimeEvents, validateRuntimeLedger } from './events/ledger.js';
-import { rebuildRuntimeProjection, findProjectedRun } from './projection/projection.js';
-import { ShellPrimitiveAdapter } from './runtime/shell-adapter.js';
-import { CodexCliAdapter, detectCodexCli } from './runtime/codex-adapter.js';
-import { evaluatePermission } from './policy/permission-broker.js';
-import { validateMemoryWrite } from './memory/records.js';
-import { runRuntimeHardGate } from './harness/runtime-gate.js';
-import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
-import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
-import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
-import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
-import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
+import test from 'node:test';
 import { buildCompositionPlan } from './composition/composition.js';
-import { createCodexLaunchProof } from './runtime/codex-process-bridge.js';
-import { readProjectionSqliteSummary } from './projection/sqlite-store.js';
-import type { RuntimeCapabilities } from './runtime/types.js';
+import { addTask, createRun, listApprovals, rebuildRuntimeProjectionStore, resolveApproval, startRun } from './core.js';
+import { appendRuntimeEvent, payloadHash, readRuntimeEvents, validateRuntimeLedger } from './events/ledger.js';
+import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
+import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
+import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
+import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
+import { runRuntimeHardGate } from './harness/runtime-gate.js';
+import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
 import { appendMemoryFact } from './memory/fabric.js';
+import { validateMemoryWrite } from './memory/records.js';
+import { evaluatePermission } from './policy/permission-broker.js';
+import { findProjectedRun, rebuildRuntimeProjection } from './projection/projection.js';
+import { readProjectionSqliteSummary } from './projection/sqlite-store.js';
+import { CodexCliAdapter, detectCodexCli } from './runtime/codex-adapter.js';
 import { CodexAppServerJsonRpcBridge, type JsonRpcTransport } from './runtime/codex-app-server-bridge.js';
+import { createCodexLaunchProof } from './runtime/codex-process-bridge.js';
+import { ShellPrimitiveAdapter } from './runtime/shell-adapter.js';
+import type { RuntimeCapabilities } from './runtime/types.js';
+import { renderHtml, renderRun } from './view.js';
 
-function tempDir(): string { return mkdtempSync(join(tmpdir(), 'dominic-runtime-')); }
+function tempDir(): string {
+  return mkdtempSync(join(tmpdir(), 'dominic-runtime-'));
+}
 
 test('Story 1: runtime contracts expose lifecycle verbs and shell is primitive only', () => {
   const shell = new ShellPrimitiveAdapter();
   const cap = shell.capabilities();
   assert.equal(cap.firstClass, false);
   assert.equal(cap.label, 'primitive_shell');
-  for (const verb of ['launch', 'attach', 'stream', 'approve', 'interrupt', 'resume', 'fork'] as const) assert.ok(cap.lifecycle[verb]);
+  for (const verb of ['launch', 'attach', 'stream', 'approve', 'interrupt', 'resume', 'fork'] as const)
+    assert.ok(cap.lifecycle[verb]);
   assert.notEqual(cap.lifecycle.attach, 'supported');
 });
 
 test('Story 2: canonical event ledger validates hash and ordered append-only sequence', () => {
   const dir = tempDir();
-  const one = appendRuntimeEvent(dir, { runId: 'run-1', source: 'runtime-manager', type: 'goal.received', payload: { a: 1 }, artifactRefs: ['prompt.md'] });
-  const two = appendRuntimeEvent(dir, { runId: 'run-1', source: 'shell-adapter', type: 'runtime.launch.requested', payload: { adapter_kind: 'shell', runtime_label: 'primitive_shell' } });
+  const one = appendRuntimeEvent(dir, {
+    runId: 'run-1',
+    source: 'runtime-manager',
+    type: 'goal.received',
+    payload: { a: 1 },
+    artifactRefs: ['prompt.md'],
+  });
+  const two = appendRuntimeEvent(dir, {
+    runId: 'run-1',
+    source: 'shell-adapter',
+    type: 'runtime.launch.requested',
+    payload: { adapter_kind: 'shell', runtime_label: 'primitive_shell' },
+  });
   assert.equal(one.sequence, 1);
   assert.equal(two.sequence, 2);
   const events = readRuntimeEvents(dir);
@@ -51,8 +65,19 @@ test('Story 2: canonical event ledger validates hash and ordered append-only seq
 
 test('Story 3: projection rebuilds only from event facts and cannot invent runs', () => {
   const dir = tempDir();
-  appendRuntimeEvent(dir, { runId: 'run-2', source: 'runtime-manager', type: 'goal.received', payload: { task_id: 'task-a' } });
-  appendRuntimeEvent(dir, { runId: 'run-2', source: 'shell-adapter', type: 'runtime.session.started', payload: { adapter_kind: 'shell', runtime_label: 'primitive_shell' }, artifactRefs: ['executor.process.json'] });
+  appendRuntimeEvent(dir, {
+    runId: 'run-2',
+    source: 'runtime-manager',
+    type: 'goal.received',
+    payload: { task_id: 'task-a' },
+  });
+  appendRuntimeEvent(dir, {
+    runId: 'run-2',
+    source: 'shell-adapter',
+    type: 'runtime.session.started',
+    payload: { adapter_kind: 'shell', runtime_label: 'primitive_shell' },
+    artifactRefs: ['executor.process.json'],
+  });
   const projection = rebuildRuntimeProjection(readRuntimeEvents(dir));
   assert.equal(projection.runs.length, 1);
   assert.equal(findProjectedRun(projection, 'run-2')?.labels.includes('primitive_shell'), true);
@@ -62,9 +87,12 @@ test('Story 3: projection rebuilds only from event facts and cannot invent runs'
 test('Story 4: UI separates operator approval lane and labels primitive shell truth', async () => {
   const dir = tempDir();
   const task = addTask('ui truth task', dir);
-  const run = createRun(task.id, { command: 'node -e "require(\'fs\').writeFileSync(\'x\',\'y\')"' }, dir);
+  const run = createRun(task.id, { command: "node -e \"require('fs').writeFileSync('x','y')\"" }, dir);
   await startRun(run.id, {}, dir);
-  assert.equal(listApprovals(dir).some((a) => a.run_id === run.id && a.status === 'requested'), true);
+  assert.equal(
+    listApprovals(dir).some((a) => a.run_id === run.id && a.status === 'requested'),
+    true,
+  );
   const html = renderHtml(dir, 'csrf');
   assert.match(html, /Your input \/ permissions/);
   assert.match(html, /Agent \/ LLM work/);
@@ -81,45 +109,109 @@ test('Story 5: Codex lifecycle spike records real binary detection but does not 
   assert.equal(cap.firstClass, false);
   assert.ok(['unsupported', 'unproven'].includes(cap.lifecycle.launch));
   const events = [];
-  for await (const event of adapter.launch({ runId: 'run-codex', cwd: dir, metadata: { evidenceDir: dir } })) events.push(event);
+  for await (const event of adapter.launch({ runId: 'run-codex', cwd: dir, metadata: { evidenceDir: dir } }))
+    events.push(event);
   assert.equal(events.length, 1);
   assert.match(String(events[0].payload.evidence_status), detected.available ? /unproven/ : /unsupported/);
   assert.equal(existsSync(join(dir, 'codex-lifecycle-evidence.json')), true);
 });
 
 test('Story 6: permission broker requires approval for upper-scope and destructive actions', () => {
-  assert.equal(evaluatePermission({ runId: 'r', action: 'general_tool', scope: 'sandbox', summary: 'read' }).status, 'allow');
+  assert.equal(
+    evaluatePermission({ runId: 'r', action: 'general_tool', scope: 'sandbox', summary: 'read' }).status,
+    'allow',
+  );
   const destructive = evaluatePermission({ runId: 'r', action: 'destructive', scope: 'project', summary: 'rm' });
   assert.equal(destructive.status, 'requires_approval');
   assert.equal(destructive.eventType, 'approval.requested');
-  const globalMemory = evaluatePermission({ runId: 'r', action: 'upper_scope_memory', scope: 'global', summary: 'learn preference' });
+  const globalMemory = evaluatePermission({
+    runId: 'r',
+    action: 'upper_scope_memory',
+    scope: 'global',
+    summary: 'learn preference',
+  });
   assert.equal(globalMemory.status, 'requires_approval');
 });
 
 test('Story 6: memory writes require provenance and upper-scope authority', () => {
-  assert.throws(() => validateMemoryWrite({ schema_version: 1, memory_id: 'm1', scope: 'global', authority: 'automatic_sandbox', source_event_ids: ['e1'], artifact_refs: [], key: 'pref', value: true, merge_policy: 'append', created_at: new Date().toISOString(), writer: 'agent' }), /upper-scope/);
-  assert.doesNotThrow(() => validateMemoryWrite({ schema_version: 1, memory_id: 'm2', scope: 'blackboard', authority: 'automatic_sandbox', source_event_ids: ['e1'], artifact_refs: [], key: 'note', value: 'x', merge_policy: 'append', created_at: new Date().toISOString(), writer: 'agent' }));
+  assert.throws(
+    () =>
+      validateMemoryWrite({
+        schema_version: 1,
+        memory_id: 'm1',
+        scope: 'global',
+        authority: 'automatic_sandbox',
+        source_event_ids: ['e1'],
+        artifact_refs: [],
+        key: 'pref',
+        value: true,
+        merge_policy: 'append',
+        created_at: new Date().toISOString(),
+        writer: 'agent',
+      }),
+    /upper-scope/,
+  );
+  assert.doesNotThrow(() =>
+    validateMemoryWrite({
+      schema_version: 1,
+      memory_id: 'm2',
+      scope: 'blackboard',
+      authority: 'automatic_sandbox',
+      source_event_ids: ['e1'],
+      artifact_refs: [],
+      key: 'note',
+      value: 'x',
+      merge_policy: 'append',
+      created_at: new Date().toISOString(),
+      writer: 'agent',
+    }),
+  );
 });
 
 test('Story 7: hard gate refuses shell-only false completion claims', () => {
   const dir = tempDir();
-  appendRuntimeEvent(dir, { runId: 'run-shell', source: 'shell-adapter', type: 'runtime.session.started', payload: { adapter_kind: 'shell', runtime_label: 'primitive_shell' } });
+  appendRuntimeEvent(dir, {
+    runId: 'run-shell',
+    source: 'shell-adapter',
+    type: 'runtime.session.started',
+    payload: { adapter_kind: 'shell', runtime_label: 'primitive_shell' },
+  });
   const shell = new ShellPrimitiveAdapter().capabilities();
   const codex = new CodexCliAdapter(dir).capabilities();
-  const fail = runRuntimeHardGate({ events: readRuntimeEvents(dir), capabilities: [shell, codex], milestoneClaim: '95% complete runtime', artifactRoot: dir });
+  const fail = runRuntimeHardGate({
+    events: readRuntimeEvents(dir),
+    capabilities: [shell, codex],
+    milestoneClaim: '95% complete runtime',
+    artifactRoot: dir,
+  });
   assert.equal(fail.decision, 'FAIL');
   assert.equal(fail.false_completion_result, 'FAIL');
-  appendRuntimeEvent(dir, { runId: 'run-shell', source: 'codex-adapter', type: 'runtime.lifecycle.unproven', payload: { adapter_kind: 'codex', runtime_label: 'codex_cli' } });
-  const slicePass = runRuntimeHardGate({ events: readRuntimeEvents(dir), capabilities: [shell, codex], milestoneClaim: 'capability slice', artifactRoot: dir });
+  appendRuntimeEvent(dir, {
+    runId: 'run-shell',
+    source: 'codex-adapter',
+    type: 'runtime.lifecycle.unproven',
+    payload: { adapter_kind: 'codex', runtime_label: 'codex_cli' },
+  });
+  const slicePass = runRuntimeHardGate({
+    events: readRuntimeEvents(dir),
+    capabilities: [shell, codex],
+    milestoneClaim: 'capability slice',
+    artifactRoot: dir,
+  });
   assert.equal(slicePass.decision, 'PASS');
-  const forgedFull = runRuntimeHardGate({ events: readRuntimeEvents(dir), capabilities: [shell, codex], milestoneClaim: '95% complete runtime', artifactRoot: dir });
+  const forgedFull = runRuntimeHardGate({
+    events: readRuntimeEvents(dir),
+    capabilities: [shell, codex],
+    milestoneClaim: '95% complete runtime',
+    artifactRoot: dir,
+  });
   assert.equal(forgedFull.decision, 'FAIL');
 });
 
 test('startRun writes runtime events and approval decisions as linked evidence', async () => {
   const dir = tempDir();
   const task = addTask('eventful task', dir);
-  const run = createRun(task.id, { command: 'node -e "require(\'fs\').writeFileSync(\'x\',\'y\')"' }, dir);
+  const run = createRun(task.id, { command: "node -e \"require('fs').writeFileSync('x','y')\"" }, dir);
   await startRun(run.id, {}, dir);
   const approval = listApprovals(dir).find((a) => a.run_id === run.id && a.status === 'requested');
   assert.ok(approval);
@@ -133,7 +225,6 @@ test('startRun writes runtime events and approval decisions as linked evidence',
   const projection = rebuildRuntimeProjection(readRuntimeEvents(runDir));
   assert.equal(findProjectedRun(projection, run.id)?.approvals[0].status, 'approved');
 });
-
 
 test('review blocker: codex executor request cannot emit fake first-class session while running shell', async () => {
   const dir = tempDir();
@@ -165,17 +256,36 @@ test('review blocker: mode-specific runtime evidence points to actual process ar
   await startRun(run.id, { command: 'node -e "console.log(process.env.ROLE)"' }, dir);
   const events = readRuntimeEvents(join(dir, '.agent', 'runs', run.id));
   const last = [...events].reverse().find((event) => event.source === 'shell-adapter')!;
-  assert.deepEqual(last.artifact_refs.sort(), ['manager.process.json', 'reviewer.process.json', 'worker-001.process.json'].sort());
+  assert.deepEqual(
+    last.artifact_refs.sort(),
+    ['manager.process.json', 'reviewer.process.json', 'worker-001.process.json'].sort(),
+  );
 });
-
 
 test('review blocker: hard gate rejects forged supported Codex and missing full-gate artifact', () => {
   const dir = tempDir();
-  appendRuntimeEvent(dir, { runId: 'run-forged', source: 'codex-adapter', type: 'runtime.session.started', payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' }, artifactRefs: ['missing-codex-transcript.json'] });
-  appendRuntimeEvent(dir, { runId: 'run-forged', source: 'harness', type: 'gate.full_target.passed', payload: { artifact_sha256: 'not-real' }, artifactRefs: ['missing-full-gate.json'] });
+  appendRuntimeEvent(dir, {
+    runId: 'run-forged',
+    source: 'codex-adapter',
+    type: 'runtime.session.started',
+    payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' },
+    artifactRefs: ['missing-codex-transcript.json'],
+  });
+  appendRuntimeEvent(dir, {
+    runId: 'run-forged',
+    source: 'harness',
+    type: 'gate.full_target.passed',
+    payload: { artifact_sha256: 'not-real' },
+    artifactRefs: ['missing-full-gate.json'],
+  });
   const shell = new ShellPrimitiveAdapter().capabilities();
   const codex = new CodexCliAdapter(dir).capabilities();
-  const forged = runRuntimeHardGate({ events: readRuntimeEvents(dir), capabilities: [shell, codex], milestoneClaim: '95% complete runtime', artifactRoot: dir });
+  const forged = runRuntimeHardGate({
+    events: readRuntimeEvents(dir),
+    capabilities: [shell, codex],
+    milestoneClaim: '95% complete runtime',
+    artifactRoot: dir,
+  });
   assert.equal(forged.decision, 'FAIL');
   assert.ok(forged.checks.some((c) => c.name === 'Full Target Runtime Proof Gate' && c.status === 'FAIL'));
   assert.ok(forged.checks.some((c) => c.name === 'Milestone Claim Language Gate' && c.status === 'FAIL'));
@@ -198,14 +308,13 @@ test('review blocker: launch request for codex or omx does not project fake firs
     assert.equal(launch.payload.first_class, false);
     const projection = rebuildRuntimeProjection(events);
     const projected = findProjectedRun(projection, run.id)!;
-    assert.equal(projected.sessions.some((session) => session.adapter_kind === executor), false);
+    assert.equal(
+      projected.sessions.some((session) => session.adapter_kind === executor),
+      false,
+    );
     assert.equal(projected.labels.includes('primitive_shell'), true);
   }
 });
-
-
-
-
 
 test('Priority 3: permission broker links request decision and approved runtime action', async () => {
   const dir = tempDir();
@@ -226,9 +335,27 @@ test('Priority 3: permission broker links request decision and approved runtime 
 
 test('Priority 2: projection replay records completed lifecycle from event ledger', () => {
   const dir = tempDir();
-  appendRuntimeEvent(dir, { runId: 'run-projected', source: 'runtime-manager', type: 'runtime.launch.requested', payload: { runtime_label: 'adapter_requested_unproven' } });
-  appendRuntimeEvent(dir, { runId: 'run-projected', source: 'codex-adapter', type: 'runtime.session.started', sessionId: 'codex-session-1', payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' }, artifactRefs: ['codex-launch-proof.json'] });
-  appendRuntimeEvent(dir, { runId: 'run-projected', source: 'runtime-manager', type: 'run.completed', payload: { decision: 'pass', runtime_label: 'run_lifecycle' }, artifactRefs: ['review.md'] });
+  appendRuntimeEvent(dir, {
+    runId: 'run-projected',
+    source: 'runtime-manager',
+    type: 'runtime.launch.requested',
+    payload: { runtime_label: 'adapter_requested_unproven' },
+  });
+  appendRuntimeEvent(dir, {
+    runId: 'run-projected',
+    source: 'codex-adapter',
+    type: 'runtime.session.started',
+    sessionId: 'codex-session-1',
+    payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' },
+    artifactRefs: ['codex-launch-proof.json'],
+  });
+  appendRuntimeEvent(dir, {
+    runId: 'run-projected',
+    source: 'runtime-manager',
+    type: 'run.completed',
+    payload: { decision: 'pass', runtime_label: 'run_lifecycle' },
+    artifactRefs: ['review.md'],
+  });
   const projection = rebuildRuntimeProjection(readRuntimeEvents(dir));
   const run = findProjectedRun(projection, 'run-projected')!;
   assert.equal(run.status, 'completed');
@@ -245,7 +372,10 @@ test('Priority 1: codex executor without explicit command does not fall back to 
   const events = readRuntimeEvents(runDir);
   assert.equal(existsSync(join(runDir, 'executor.process.json')), false);
   assert.ok(events.some((event) => event.source === 'codex-adapter'));
-  assert.equal(events.some((event) => event.source === 'shell-adapter'), false);
+  assert.equal(
+    events.some((event) => event.source === 'shell-adapter'),
+    false,
+  );
 });
 
 test('Priority 1: Codex transcript evidence upgrades launch attach stream without shell fallback', () => {
@@ -253,8 +383,18 @@ test('Priority 1: Codex transcript evidence upgrades launch attach stream withou
   const agentDir = join(dir, '.agent');
   const runDir = join(agentDir, 'runs', 'run-codex-supported');
   const transcript = join(dir, 'codex-session.jsonl');
-  writeFileSync(transcript, `${JSON.stringify({ type: 'session_meta', payload: { id: 'thread-proof' } })}\n${JSON.stringify({ type: 'response_item', payload: { text: 'stream proof' } })}\n`);
-  const proof = createCodexLaunchProof({ runId: 'run-codex-supported', cwd: dir, agentDir, runDir, prompt: 'hello', liveTranscriptPath: transcript });
+  writeFileSync(
+    transcript,
+    `${JSON.stringify({ type: 'session_meta', payload: { id: 'thread-proof' } })}\n${JSON.stringify({ type: 'response_item', payload: { text: 'stream proof' } })}\n`,
+  );
+  const proof = createCodexLaunchProof({
+    runId: 'run-codex-supported',
+    cwd: dir,
+    agentDir,
+    runDir,
+    prompt: 'hello',
+    liveTranscriptPath: transcript,
+  });
   assert.equal(proof.status, 'supported');
   assert.equal(Boolean(proof.transcript_sha256), true);
   const evidence = JSON.parse(readFileSync(join(runDir, 'codex-launch-proof.json'), 'utf8'));
@@ -276,7 +416,6 @@ test('Phase 1: Codex launch proof persists registry without faking support', () 
   assert.equal(registry.sessions.length, 1);
   assert.equal(registry.sessions[0].evidence_status, proof.status);
 });
-
 
 test('Phase 2: runtime projection persists JSON and SQLite projection', async () => {
   const dir = tempDir();
@@ -308,7 +447,14 @@ test('Phase 4: composition plan captures sandbox context and module stack', () =
   writeFileSync(join(runDir, 'task.md'), 'task', { flag: 'w' });
   writeFileSync(join(runDir, 'context.md'), 'context', { flag: 'w' });
   writeFileSync(join(runDir, 'prompt.md'), 'prompt', { flag: 'w' });
-  const plan = buildCompositionPlan({ root: dir, runDir, runId: 'run-compose', taskId: 'task-compose', preferredRuntime: 'codex', mode: 'multi' });
+  const plan = buildCompositionPlan({
+    root: dir,
+    runDir,
+    runId: 'run-compose',
+    taskId: 'task-compose',
+    preferredRuntime: 'codex',
+    mode: 'multi',
+  });
   assert.equal(plan.modules.runtime_adapter, 'codex_adapter_unproven');
   assert.ok(plan.modules.agents_md_stack.includes('AGENTS.md'));
   assert.ok(plan.modules.skills.includes('team'));
@@ -324,7 +470,9 @@ test('Phase 5: createRun and startRun append composition and permission chain ev
   await startRun(run.id, {}, dir);
   const runDir = join(dir, '.agent', 'runs', run.id);
   const events = readRuntimeEvents(runDir);
-  assert.ok(events.some((event) => event.type === 'composition.resolved' && event.artifact_refs.includes('composition.json')));
+  assert.ok(
+    events.some((event) => event.type === 'composition.resolved' && event.artifact_refs.includes('composition.json')),
+  );
   assert.ok(events.some((event) => event.type === 'permission.allowed'));
   assert.equal(existsSync(join(runDir, 'composition.json')), true);
 });
@@ -346,7 +494,8 @@ test('Phase 6: OMX adapter emits parity-shaped unproven evidence without fake se
   assert.equal(cap.kind, 'omx');
   assert.equal(cap.firstClass, false);
   const events = [];
-  for await (const event of adapter.launch({ runId: 'run-omx', cwd: dir, metadata: { evidenceDir: dir } })) events.push(event);
+  for await (const event of adapter.launch({ runId: 'run-omx', cwd: dir, metadata: { evidenceDir: dir } }))
+    events.push(event);
   assert.equal(events.length, 1);
   assert.equal(events[0].type, 'runtime.lifecycle.unproven');
   assert.equal(events[0].payload.first_class, false);
@@ -372,8 +521,24 @@ test('Phase 5 PRD memory fabric records outcomes and changes later module recomm
   const dir = tempDir();
   const agentDir = join(dir, '.agent');
   const { appendMemoryFact, recommendModules } = await import('./memory/fabric.js');
-  appendMemoryFact(agentDir, { layer: 'module_learning', key: 'agentic-orchestration', value: 'codex worked', outcome: 'success', modules: ['codex', 'runtime-hard-gate'], source_event_ids: ['event-1'], artifact_refs: [] });
-  appendMemoryFact(agentDir, { layer: 'module_learning', key: 'agentic-orchestration', value: 'shell blocked', outcome: 'failure', modules: ['shell', 'runtime-hard-gate'], source_event_ids: ['event-2'], artifact_refs: [] });
+  appendMemoryFact(agentDir, {
+    layer: 'module_learning',
+    key: 'agentic-orchestration',
+    value: 'codex worked',
+    outcome: 'success',
+    modules: ['codex', 'runtime-hard-gate'],
+    source_event_ids: ['event-1'],
+    artifact_refs: [],
+  });
+  appendMemoryFact(agentDir, {
+    layer: 'module_learning',
+    key: 'agentic-orchestration',
+    value: 'shell blocked',
+    outcome: 'failure',
+    modules: ['shell', 'runtime-hard-gate'],
+    source_event_ids: ['event-2'],
+    artifact_refs: [],
+  });
   const recommendations = recommendModules(agentDir, 'agentic-orchestration');
   assert.deepEqual(recommendations[0].modules, ['codex', 'runtime-hard-gate']);
   assert.equal(recommendations[0].score > recommendations[1].score, true);
@@ -381,8 +546,19 @@ test('Phase 5 PRD memory fabric records outcomes and changes later module recomm
 
 test('Phase 8: full-target hard gate remains failed without supported first-class runtime evidence', () => {
   const dir = tempDir();
-  appendRuntimeEvent(dir, { runId: 'run-full', source: 'omx-adapter', type: 'runtime.lifecycle.unproven', payload: { adapter_kind: 'omx', runtime_label: 'omx_cli', first_class: false, evidence_status: 'unproven' }, artifactRefs: ['omx-lifecycle-evidence.json'] });
-  const report = runRuntimeHardGate({ events: readRuntimeEvents(dir), capabilities: [new ShellPrimitiveAdapter().capabilities(), new CodexCliAdapter(dir).capabilities()], milestoneClaim: '95% complete runtime', artifactRoot: dir });
+  appendRuntimeEvent(dir, {
+    runId: 'run-full',
+    source: 'omx-adapter',
+    type: 'runtime.lifecycle.unproven',
+    payload: { adapter_kind: 'omx', runtime_label: 'omx_cli', first_class: false, evidence_status: 'unproven' },
+    artifactRefs: ['omx-lifecycle-evidence.json'],
+  });
+  const report = runRuntimeHardGate({
+    events: readRuntimeEvents(dir),
+    capabilities: [new ShellPrimitiveAdapter().capabilities(), new CodexCliAdapter(dir).capabilities()],
+    milestoneClaim: '95% complete runtime',
+    artifactRoot: dir,
+  });
   assert.equal(report.decision, 'FAIL');
 });
 
@@ -390,37 +566,96 @@ test('Phase 8: full-target hard gate requires a digest-matched PASS artifact, no
   const dir = tempDir();
   const codexProof = { schema_version: 1, status: 'supported', transcript_sha256: 'abc123' };
   writeFileSync(join(dir, 'codex-launch-proof.json'), JSON.stringify(codexProof, null, 2));
-  const session = appendRuntimeEvent(dir, { runId: 'run-full-pass', source: 'codex-adapter', type: 'runtime.session.started', sessionId: 'codex-session', payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' }, artifactRefs: ['codex-launch-proof.json'] });
-  const forged = { schema_version: 1, decision: 'PASS', requirements: [{ name: 'fake', status: 'FAIL' }], source_event_ids: [session.event_id] };
+  const session = appendRuntimeEvent(dir, {
+    runId: 'run-full-pass',
+    source: 'codex-adapter',
+    type: 'runtime.session.started',
+    sessionId: 'codex-session',
+    payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' },
+    artifactRefs: ['codex-launch-proof.json'],
+  });
+  const forged = {
+    schema_version: 1,
+    decision: 'PASS',
+    requirements: [{ name: 'fake', status: 'FAIL' }],
+    source_event_ids: [session.event_id],
+  };
   writeFileSync(join(dir, 'full-target-gate.json'), JSON.stringify(forged, null, 2));
-  const forgedSha = createHash('sha256').update(readFileSync(join(dir, 'full-target-gate.json'))).digest('hex');
-  appendRuntimeEvent(dir, { runId: 'run-full-pass', source: 'harness', type: 'gate.full_target.passed', payload: { artifact_sha256: forgedSha }, artifactRefs: ['full-target-gate.json'] });
-  const supportedCodex: RuntimeCapabilities = { kind: 'codex', label: 'codex_cli', firstClass: true, lifecycle: { launch: 'supported', attach: 'supported', stream: 'supported', approve: 'unproven', interrupt: 'unproven', resume: 'unproven', fork: 'unproven' }, evidence: ['test supported transcript'] };
-  const forgedReport = runRuntimeHardGate({ events: readRuntimeEvents(dir), capabilities: [new ShellPrimitiveAdapter().capabilities(), supportedCodex], milestoneClaim: '95% complete runtime', artifactRoot: dir });
+  const forgedSha = createHash('sha256')
+    .update(readFileSync(join(dir, 'full-target-gate.json')))
+    .digest('hex');
+  appendRuntimeEvent(dir, {
+    runId: 'run-full-pass',
+    source: 'harness',
+    type: 'gate.full_target.passed',
+    payload: { artifact_sha256: forgedSha },
+    artifactRefs: ['full-target-gate.json'],
+  });
+  const supportedCodex: RuntimeCapabilities = {
+    kind: 'codex',
+    label: 'codex_cli',
+    firstClass: true,
+    lifecycle: {
+      launch: 'supported',
+      attach: 'supported',
+      stream: 'supported',
+      approve: 'unproven',
+      interrupt: 'unproven',
+      resume: 'unproven',
+      fork: 'unproven',
+    },
+    evidence: ['test supported transcript'],
+  };
+  const forgedReport = runRuntimeHardGate({
+    events: readRuntimeEvents(dir),
+    capabilities: [new ShellPrimitiveAdapter().capabilities(), supportedCodex],
+    milestoneClaim: '95% complete runtime',
+    artifactRoot: dir,
+  });
   assert.equal(forgedReport.decision, 'FAIL');
 
-  const passArtifact = { schema_version: 1, run_id: 'run-full-pass', decision: 'PASS', requirements: [
-    'web goal input',
-    'sandbox context',
-    'composition',
-    'codex launch attach stream',
-    'approval top lane',
-    'interrupt',
-    'resume',
-    'fork',
-    'parallel blackboard',
-    'sequential handoff',
-    'hard gate',
-    'learning memory',
-    'review boundary',
-    'commit approval boundary',
-    'push deploy approval boundary',
-    'ledger projection UI render agreement',
-  ].map((name) => ({ name, status: 'PASS' })), source_event_ids: [session.event_id], projection_status: 'completed' };
+  const passArtifact = {
+    schema_version: 1,
+    run_id: 'run-full-pass',
+    decision: 'PASS',
+    requirements: [
+      'web goal input',
+      'sandbox context',
+      'composition',
+      'codex launch attach stream',
+      'approval top lane',
+      'interrupt',
+      'resume',
+      'fork',
+      'parallel blackboard',
+      'sequential handoff',
+      'hard gate',
+      'learning memory',
+      'review boundary',
+      'commit approval boundary',
+      'push deploy approval boundary',
+      'ledger projection UI render agreement',
+    ].map((name) => ({ name, status: 'PASS' })),
+    source_event_ids: [session.event_id],
+    projection_status: 'completed',
+  };
   writeFileSync(join(dir, 'full-target-gate-v2.json'), JSON.stringify(passArtifact, null, 2));
-  const passSha = createHash('sha256').update(readFileSync(join(dir, 'full-target-gate-v2.json'))).digest('hex');
-  appendRuntimeEvent(dir, { runId: 'run-full-pass', source: 'harness', type: 'gate.full_target.verified', payload: { artifact_sha256: passSha }, artifactRefs: ['full-target-gate-v2.json'] });
-  const passReport = runRuntimeHardGate({ events: readRuntimeEvents(dir), capabilities: [new ShellPrimitiveAdapter().capabilities(), supportedCodex], milestoneClaim: '95% complete runtime', artifactRoot: dir });
+  const passSha = createHash('sha256')
+    .update(readFileSync(join(dir, 'full-target-gate-v2.json')))
+    .digest('hex');
+  appendRuntimeEvent(dir, {
+    runId: 'run-full-pass',
+    source: 'harness',
+    type: 'gate.full_target.verified',
+    payload: { artifact_sha256: passSha },
+    artifactRefs: ['full-target-gate-v2.json'],
+  });
+  const passReport = runRuntimeHardGate({
+    events: readRuntimeEvents(dir),
+    capabilities: [new ShellPrimitiveAdapter().capabilities(), supportedCodex],
+    milestoneClaim: '95% complete runtime',
+    artifactRoot: dir,
+  });
   assert.equal(passReport.decision, 'PASS');
 });
 
@@ -430,46 +665,161 @@ test('Phase 8: full-target artifact writer lists concrete missing requirements a
   const runId = 'run-full-artifact';
   const runDir = join(agentDir, 'runs', runId);
   mkdirSync(runDir, { recursive: true });
-  writeFileSync(join(runDir, 'run.yaml'), `schema_version: 1\nid: ${runId}\ntask_id: t\nstatus: completed\nexecutor: codex\nmode: basic\nrun_dir: .agent/runs/${runId}\ncreated_at: 2026-01-01T00:00:00.000Z\nupdated_at: 2026-01-01T00:00:00.000Z\nended_at: 2026-01-01T00:00:00.000Z\n`);
+  writeFileSync(
+    join(runDir, 'run.yaml'),
+    `schema_version: 1\nid: ${runId}\ntask_id: t\nstatus: completed\nexecutor: codex\nmode: basic\nrun_dir: .agent/runs/${runId}\ncreated_at: 2026-01-01T00:00:00.000Z\nupdated_at: 2026-01-01T00:00:00.000Z\nended_at: 2026-01-01T00:00:00.000Z\n`,
+  );
   writeFileSync(join(runDir, 'context.md'), 'context');
   writeFileSync(join(runDir, 'prompt.md'), 'prompt');
   writeFileSync(join(runDir, 'composition.json'), JSON.stringify({ schema_version: 1 }));
   writeFileSync(join(runDir, 'codex-launch-proof.json'), JSON.stringify({ schema_version: 1, status: 'supported' }));
   writeFileSync(join(runDir, 'review.md'), '# Review\n\nPASS');
   const goal = appendRuntimeEvent(runDir, { runId, source: 'web', type: 'goal.received', payload: { task_id: 't' } });
-  appendRuntimeEvent(runDir, { runId, source: 'runtime-manager', type: 'composition.resolved', payload: { runtime_label: 'composition_plan' }, artifactRefs: ['composition.json'] });
-  appendRuntimeEvent(runDir, { runId, source: 'codex-adapter', type: 'runtime.session.started', sessionId: 'codex-session', payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' }, artifactRefs: ['codex-launch-proof.json'] });
-  appendRuntimeEvent(runDir, { runId, source: 'runtime-manager', type: 'run.completed', payload: { decision: 'pass', runtime_label: 'run_lifecycle' }, artifactRefs: ['review.md'] });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'runtime-manager',
+    type: 'composition.resolved',
+    payload: { runtime_label: 'composition_plan' },
+    artifactRefs: ['composition.json'],
+  });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'codex-adapter',
+    type: 'runtime.session.started',
+    sessionId: 'codex-session',
+    payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' },
+    artifactRefs: ['codex-launch-proof.json'],
+  });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'runtime-manager',
+    type: 'run.completed',
+    payload: { decision: 'pass', runtime_label: 'run_lifecycle' },
+    artifactRefs: ['review.md'],
+  });
   const failedArtifact = writeFullTargetGateArtifact({ root: dir, agentDir, runId, appendPassEvent: true });
   assert.equal(failedArtifact.decision, 'FAIL');
   assert.ok(failedArtifact.requirements.some((item) => item.name === 'interrupt' && item.status === 'FAIL'));
-  assert.equal(readRuntimeEvents(runDir).some((event) => event.type === 'gate.full_target.passed'), false);
+  assert.equal(
+    readRuntimeEvents(runDir).some((event) => event.type === 'gate.full_target.passed'),
+    false,
+  );
 
   mkdirSync(join(runDir, 'approvals'), { recursive: true });
-  for (const id of ['approval-shell', 'commit-approval', 'push-approval']) writeFileSync(join(runDir, 'approvals', `${id}.json`), JSON.stringify({ schema_version: 1, id, run_id: runId, status: 'approved' }));
-  const approvalRequested = appendRuntimeEvent(runDir, { runId, source: 'permission-broker', type: 'approval.requested', payload: { approval_id: 'approval-shell', action: 'shell_mutation', runtime_label: 'approval_required' }, artifactRefs: ['approvals/approval-shell.json'] });
-  appendRuntimeEvent(runDir, { runId, source: 'permission-broker', type: 'approval.decided', payload: { approval_id: 'approval-shell', decision: 'approved', runtime_label: 'approval_chain' }, artifactRefs: ['approvals/approval-shell.json'] });
-  appendRuntimeEvent(runDir, { runId, source: 'permission-broker', type: 'runtime.action.approved', payload: { approval_id: 'wrong-approval', action: 'shell_mutation', runtime_label: 'approval_chain' }, artifactRefs: ['approvals/approval-shell.json'] });
-  for (const verb of ['interrupt', 'resume', 'fork']) appendRuntimeEvent(runDir, { runId, source: 'codex-adapter', type: 'runtime.lifecycle.supported', sessionId: 'codex-session', payload: { verb, adapter_kind: 'codex', evidence_status: 'supported' } });
-  appendRuntimeEvent(runDir, { runId, source: 'permission-broker', type: 'approval.requested', payload: { approval_id: 'commit-approval', action: 'commit', runtime_label: 'approval_required' }, artifactRefs: ['approvals/commit-approval.json'] });
-  appendRuntimeEvent(runDir, { runId, source: 'permission-broker', type: 'approval.decided', payload: { approval_id: 'commit-approval', decision: 'approved', runtime_label: 'approval_chain' }, artifactRefs: ['approvals/commit-approval.json'] });
-  appendRuntimeEvent(runDir, { runId, source: 'permission-broker', type: 'approval.requested', payload: { approval_id: 'push-approval', action: 'push_deploy', runtime_label: 'approval_required' }, artifactRefs: ['approvals/push-approval.json'] });
-  appendRuntimeEvent(runDir, { runId, source: 'permission-broker', type: 'approval.decided', payload: { approval_id: 'push-approval', decision: 'approved', runtime_label: 'approval_chain' }, artifactRefs: ['approvals/push-approval.json'] });
-  appendMemoryFact(agentDir, { layer: 'blackboard', key: 'm8', value: 'parallel note', run_id: runId, source_event_ids: [goal.event_id], artifact_refs: [] });
-  appendMemoryFact(agentDir, { layer: 'sequential_handoff', key: 'm8', value: 'handoff note', run_id: runId, source_event_ids: [approvalRequested.event_id], artifact_refs: [] });
-  appendMemoryFact(agentDir, { layer: 'module_learning', key: 'm8', value: 'codex full-target path', run_id: runId, source_event_ids: [goal.event_id], artifact_refs: [], outcome: 'success', modules: ['codex', 'full-target-gate'] });
+  for (const id of ['approval-shell', 'commit-approval', 'push-approval'])
+    writeFileSync(
+      join(runDir, 'approvals', `${id}.json`),
+      JSON.stringify({ schema_version: 1, id, run_id: runId, status: 'approved' }),
+    );
+  const approvalRequested = appendRuntimeEvent(runDir, {
+    runId,
+    source: 'permission-broker',
+    type: 'approval.requested',
+    payload: { approval_id: 'approval-shell', action: 'shell_mutation', runtime_label: 'approval_required' },
+    artifactRefs: ['approvals/approval-shell.json'],
+  });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'permission-broker',
+    type: 'approval.decided',
+    payload: { approval_id: 'approval-shell', decision: 'approved', runtime_label: 'approval_chain' },
+    artifactRefs: ['approvals/approval-shell.json'],
+  });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'permission-broker',
+    type: 'runtime.action.approved',
+    payload: { approval_id: 'wrong-approval', action: 'shell_mutation', runtime_label: 'approval_chain' },
+    artifactRefs: ['approvals/approval-shell.json'],
+  });
+  for (const verb of ['interrupt', 'resume', 'fork'])
+    appendRuntimeEvent(runDir, {
+      runId,
+      source: 'codex-adapter',
+      type: 'runtime.lifecycle.supported',
+      sessionId: 'codex-session',
+      payload: { verb, adapter_kind: 'codex', evidence_status: 'supported' },
+    });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'permission-broker',
+    type: 'approval.requested',
+    payload: { approval_id: 'commit-approval', action: 'commit', runtime_label: 'approval_required' },
+    artifactRefs: ['approvals/commit-approval.json'],
+  });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'permission-broker',
+    type: 'approval.decided',
+    payload: { approval_id: 'commit-approval', decision: 'approved', runtime_label: 'approval_chain' },
+    artifactRefs: ['approvals/commit-approval.json'],
+  });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'permission-broker',
+    type: 'approval.requested',
+    payload: { approval_id: 'push-approval', action: 'push_deploy', runtime_label: 'approval_required' },
+    artifactRefs: ['approvals/push-approval.json'],
+  });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'permission-broker',
+    type: 'approval.decided',
+    payload: { approval_id: 'push-approval', decision: 'approved', runtime_label: 'approval_chain' },
+    artifactRefs: ['approvals/push-approval.json'],
+  });
+  appendMemoryFact(agentDir, {
+    layer: 'blackboard',
+    key: 'm8',
+    value: 'parallel note',
+    run_id: runId,
+    source_event_ids: [goal.event_id],
+    artifact_refs: [],
+  });
+  appendMemoryFact(agentDir, {
+    layer: 'sequential_handoff',
+    key: 'm8',
+    value: 'handoff note',
+    run_id: runId,
+    source_event_ids: [approvalRequested.event_id],
+    artifact_refs: [],
+  });
+  appendMemoryFact(agentDir, {
+    layer: 'module_learning',
+    key: 'm8',
+    value: 'codex full-target path',
+    run_id: runId,
+    source_event_ids: [goal.event_id],
+    artifact_refs: [],
+    outcome: 'success',
+    modules: ['codex', 'full-target-gate'],
+  });
   writeFullTargetGateArtifact({ root: dir, agentDir, runId });
   writeUiAgreementSmoke({ root: dir, agentDir, runId });
   const mismatchedActionArtifact = writeFullTargetGateArtifact({ root: dir, agentDir, runId, appendPassEvent: true });
   assert.equal(mismatchedActionArtifact.decision, 'FAIL');
-  assert.ok(mismatchedActionArtifact.requirements.some((item) => item.name === 'approval top lane' && item.status === 'FAIL'));
-  appendRuntimeEvent(runDir, { runId, source: 'permission-broker', type: 'runtime.action.approved', payload: { approval_id: 'approval-shell', action: 'shell_mutation', runtime_label: 'approval_chain' }, artifactRefs: ['approvals/approval-shell.json'] });
+  assert.ok(
+    mismatchedActionArtifact.requirements.some((item) => item.name === 'approval top lane' && item.status === 'FAIL'),
+  );
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'permission-broker',
+    type: 'runtime.action.approved',
+    payload: { approval_id: 'approval-shell', action: 'shell_mutation', runtime_label: 'approval_chain' },
+    artifactRefs: ['approvals/approval-shell.json'],
+  });
   const passArtifact = writeFullTargetGateArtifact({ root: dir, agentDir, runId, appendPassEvent: true });
   assert.equal(passArtifact.decision, 'PASS');
-  assert.equal(readRuntimeEvents(runDir).some((event) => event.type === 'gate.full_target.passed'), true);
+  assert.equal(
+    readRuntimeEvents(runDir).some((event) => event.type === 'gate.full_target.passed'),
+    true,
+  );
   const verified = verifyFullTargetGateArtifact({ agentDir, runId, appendVerifiedEvent: true });
   assert.equal(verified.decision, 'PASS');
-  assert.equal(readRuntimeEvents(runDir).some((event) => event.type === 'gate.full_target.verified'), true);
+  assert.equal(
+    readRuntimeEvents(runDir).some((event) => event.type === 'gate.full_target.verified'),
+    true,
+  );
 });
 
 test('Phase 8: M8 boundary evidence fills approval and memory gaps while leaving lifecycle controls unproven', () => {
@@ -479,9 +829,22 @@ test('Phase 8: M8 boundary evidence fills approval and memory gaps while leaving
   const run = createRun(task.id, { executor: 'codex', source: 'web' }, dir);
   const runDir = join(agentDir, 'runs', run.id);
   writeFileSync(join(runDir, 'codex-launch-proof.json'), JSON.stringify({ schema_version: 1, status: 'supported' }));
-  appendRuntimeEvent(runDir, { runId: run.id, source: 'codex-adapter', type: 'runtime.session.started', sessionId: 'codex-session', payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' }, artifactRefs: ['codex-launch-proof.json'] });
+  appendRuntimeEvent(runDir, {
+    runId: run.id,
+    source: 'codex-adapter',
+    type: 'runtime.session.started',
+    sessionId: 'codex-session',
+    payload: { adapter_kind: 'codex', runtime_label: 'codex_cli', evidence_status: 'supported' },
+    artifactRefs: ['codex-launch-proof.json'],
+  });
   writeFileSync(join(runDir, 'review.md'), '# Review\n\nPASS');
-  appendRuntimeEvent(runDir, { runId: run.id, source: 'runtime-manager', type: 'run.completed', payload: { decision: 'pass', runtime_label: 'run_lifecycle' }, artifactRefs: ['review.md'] });
+  appendRuntimeEvent(runDir, {
+    runId: run.id,
+    source: 'runtime-manager',
+    type: 'run.completed',
+    payload: { decision: 'pass', runtime_label: 'run_lifecycle' },
+    artifactRefs: ['review.md'],
+  });
   appendM8BoundaryEvidence({ root: dir, agentDir, runId: run.id });
   const artifact = writeFullTargetGateArtifact({ root: dir, agentDir, runId: run.id, appendPassEvent: true });
   const statusByName = new Map(artifact.requirements.map((item) => [item.name, item.status]));
@@ -495,7 +858,10 @@ test('Phase 8: M8 boundary evidence fills approval and memory gaps while leaving
   assert.equal(statusByName.get('interrupt'), 'FAIL');
   assert.equal(statusByName.get('resume'), 'FAIL');
   assert.equal(statusByName.get('fork'), 'FAIL');
-  assert.equal(readRuntimeEvents(runDir).some((event) => event.type === 'gate.full_target.passed'), false);
+  assert.equal(
+    readRuntimeEvents(runDir).some((event) => event.type === 'gate.full_target.passed'),
+    false,
+  );
 });
 
 test('Priority G010: Codex app-server bridge emits supported lifecycle events only from matching JSON-RPC responses', async () => {
@@ -509,18 +875,31 @@ test('Priority G010: Codex app-server bridge emits supported lifecycle events on
       if (method === 'thread/resume') return { thread: { id: 'thread-target' } };
       if (method === 'thread/fork') return { thread: { id: 'thread-forked', forkedFromId: 'thread-target' } };
       if (method === 'turn/interrupt') return {};
-      if (method === 'thread/read') return { thread: { id: 'thread-target', turns: [{ id: 'turn-target', status: 'interrupted' }] } };
+      if (method === 'thread/read')
+        return { thread: { id: 'thread-target', turns: [{ id: 'turn-target', status: 'interrupted' }] } };
       throw new Error(`unexpected method ${method}`);
     },
   };
   const bridge = new CodexAppServerJsonRpcBridge(transport);
-  const target = { runId: 'run-bridge-proof', runDir, threadId: 'thread-target', sessionId: 'codex-session', turnId: 'turn-target' };
+  const target = {
+    runId: 'run-bridge-proof',
+    runDir,
+    threadId: 'thread-target',
+    sessionId: 'codex-session',
+    turnId: 'turn-target',
+  };
   assert.equal((await bridge.proveResume(target)).status, 'supported');
   assert.equal((await bridge.proveFork(target)).status, 'supported');
   assert.equal((await bridge.proveInterrupt(target)).status, 'supported');
   const events = readRuntimeEvents(runDir);
-  assert.deepEqual(events.filter((event) => event.type === 'runtime.lifecycle.supported').map((event) => event.payload.verb), ['resume', 'fork', 'interrupt']);
-  assert.equal(calls.some((call) => call.startsWith('thread/resume:')), true);
+  assert.deepEqual(
+    events.filter((event) => event.type === 'runtime.lifecycle.supported').map((event) => event.payload.verb),
+    ['resume', 'fork', 'interrupt'],
+  );
+  assert.equal(
+    calls.some((call) => call.startsWith('thread/resume:')),
+    true,
+  );
   assert.equal(existsSync(join(runDir, 'codex-app-server-resume-proof.json')), true);
   assert.equal(existsSync(join(runDir, 'codex-app-server-fork-proof.json')), true);
   assert.equal(existsSync(join(runDir, 'codex-app-server-interrupt-proof.json')), true);
@@ -535,7 +914,8 @@ test('Priority G010: Codex app-server bridge refuses malformed resume fork and m
       if (method === 'thread/resume') return { thread: { id: 'wrong-thread' } };
       if (method === 'thread/fork') return { thread: { id: 'thread-forked', forkedFromId: 'wrong-parent' } };
       if (method === 'turn/interrupt') return {};
-      if (method === 'thread/read') return { thread: { id: 'thread-target', turns: [{ id: 'turn-other', status: 'interrupted' }] } };
+      if (method === 'thread/read')
+        return { thread: { id: 'thread-target', turns: [{ id: 'turn-other', status: 'interrupted' }] } };
       throw new Error(`unexpected method ${method}`);
     },
   };
@@ -544,7 +924,10 @@ test('Priority G010: Codex app-server bridge refuses malformed resume fork and m
   assert.equal((await bridge.proveResume(target)).status, 'unproven');
   assert.equal((await bridge.proveFork(target)).status, 'unproven');
   assert.equal((await bridge.proveInterrupt(target)).status, 'unproven');
-  assert.equal(readRuntimeEvents(runDir).some((event) => event.type === 'runtime.lifecycle.supported'), false);
+  assert.equal(
+    readRuntimeEvents(runDir).some((event) => event.type === 'runtime.lifecycle.supported'),
+    false,
+  );
 });
 
 test('Priority G011: Codex lifecycle exercise initializes app-server then proves resume fork and interrupt on target run ledger', async () => {
@@ -553,7 +936,14 @@ test('Priority G011: Codex lifecycle exercise initializes app-server then proves
   const runId = 'run-g011-lifecycle';
   const runDir = join(agentDir, 'runs', runId);
   mkdirSync(runDir, { recursive: true });
-  appendRuntimeEvent(runDir, { runId, source: 'codex-adapter', type: 'runtime.session.started', sessionId: 'codex-session', payload: { adapter_kind: 'codex', evidence_status: 'supported' }, artifactRefs: ['codex-launch-proof.json'] });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'codex-adapter',
+    type: 'runtime.session.started',
+    sessionId: 'codex-session',
+    payload: { adapter_kind: 'codex', evidence_status: 'supported' },
+    artifactRefs: ['codex-launch-proof.json'],
+  });
   const calls: string[] = [];
   const transport: JsonRpcTransport = {
     async request(method, params) {
@@ -563,18 +953,32 @@ test('Priority G011: Codex lifecycle exercise initializes app-server then proves
       if (method === 'thread/fork') return { thread: { id: 'thread-forked', forkedFromId: 'thread-target' } };
       if (method === 'turn/start') return { turn: { id: 'turn-started', status: 'inProgress' } };
       if (method === 'turn/interrupt') return {};
-      if (method === 'thread/read') return { thread: { id: 'thread-forked', turns: [{ id: 'turn-started', status: 'interrupted' }] } };
+      if (method === 'thread/read')
+        return { thread: { id: 'thread-forked', turns: [{ id: 'turn-started', status: 'interrupted' }] } };
       throw new Error(`unexpected method ${method}`);
     },
   };
-  const report = await exerciseCodexAppServerLifecycle({ root: dir, agentDir, runId, threadId: 'thread-target', transport, interruptDelayMs: 0 });
+  const report = await exerciseCodexAppServerLifecycle({
+    root: dir,
+    agentDir,
+    runId,
+    threadId: 'thread-target',
+    transport,
+    interruptDelayMs: 0,
+  });
   assert.equal(report.decision, 'PASS');
-  assert.deepEqual(report.results.map((result) => result.verb), ['resume', 'fork', 'interrupt']);
+  assert.deepEqual(
+    report.results.map((result) => result.verb),
+    ['resume', 'fork', 'interrupt'],
+  );
   assert.equal(report.forked_thread_id, 'thread-forked');
   assert.equal(report.interrupt_turn_id, 'turn-started');
   assert.equal(calls[0].startsWith('initialize:'), true);
   const events = readRuntimeEvents(runDir).filter((event) => event.type === 'runtime.lifecycle.supported');
-  assert.deepEqual(events.map((event) => event.payload.verb), ['resume', 'fork', 'interrupt']);
+  assert.deepEqual(
+    events.map((event) => event.payload.verb),
+    ['resume', 'fork', 'interrupt'],
+  );
   assert.equal(existsSync(join(runDir, 'codex-app-server-lifecycle-exercise-report.json')), true);
   assert.equal(existsSync(join(runDir, 'codex-app-server-turn-start-proof.json')), true);
 });

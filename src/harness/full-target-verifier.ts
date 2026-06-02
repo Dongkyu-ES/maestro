@@ -13,7 +13,11 @@ export interface FullTargetVerificationReport {
   checks: Record<string, boolean>;
 }
 
-export function verifyFullTargetGateArtifact(options: { agentDir: string; runId: string; appendVerifiedEvent?: boolean }): FullTargetVerificationReport {
+export function verifyFullTargetGateArtifact(options: {
+  agentDir: string;
+  runId: string;
+  appendVerifiedEvent?: boolean;
+}): FullTargetVerificationReport {
   const runDir = join(options.agentDir, 'runs', options.runId);
   const artifactRef = 'full-target-gate.json';
   const artifactPath = join(runDir, artifactRef);

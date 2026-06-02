@@ -18,10 +18,25 @@ export interface LaunchRequest {
   metadata?: Record<string, unknown>;
 }
 
-export interface ResumeRequest { reason?: string; cursor?: string; }
-export interface ForkRequest { reason: string; branchLabel?: string; }
-export interface ApprovalDecision { approvalId: string; decision: 'approved' | 'rejected'; operator?: string; reason?: string; }
-export interface RuntimeCommandResult { status: RuntimeCapabilityStatus | 'accepted' | 'rejected'; evidence: string[]; message: string; }
+export interface ResumeRequest {
+  reason?: string;
+  cursor?: string;
+}
+export interface ForkRequest {
+  reason: string;
+  branchLabel?: string;
+}
+export interface ApprovalDecision {
+  approvalId: string;
+  decision: 'approved' | 'rejected';
+  operator?: string;
+  reason?: string;
+}
+export interface RuntimeCommandResult {
+  status: RuntimeCapabilityStatus | 'accepted' | 'rejected';
+  evidence: string[];
+  message: string;
+}
 
 export interface RuntimeEvent {
   runId: string;
@@ -44,6 +59,10 @@ export interface AgentRuntimeAdapter {
   fork(sessionId: string, request: ForkRequest): AsyncIterable<RuntimeEvent>;
 }
 
-export function unsupportedResult(verb: RuntimeLifecycleVerb, kind: RuntimeKind, evidence: string[] = []): RuntimeCommandResult {
+export function unsupportedResult(
+  verb: RuntimeLifecycleVerb,
+  kind: RuntimeKind,
+  evidence: string[] = [],
+): RuntimeCommandResult {
   return { status: 'unsupported', evidence, message: `${kind} adapter does not yet prove ${verb}` };
 }
