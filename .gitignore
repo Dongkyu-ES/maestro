@@ -21,3 +21,6 @@ build/
 coverage/
 .env
 .env.*
+
+# Goal reachability volatile generated reports
+_workspace/goal-reachability/final/

@@ -16,7 +16,15 @@
     "e2e": "node scripts/operator-browser-e2e.mjs && node scripts/operator-codex-web-e2e.mjs",
     "report:github": "node scripts/github-projects-report.mjs",
     "harness:integrity": "node scripts/harness-os-integrity-gate.mjs",
-    "harness:integrity:self-test": "node scripts/harness-os-integrity-gate.mjs --self-test"
+    "harness:integrity:self-test": "node scripts/harness-os-integrity-gate.mjs --self-test",
+    "harness:goal-reachability": "node scripts/goal-reachability-harness.mjs",
+    "harness:goal-reachability:self-test": "node scripts/goal-reachability-harness.mjs --self-test",
+    "harness:review-custody-preflight": "node scripts/review-custody-preflight.mjs",
+    "harness:review-custody-preflight:self-test": "node scripts/review-custody-preflight.mjs --self-test",
+    "harness:review-custody-bootstrap": "node scripts/review-custody-bootstrap.mjs",
+    "harness:review-custody-bootstrap:self-test": "node scripts/review-custody-bootstrap.mjs --self-test",
+    "harness:review-custody-comment-validate": "node scripts/review-custody-comment-validate.mjs",
+    "harness:review-custody-comment-validate:self-test": "node scripts/review-custody-comment-validate.mjs --self-test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",

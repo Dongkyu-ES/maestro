@@ -1,7 +1,6 @@
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { join, relative, resolve } from 'node:path';
+import { existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { relative, resolve } from 'node:path';
 import {
   assertEvidenceBoundToLedgerHead,
   type RuntimeEventEnvelope,
@@ -22,6 +21,8 @@ export interface VerifierInput {
   command?: string[];
   mustInclude?: string[];
   forbiddenChangedPaths?: string[];
+  diffStatusArtifactRef?: string;
+  diffStatusExpectedSha256?: string;
   reviewCustody?: { signed: boolean; custodyAttested: boolean; issuerTrusted: boolean };
 }
 
@@ -34,35 +35,50 @@ export interface VerifierResult {
 
 function insideRoot(root: string, ref: string): string | null {
   if (!ref || ref.startsWith('/') || ref.includes('..')) return null;
-  const resolvedRoot = resolve(root);
-  const target = resolve(resolvedRoot, ref);
-  const rel = relative(resolvedRoot, target);
-  if (rel === '..' || rel.startsWith('../') || rel.startsWith('..\\')) return null;
-  return target;
+  try {
+    const resolvedRoot = realpathSync(resolve(root));
+    const lexicalTarget = resolve(resolvedRoot, ref);
+    const lexicalRel = relative(resolvedRoot, lexicalTarget);
+    if (lexicalRel === '..' || lexicalRel.startsWith('../') || lexicalRel.startsWith('..\\')) return null;
+    if (!existsSync(lexicalTarget)) return null;
+    if (lstatSync(lexicalTarget).isSymbolicLink()) return null;
+    const target = realpathSync(lexicalTarget);
+    const rel = relative(resolvedRoot, target);
+    if (rel === '..' || rel.startsWith('../') || rel.startsWith('..\\')) return null;
+    return target;
+  } catch {
+    return null;
+  }
 }
 
 export function runVerifier(input: VerifierInput): VerifierResult {
   if (input.type === 'artifact') {
     const target = input.artifactRef ? insideRoot(input.root, input.artifactRef) : null;
     if (!target || !existsSync(target)) {
-      return { type: input.type, status: 'unproven', evidenceInputs: [], reason: 'artifact missing or outside root' };
+      return { type: input.type, status: 'unproven', evidenceInputs: [], reason: 'artifact missing, symlinked, or outside root' };
     }
-    if (input.expectedSha256) {
-      const actual = createHash('sha256').update(readFileSync(target)).digest('hex');
-      if (actual !== input.expectedSha256) {
-        return {
-          type: input.type,
-          status: 'blocked',
-          evidenceInputs: [input.artifactRef || ''],
-          reason: 'artifact digest mismatch',
-        };
-      }
+    if (!input.expectedSha256) {
+      return {
+        type: input.type,
+        status: 'unproven',
+        evidenceInputs: [input.artifactRef || ''],
+        reason: 'artifact verifier requires expectedSha256',
+      };
+    }
+    const actual = createHash('sha256').update(readFileSync(target)).digest('hex');
+    if (actual !== input.expectedSha256) {
+      return {
+        type: input.type,
+        status: 'blocked',
+        evidenceInputs: [input.artifactRef || ''],
+        reason: 'artifact digest mismatch',
+      };
     }
     return {
       type: input.type,
       status: 'supported',
       evidenceInputs: [input.artifactRef || ''],
-      reason: 'artifact exists and digest matches when provided',
+      reason: 'artifact exists inside root, is not a symlink, and digest matches',
     };
   }
 
@@ -88,35 +104,39 @@ export function runVerifier(input: VerifierInput): VerifierResult {
   }
 
   if (input.type === 'test') {
-    if (!input.command?.length) return { type: input.type, status: 'unproven', evidenceInputs: [], reason: 'missing command' };
-    try {
-      const [cmd, ...args] = input.command;
-      const out = execFileSync(cmd, args, {
-        cwd: input.root,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'pipe'],
-        timeout: 30000,
-      });
-      const ok = (input.mustInclude || []).every((needle) => out.includes(needle));
-      return {
-        type: input.type,
-        status: ok ? 'supported' : 'blocked',
-        evidenceInputs: [input.command.join(' ')],
-        reason: ok ? 'command output matched' : 'command output missing required text',
-      };
-    } catch (error) {
-      return {
-        type: input.type,
-        status: 'blocked',
-        evidenceInputs: [input.command.join(' ')],
-        reason: error instanceof Error ? error.message : String(error),
-      };
-    }
+    return {
+      type: input.type,
+      status: 'unproven',
+      evidenceInputs: input.command?.length ? [input.command.join(' ')] : [],
+      reason: 'test verifier is non-executing; provide a digest-bound artifact or ledger proof instead',
+    };
   }
 
   if (input.type === 'diff') {
-    const status = execFileSync('git', ['status', '--porcelain'], { cwd: input.root, encoding: 'utf8' });
-    const changed = status
+    const target = input.diffStatusArtifactRef ? insideRoot(input.root, input.diffStatusArtifactRef) : null;
+    if (!target || !input.diffStatusExpectedSha256) {
+      return {
+        type: input.type,
+        status: 'unproven',
+        evidenceInputs: input.diffStatusArtifactRef ? [input.diffStatusArtifactRef] : [],
+        reason: 'diff verifier is non-executing; provide digest-bound git status artifact evidence',
+      };
+    }
+    const evidenceRef = input.diffStatusArtifactRef;
+    if (!evidenceRef) {
+      return { type: input.type, status: 'unproven', evidenceInputs: [], reason: 'missing diff status artifact reference' };
+    }
+    const statusText = readFileSync(target, 'utf8');
+    const actual = createHash('sha256').update(statusText).digest('hex');
+    if (actual !== input.diffStatusExpectedSha256) {
+      return {
+        type: input.type,
+        status: 'blocked',
+        evidenceInputs: [evidenceRef],
+        reason: 'diff status artifact digest mismatch',
+      };
+    }
+    const changed = statusText
       .split('\n')
       .filter(Boolean)
       .map((line) => line.slice(3));
@@ -125,8 +145,8 @@ export function runVerifier(input: VerifierInput): VerifierResult {
     return {
       type: input.type,
       status: hit ? 'blocked' : 'supported',
-      evidenceInputs: ['git status --porcelain'],
-      reason: hit ? `forbidden changed path: ${hit}` : 'no forbidden diff paths',
+      evidenceInputs: [evidenceRef],
+      reason: hit ? `forbidden changed path: ${hit}` : 'digest-bound diff artifact contains no forbidden paths',
     };
   }
 

@@ -290,6 +290,22 @@ export function currentReviewInputHash(root: string): string {
     'src/product-gate.ts',
     'src/util.ts',
     'src/core.test.ts',
+    'src/runtime-architecture.test.ts',
+    'src/harness/verifier.ts',
+    'src/harness/verifier.test.ts',
+    'src/harness/promotion-differential.ts',
+    'src/harness/skill-contracts.ts',
+    '.github/workflows/independent-review-gate.yml',
+    '.github/workflows/trusted-independent-review-bundle.yml',
+    'scripts/goal-reachability-harness.mjs',
+    'scripts/review-custody-preflight.mjs',
+    'scripts/review-custody-bootstrap.mjs',
+    'scripts/review-custody-comment-validate.mjs',
+    'package.json',
+    'package-lock.json',
+    'scripts/harness-os-integrity-gate.mjs',
+    'scripts/operator-browser-e2e.mjs',
+    'scripts/operator-codex-web-e2e.mjs',
     'scripts/live-integration-smoke.mjs',
     'docs/milestones/HARD_COMPLETION_GATES.md',
     'docs/milestones/FULL_PRODUCT_ROADMAP.md',
@@ -393,12 +409,16 @@ function reviewArtifactOk(root: string, reviewGate: any): boolean {
   );
   const testCustodyIssuer = /(?:^|[-_])(test|fixture)(?:[-_]|$)/i.test(custodyMetadata.custody_issuer);
   const ciCustody = String(prov.custody || '') === 'reviewer-ci';
+  const githubActionsSession = /^https:\/\/github\.com\/[^/]+\/[^/]+\/actions\/runs\/\d+:\d+:[a-f0-9]{40}:[^:]+$/i.test(
+    custodyMetadata.review_session_id,
+  );
   if (String(prov.custody || '') !== 'reviewer-ci') return false;
   if (
     !custodyMetadata.custody_issuer ||
     !trustedIssuers.has(custodyMetadata.custody_issuer) ||
     (ciCustody && process.env.CI !== 'true') ||
     (testCustodyIssuer && process.env.AGENT_ALLOW_TEST_REVIEW_CUSTODY !== '1') ||
+    (ciCustody && !testCustodyIssuer && !githubActionsSession) ||
     !custodyMetadata.review_session_id ||
     custodyMetadata.reviewer_agent_id !== reviewer.agent_id ||
     custodyMetadata.reviewer_artifact_path !== reviewerPath ||
@@ -678,10 +698,13 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
       'Live Integration Gate',
     ]) && declaredHardCeiling !== null;
   const reconciliationGate = jsonIfExists(join(root, AGENT_DIR, 'reconciliation.json'));
+  const projectionErrors = jsonIfExists(join(root, AGENT_DIR, 'projection', 'runtime-projection-errors.json'));
+  const projectionOk = projectionErrors?.status === 'PASS';
   const reconciliationOk =
     liveReconciliation.repaired === 0 &&
     reconciliationGate?.status === 'PASS' &&
-    Number(reconciliationGate?.repaired || 0) === 0;
+    Number(reconciliationGate?.repaired || 0) === 0 &&
+    projectionOk;
   const reviewGate = jsonIfExists(join(root, AGENT_DIR, 'independent-review-gate.json'));
   const independentReviewOk = reviewArtifactOk(root, reviewGate);
   const provenanceCustody = String(reviewGate?.provenance?.custody || '');

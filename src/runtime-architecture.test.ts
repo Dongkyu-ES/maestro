@@ -447,6 +447,55 @@ test('G009 skill contracts distinguish SOFT and HARD without bespoke verifier sp
   assert.match(JSON.stringify(rejected.checks), /bespoke verifier keys forbidden/);
 });
 
+
+
+test('G002 HARD skill contracts reject digestless artifacts and non-executing test bindings', () => {
+  const dir = tempDir();
+  mkdirSync(join(dir, '.agent', 'skill-contracts'), { recursive: true });
+  writeFileSync(join(dir, 'hard-artifact.txt'), 'verified artifact\n');
+  writeFileSync(
+    join(dir, '.agent', 'skill-contracts', 'contracts.json'),
+    JSON.stringify(
+      {
+        contracts: [
+          {
+            schema_version: 1,
+            skill_name: 'digestless-hard-skill',
+            skill_path: '.codex/skills/digestless/SKILL.md',
+            hardness: 'HARD',
+            allowed_tool_intents: ['write_artifact'],
+            verifier_bindings: [{ id: 'digestless-artifact', type: 'artifact', artifactRef: 'hard-artifact.txt' }],
+            forgery_fixture: { id: 'missing-artifact-forgery', binding: { id: 'forged', type: 'artifact', artifactRef: 'missing.txt' } },
+          },
+          {
+            schema_version: 1,
+            skill_name: 'test-command-hard-skill',
+            skill_path: '.codex/skills/test-command/SKILL.md',
+            hardness: 'HARD',
+            allowed_tool_intents: ['run_tests'],
+            verifier_bindings: [
+              {
+                id: 'command-binding',
+                type: 'test',
+                command: ['node', '-e', "require('fs').writeFileSync('verifier-rce.txt','owned'); console.log('PASS')"],
+                mustInclude: ['PASS'],
+              },
+            ],
+            forgery_fixture: { id: 'forged-command', binding: { id: 'forged', type: 'test', command: ['node', '-e', "console.log('PASS')"] } },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  const report = verifySkillContracts({ root: dir });
+  assert.equal(report.decision, 'FAIL');
+  assert.match(JSON.stringify(report.checks), /requires expectedSha256/);
+  assert.match(JSON.stringify(report.checks), /non-executing/);
+  assert.equal(existsSync(join(dir, 'verifier-rce.txt')), false);
+});
+
 test('G009 collect gate rejects skill success text without hard verifier artifacts', async () => {
   const dir = tempDir();
   execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
@@ -924,6 +973,95 @@ test('Phase 1: Codex launch proof persists registry without faking support', () 
   const registry = JSON.parse(readFileSync(join(agentDir, 'runtime', 'codex-sessions.json'), 'utf8'));
   assert.equal(registry.sessions.length, 1);
   assert.equal(registry.sessions[0].evidence_status, proof.status);
+});
+
+
+
+test('G010 runtime projection backfills valid legacy prev hashes for projection only', () => {
+  const dir = tempDir();
+  const runDir = join(dir, '.agent', 'runs', 'legacy-run');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'run.yaml'), 'id: legacy-run\nstatus: completed\ndecision: pass\n');
+  writeFileSync(
+    join(runDir, 'events.jsonl'),
+    `${JSON.stringify({
+      schema_version: 1,
+      event_id: 'legacy-event',
+      run_id: 'legacy-run',
+      correlation_id: 'legacy-run',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      source: 'legacy',
+      type: 'run.completed',
+      sequence: 1,
+      payload: {},
+      artifact_refs: [],
+      payload_sha256: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
+    })}\n`,
+  );
+  const projection = rebuildRuntimeProjectionStore(dir);
+  assert.equal(findProjectedRun(projection, 'legacy-run')?.status, 'completed');
+  const errors = JSON.parse(readFileSync(join(dir, '.agent', 'projection', 'runtime-projection-errors.json'), 'utf8'));
+  assert.equal(errors.status, 'PASS');
+  const migrations = JSON.parse(readFileSync(join(dir, '.agent', 'projection', 'runtime-projection-migrations.json'), 'utf8'));
+  assert.equal(migrations.status, 'MIGRATED');
+  assert.equal(migrations.migrations[0].run_id, 'legacy-run');
+});
+
+test('G012 runtime projection quarantines event run_id mismatch even with existing prev hash', () => {
+  const dir = tempDir();
+  const runDir = join(dir, '.agent', 'runs', 'run-directory-id');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'run.yaml'), 'id: run-directory-id\nstatus: completed\ndecision: pass\n');
+  writeFileSync(
+    join(runDir, 'events.jsonl'),
+    `${JSON.stringify({
+      schema_version: 1,
+      event_id: 'event-mismatch',
+      run_id: 'different-run-id',
+      correlation_id: 'run-directory-id',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      source: 'runtime',
+      type: 'run.completed',
+      sequence: 1,
+      payload: {},
+      artifact_refs: [],
+      payload_sha256: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
+      prev_event_sha256: '0'.repeat(64),
+    })}\n`,
+  );
+  rebuildRuntimeProjectionStore(dir);
+  const errors = JSON.parse(readFileSync(join(dir, '.agent', 'projection', 'runtime-projection-errors.json'), 'utf8'));
+  assert.equal(errors.status, 'FAIL');
+  assert.match(errors.errors[0].reason, /run_id mismatch/);
+});
+
+test('G010 runtime projection still quarantines non-migratable legacy ledgers', () => {
+  const dir = tempDir();
+  const runDir = join(dir, '.agent', 'runs', 'bad-legacy-run');
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'run.yaml'), 'id: bad-legacy-run\nstatus: completed\ndecision: pass\n');
+  writeFileSync(
+    join(runDir, 'events.jsonl'),
+    `${JSON.stringify({
+      schema_version: 1,
+      event_id: 'legacy-event',
+      run_id: 'bad-legacy-run',
+      correlation_id: 'bad-legacy-run',
+      timestamp: '2026-01-01T00:00:00.000Z',
+      source: 'legacy',
+      type: 'run.completed',
+      sequence: 1,
+      payload: { tampered: true },
+      artifact_refs: [],
+      payload_sha256: '44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a',
+    })}\n`,
+  );
+  const projection = rebuildRuntimeProjectionStore(dir);
+  assert.equal(projection.runs.length, 0);
+  const errors = JSON.parse(readFileSync(join(dir, '.agent', 'projection', 'runtime-projection-errors.json'), 'utf8'));
+  assert.equal(errors.status, 'FAIL');
+  assert.equal(errors.errors[0].run_id, 'bad-legacy-run');
+  assert.match(errors.errors[0].reason, /payload hash mismatch/);
 });
 
 test('Phase 2: runtime projection persists JSON and SQLite projection', async () => {

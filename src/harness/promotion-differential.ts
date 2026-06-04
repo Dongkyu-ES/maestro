@@ -1,7 +1,14 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { createRuntimeLedgerHeadBinding, envelopeHash, type RuntimeEventEnvelope, validateRuntimeLedger } from '../events/ledger.js';
+import {
+  createRuntimeLedgerHeadBinding,
+  envelopeHash,
+  GENESIS_EVENT_HASH,
+  type RuntimeEventEnvelope,
+  payloadHash,
+  validateRuntimeLedger,
+} from '../events/ledger.js';
 
 export interface PromotionDifferentialReport {
   schema_version: 1;
@@ -32,6 +39,41 @@ function digestMatches(root: string, rel: unknown, expected: unknown): boolean {
   return existsSync(full) && sha256(readFileSync(full)) === expected;
 }
 
+
+function normalizeLegacyRuntimeEventsForPromotion(events: RuntimeEventEnvelope[]): { events: RuntimeEventEnvelope[]; migrated: number } {
+  const normalized: RuntimeEventEnvelope[] = [];
+  let migrated = 0;
+  for (const event of events as Array<RuntimeEventEnvelope & { prev_event_sha256?: string }>) {
+    const previous = normalized.at(-1);
+    if (typeof event.prev_event_sha256 === 'string') {
+      normalized.push(event as RuntimeEventEnvelope);
+      continue;
+    }
+    if (
+      event.schema_version !== 1 ||
+      !event.event_id ||
+      !event.run_id ||
+      !event.correlation_id ||
+      !event.timestamp ||
+      !event.source ||
+      !event.type
+    )
+      throw new Error('legacy runtime event is missing non-migratable envelope fields');
+    if (!Number.isInteger(event.sequence) || event.sequence !== (previous ? previous.sequence + 1 : 1))
+      throw new Error('legacy runtime event has invalid sequence');
+    if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload))
+      throw new Error('legacy runtime event has invalid payload');
+    if (!Array.isArray(event.artifact_refs)) throw new Error('legacy runtime event has invalid artifact_refs');
+    if (event.payload_sha256 !== payloadHash(event.payload)) throw new Error('legacy runtime event payload hash mismatch');
+    normalized.push({
+      ...event,
+      prev_event_sha256: previous ? envelopeHash(previous) : GENESIS_EVENT_HASH,
+    } as RuntimeEventEnvelope);
+    migrated++;
+  }
+  return { events: normalized, migrated };
+}
+
 function readCanonicalPromotionLoadedEvent(
   root: string,
   rel: unknown,
@@ -43,15 +85,27 @@ function readCanonicalPromotionLoadedEvent(
   const full = join(root, rel);
   if (!existsSync(full)) return false;
   try {
-    const events = readFileSync(full, 'utf8')
-      .split(/\r?\n/)
-      .filter((line) => line.trim())
-      .map((line) => JSON.parse(line)) as RuntimeEventEnvelope[];
+    const rawEventText = readFileSync(full, 'utf8');
+    const normalized = normalizeLegacyRuntimeEventsForPromotion(
+      rawEventText
+        .split(/\r?\n/)
+        .filter((line) => line.trim())
+        .map((line) => JSON.parse(line)) as RuntimeEventEnvelope[],
+    );
+    const events = normalized.events;
     validateRuntimeLedger(events);
     const binding = createRuntimeLedgerHeadBinding(events);
     if (
+      normalized.migrated > 0 &&
+      (after?.runtime_ledger_compatibility !== 'projection_legacy_prev_hash_backfill' ||
+        after?.runtime_ledger_migrated_events !== normalized.migrated)
+    )
+      return false;
+    if (normalized.migrated === 0 && after?.runtime_ledger_compatibility === 'projection_legacy_prev_hash_backfill')
+      return false;
+    if (
       typeof after?.runtime_events_sha256 !== 'string' ||
-      sha256(readFileSync(full, 'utf8')) !== after.runtime_events_sha256 ||
+      sha256(rawEventText) !== after.runtime_events_sha256 ||
       typeof after?.promotion_loaded_event_sequence !== 'number' ||
       typeof after?.promotion_loaded_event_sha256 !== 'string' ||
       after?.runtime_event_count !== binding.event_count ||
@@ -74,6 +128,7 @@ function readCanonicalPromotionLoadedEvent(
     return false;
   }
 }
+
 
 export function verifyPromotionDifferential(options: { root: string; agentDir?: string }): PromotionDifferentialReport {
   const agentDir = options.agentDir || '.agent';

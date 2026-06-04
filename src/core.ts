@@ -13,7 +13,16 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { buildCompositionPlan } from './composition/composition.js';
-import { appendRuntimeEvent, createRuntimeLedgerHeadBinding, envelopeHash, type RuntimeEventEnvelope, readRuntimeEvents } from './events/ledger.js';
+import {
+  appendRuntimeEvent,
+  createRuntimeLedgerHeadBinding,
+  envelopeHash,
+  GENESIS_EVENT_HASH,
+  type RuntimeEventEnvelope,
+  payloadHash,
+  readRuntimeEvents,
+  validateRuntimeLedger,
+} from './events/ledger.js';
 import { skillContractIssuesForRun } from './harness/skill-contracts.js';
 import { evaluatePermission } from './policy/permission-broker.js';
 import { findProjectedRun, type RuntimeProjection, rebuildRuntimeProjection } from './projection/projection.js';
@@ -2820,20 +2829,90 @@ export function rebuildIndex(cwd = process.cwd()): ProductIndex {
   return index;
 }
 
+
+function normalizeLegacyRuntimeEventsForProjection(runId: string, events: RuntimeEventEnvelope[]): {
+  events: RuntimeEventEnvelope[];
+  migrated: number;
+} {
+  let migrated = 0;
+  const normalized: RuntimeEventEnvelope[] = [];
+  for (const event of events as Array<RuntimeEventEnvelope & { prev_event_sha256?: string }>) {
+    const previous = normalized.at(-1);
+    if (event.run_id !== runId) throw new Error(`runtime event run_id mismatch: expected ${runId}, got ${event.run_id}`);
+    if (typeof event.prev_event_sha256 === 'string') {
+      normalized.push(event as RuntimeEventEnvelope);
+      continue;
+    }
+    if (event.schema_version !== 1 || !event.event_id || !event.correlation_id || !event.timestamp || !event.source || !event.type)
+      throw new Error('legacy runtime event is missing non-migratable envelope fields');
+    if (!Number.isInteger(event.sequence) || event.sequence < 1) throw new Error('legacy runtime event has invalid sequence');
+    if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload))
+      throw new Error('legacy runtime event has invalid payload');
+    if (!Array.isArray(event.artifact_refs)) throw new Error('legacy runtime event has invalid artifact_refs');
+    if (event.payload_sha256 !== payloadHash(event.payload)) throw new Error('legacy runtime event payload hash mismatch');
+    const expectedSequence = previous ? previous.sequence + 1 : 1;
+    if (event.sequence !== expectedSequence) throw new Error(`legacy runtime event has non-contiguous sequence: ${event.sequence}`);
+    normalized.push({
+      ...event,
+      prev_event_sha256: previous ? envelopeHash(previous) : GENESIS_EVENT_HASH,
+    } as RuntimeEventEnvelope);
+    migrated++;
+  }
+  return { events: normalized, migrated };
+}
 export function rebuildRuntimeProjectionStore(cwd = process.cwd()): RuntimeProjection {
   const root = projectRoot(cwd);
   const runsDir = safeJoin(root, AGENT_DIR, 'runs');
   const events: RuntimeEventEnvelope[] = [];
+  const errors: { run_id: string; reason: string }[] = [];
+  const migrations: { run_id: string; migrated_events: number; reason: string }[] = [];
   if (existsSync(runsDir)) {
     for (const runId of readdirSync(runsDir).sort()) {
       const dir = join(runsDir, runId);
-      if (statSync(dir).isDirectory()) events.push(...readRuntimeEvents(dir));
+      if (!statSync(dir).isDirectory()) continue;
+      try {
+        const normalized = normalizeLegacyRuntimeEventsForProjection(runId, readRuntimeEvents(dir));
+        validateRuntimeLedger(normalized.events);
+        if (normalized.migrated > 0)
+          migrations.push({
+            run_id: runId,
+            migrated_events: normalized.migrated,
+            reason: 'backfilled missing prev_event_sha256 for projection-only legacy ledger compatibility',
+          });
+        events.push(...normalized.events);
+      } catch (err: any) {
+        errors.push({ run_id: runId, reason: String(err.message || err) });
+      }
     }
   }
   const projection = rebuildRuntimeProjection(events);
   const projectionDir = safeJoin(root, AGENT_DIR, 'projection');
   ensureDir(projectionDir);
   writeFileSync(join(projectionDir, 'runtime-projection.json'), JSON.stringify(projection, null, 2));
+  writeFileSync(
+    join(projectionDir, 'runtime-projection-errors.json'),
+    JSON.stringify(
+      {
+        status: errors.length ? 'FAIL' : 'PASS',
+        generated_at: nowIso(),
+        errors,
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(
+    join(projectionDir, 'runtime-projection-migrations.json'),
+    JSON.stringify(
+      {
+        status: migrations.length ? 'MIGRATED' : 'NONE',
+        generated_at: nowIso(),
+        migrations,
+      },
+      null,
+      2,
+    ),
+  );
   try {
     writeProjectionSqlite(join(projectionDir, 'runtime.sqlite'), projection);
   } catch (err: any) {

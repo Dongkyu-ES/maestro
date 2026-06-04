@@ -99,6 +99,10 @@ function validateContract(root: string, contract: AcceptanceContract): SkillCont
   for (const binding of bindings) {
     if (!binding.id) reasons.push(`${contract.skill_name}: verifier binding missing id`);
     if (!SHARED_VERIFIER_TYPES.has(binding.type)) reasons.push(`${contract.skill_name}: verifier binding uses non-shared type ${String(binding.type)}`);
+    if (hardness === 'HARD' && binding.type === 'artifact' && !binding.expectedSha256)
+      reasons.push(`${binding.id}: HARD artifact verifier binding requires expectedSha256`);
+    if (hardness === 'HARD' && binding.type === 'test')
+      reasons.push(`${binding.id}: HARD test verifier bindings are non-executing; use digest-bound artifacts or ledger proof`);
     const extras = unknownBindingKeys(binding);
     if (extras.length) reasons.push(`${contract.skill_name}: bespoke verifier keys forbidden (${extras.join(', ')})`);
   }

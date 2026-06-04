@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -13,12 +14,72 @@ function tmpRoot(): string {
 test('M7 shared verifier rejects constant artifact decisions with digest-sensitive input', () => {
   const root = tmpRoot();
   writeFileSync(join(root, 'artifact.txt'), 'real evidence');
-  const good = runVerifier({ type: 'artifact', root, artifactRef: 'artifact.txt' });
+  const expectedSha256 = createHash('sha256').update('real evidence').digest('hex');
+  const good = runVerifier({ type: 'artifact', root, artifactRef: 'artifact.txt', expectedSha256 });
   assert.equal(good.status, 'supported');
   assertVerifierInputSensitive(
-    { type: 'artifact', root, artifactRef: 'artifact.txt' },
-    { type: 'artifact', root, artifactRef: 'missing.txt' },
+    { type: 'artifact', root, artifactRef: 'artifact.txt', expectedSha256 },
+    { type: 'artifact', root, artifactRef: 'missing.txt', expectedSha256 },
   );
+  const digestless = runVerifier({ type: 'artifact', root, artifactRef: 'artifact.txt' });
+  assert.equal(digestless.status, 'unproven');
+  assert.match(digestless.reason, /requires expectedSha256/);
+});
+
+
+test('G002 artifact verifier rejects symlink evidence even when the target exists outside root', () => {
+  const root = tmpRoot();
+  const outside = join(tmpRoot(), 'outside.txt');
+  writeFileSync(outside, 'outside evidence');
+  symlinkSync(outside, join(root, 'link.txt'));
+  const expectedSha256 = createHash('sha256').update('outside evidence').digest('hex');
+  const result = runVerifier({ type: 'artifact', root, artifactRef: 'link.txt', expectedSha256 });
+  assert.equal(result.status, 'unproven');
+  assert.match(result.reason, /symlinked|outside root/);
+});
+
+test('G002 test verifier is non-executing and cannot create side effects', () => {
+  const root = tmpRoot();
+  const result = runVerifier({
+    type: 'test',
+    root,
+    command: ['node', '-e', "require('fs').writeFileSync('verifier-rce.txt','owned')"],
+    mustInclude: ['anything'],
+  });
+  assert.equal(result.status, 'unproven');
+  assert.match(result.reason, /non-executing/);
+  assert.equal(runVerifier({ type: 'artifact', root, artifactRef: 'verifier-rce.txt', expectedSha256: 'x' }).status, 'unproven');
+});
+
+
+
+test('G012 diff verifier is non-executing and requires digest-bound status artifact', () => {
+  const root = tmpRoot();
+  const unproven = runVerifier({ type: 'diff', root, forbiddenChangedPaths: ['secret.txt'] });
+  assert.equal(unproven.status, 'unproven');
+  assert.match(unproven.reason, /non-executing/);
+
+  const statusText = ' M safe.txt\n M secret.txt\n';
+  writeFileSync(join(root, 'git-status.txt'), statusText);
+  const expected = createHash('sha256').update(statusText).digest('hex');
+  const blocked = runVerifier({
+    type: 'diff',
+    root,
+    diffStatusArtifactRef: 'git-status.txt',
+    diffStatusExpectedSha256: expected,
+    forbiddenChangedPaths: ['secret.txt'],
+  });
+  assert.equal(blocked.status, 'blocked');
+  assert.match(blocked.reason, /secret\.txt/);
+
+  const supported = runVerifier({
+    type: 'diff',
+    root,
+    diffStatusArtifactRef: 'git-status.txt',
+    diffStatusExpectedSha256: expected,
+    forbiddenChangedPaths: ['other.txt'],
+  });
+  assert.equal(supported.status, 'supported');
 });
 
 test('M7 ledger verifier rejects stale head bindings instead of accepting old evidence', () => {

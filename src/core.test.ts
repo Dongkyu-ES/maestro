@@ -43,6 +43,22 @@ function currentReviewInputHashForTest(dir = process.cwd()): string {
     'src/product-gate.ts',
     'src/util.ts',
     'src/core.test.ts',
+    'src/runtime-architecture.test.ts',
+    'src/harness/verifier.ts',
+    'src/harness/verifier.test.ts',
+    'src/harness/promotion-differential.ts',
+    'src/harness/skill-contracts.ts',
+    '.github/workflows/independent-review-gate.yml',
+    '.github/workflows/trusted-independent-review-bundle.yml',
+    'scripts/goal-reachability-harness.mjs',
+    'scripts/review-custody-preflight.mjs',
+    'scripts/review-custody-bootstrap.mjs',
+    'scripts/review-custody-comment-validate.mjs',
+    'package.json',
+    'package-lock.json',
+    'scripts/harness-os-integrity-gate.mjs',
+    'scripts/operator-browser-e2e.mjs',
+    'scripts/operator-codex-web-e2e.mjs',
     'scripts/live-integration-smoke.mjs',
     'docs/milestones/HARD_COMPLETION_GATES.md',
     'docs/milestones/FULL_PRODUCT_ROADMAP.md',
@@ -150,7 +166,7 @@ function writeMachineHardGateFixtures(dir: string): void {
     'id: promo-after\ntask_id: task-promo\nrun_dir: .agent/runs/promo-after\nmode: basic\nstatus: completed\ndecision: pass\n',
   );
   const loadedEvent = appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
-    runId: 'after',
+    runId: 'promo-after',
     source: 'runtime-manager',
     type: 'promotion.loaded',
     payload: {
@@ -166,7 +182,7 @@ function writeMachineHardGateFixtures(dir: string): void {
   const runtimeLedgerHead = createRuntimeLedgerHeadBinding(runtimeEvents);
   const persistedLoadedEvent = runtimeEvents.find((event) => event.sequence === loadedEvent.sequence && event.type === 'promotion.loaded') || loadedEvent;
   const afterRunSha = writeJsonArtifact(dir, '.agent/runs/promo-after/promotion-state.json', {
-    run_id: 'after',
+    run_id: 'promo-after',
     task_context_sha256: taskContextSha,
     loaded_promotion_artifact_sha256: loadedPromotionSha,
     runtime_events_path: runtimeEventsRel,
@@ -379,11 +395,26 @@ function buildGateRepo(): string {
     'docs/milestones/HARD_COMPLETION_GATES.md',
     'docs/milestones/PRODUCT_GATE_RERUN_REPORT.md',
     'package.json',
+    'package-lock.json',
     'src/core.ts',
     'src/cli.ts',
     'src/product-gate.ts',
     'src/util.ts',
     'src/core.test.ts',
+    'src/runtime-architecture.test.ts',
+    'src/harness/verifier.ts',
+    'src/harness/verifier.test.ts',
+    'src/harness/promotion-differential.ts',
+    'src/harness/skill-contracts.ts',
+    '.github/workflows/independent-review-gate.yml',
+    '.github/workflows/trusted-independent-review-bundle.yml',
+    'scripts/goal-reachability-harness.mjs',
+    'scripts/review-custody-preflight.mjs',
+    'scripts/review-custody-bootstrap.mjs',
+    'scripts/review-custody-comment-validate.mjs',
+    'scripts/harness-os-integrity-gate.mjs',
+    'scripts/operator-browser-e2e.mjs',
+    'scripts/operator-codex-web-e2e.mjs',
     'scripts/live-integration-smoke.mjs',
     'docs/milestones/REVIEW_PROVENANCE.md',
   ];
@@ -443,8 +474,6 @@ UI shows worker lanes. Run detail UI showing all required evidence.
   // The gate runs dist/cli.js --help/--version and the live-smoke script runs the
   // built CLI, so the whole compiled output is required.
   cpSync(join(gateRepoRoot, 'dist'), join(dir, 'dist'), { recursive: true });
-  // Signed, internally consistent independent-review gate (sets the test HMAC key).
-  writePassingReviewGate(dir);
   writeMachineHardGateFixtures(dir);
   // Live integration smoke artifact dogfoodEvidence/liveOk reads before the gate
   // re-runs the smoke script itself.
@@ -465,6 +494,13 @@ UI shows worker lanes. Run detail UI showing all required evidence.
       2,
     ),
   );
+  writeJsonArtifact(dir, '.agent/projection/runtime-projection-errors.json', {
+    status: 'PASS',
+    errors: [],
+  });
+  // Signed, internally consistent independent-review gate (sets the test HMAC key)
+  // after all copied gate-input files are fixture-adjusted.
+  writePassingReviewGate(dir);
   // reconciliation.json is regenerated as PASS by runProductGate -> reconcileRuns
   // because the temp repo has no .agent/runs; no need to pre-write it.
   return dir;
@@ -633,6 +669,70 @@ test('G008 promotion differential verifies three-run effect from raw artifacts',
   assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
 });
 
+
+
+test('G011 promotion differential accepts explicit legacy prev-hash backfill when digests are rebound', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  writeMachineHardGateFixtures(dir);
+  const eventsPath = join(dir, '.agent/runs/promo-after/events.jsonl');
+  const originalEvents = readRuntimeEvents(join(dir, '.agent/runs/promo-after'));
+  const legacyEvents = originalEvents.map((event) => {
+    const copy = { ...event } as Record<string, unknown>;
+    delete copy.prev_event_sha256;
+    return copy;
+  });
+  writeFileSync(eventsPath, `${legacyEvents.map((event) => JSON.stringify(event)).join('\n')}\n`);
+  const normalizedLoaded = { ...legacyEvents[0], prev_event_sha256: '0'.repeat(64) };
+  const afterPath = join(dir, '.agent/runs/promo-after/promotion-state.json');
+  const after = JSON.parse(readFileSync(afterPath, 'utf8'));
+  after.runtime_events_sha256 = hashTextForTest(readFileSync(eventsPath, 'utf8'));
+  after.promotion_loaded_event_sha256 = envelopeHash(normalizedLoaded as any);
+  after.runtime_ledger_head_sha256 = after.promotion_loaded_event_sha256;
+  after.runtime_ledger_compatibility = 'projection_legacy_prev_hash_backfill';
+  after.runtime_ledger_migrated_events = legacyEvents.length;
+  writeFileSync(afterPath, `${JSON.stringify(after, null, 2)}\n`);
+  const gatePath = join(dir, '.agent/hard-gates/promotion-learning.json');
+  const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+  gate.after_run_sha256 = hashTextForTest(readFileSync(afterPath, 'utf8'));
+  const effectPath = join(dir, '.agent/hard-gates/promotion/effect.json');
+  const effect = JSON.parse(readFileSync(effectPath, 'utf8'));
+  effect.after_run_sha256 = gate.after_run_sha256;
+  writeFileSync(effectPath, `${JSON.stringify(effect, null, 2)}\n`);
+  gate.promotion_effect_sha256 = hashTextForTest(readFileSync(effectPath, 'utf8'));
+  writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}\n`);
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
+});
+
+test('G012 promotion differential rejects legacy prev-hash backfill without explicit compatibility marker', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  writeMachineHardGateFixtures(dir);
+  const eventsPath = join(dir, '.agent/runs/promo-after/events.jsonl');
+  const originalEvents = readRuntimeEvents(join(dir, '.agent/runs/promo-after'));
+  const legacyEvents = originalEvents.map((event) => {
+    const copy = { ...event } as Record<string, unknown>;
+    delete copy.prev_event_sha256;
+    return copy;
+  });
+  writeFileSync(eventsPath, `${legacyEvents.map((event) => JSON.stringify(event)).join('\n')}\n`);
+  const normalizedLoaded = { ...legacyEvents[0], prev_event_sha256: '0'.repeat(64) };
+  const afterPath = join(dir, '.agent/runs/promo-after/promotion-state.json');
+  const after = JSON.parse(readFileSync(afterPath, 'utf8'));
+  after.runtime_events_sha256 = hashTextForTest(readFileSync(eventsPath, 'utf8'));
+  after.promotion_loaded_event_sha256 = envelopeHash(normalizedLoaded as any);
+  after.runtime_ledger_head_sha256 = after.promotion_loaded_event_sha256;
+  delete after.runtime_ledger_compatibility;
+  delete after.runtime_ledger_migrated_events;
+  writeFileSync(afterPath, `${JSON.stringify(after, null, 2)}\n`);
+  const gatePath = join(dir, '.agent/hard-gates/promotion-learning.json');
+  const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+  gate.after_run_sha256 = hashTextForTest(readFileSync(afterPath, 'utf8'));
+  writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}\n`);
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.loaded_artifact_proves_after, false);
+});
+
 test('G008 promotion differential rejects edited PASS summary without raw run evidence', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
   mkdirSync(join(dir, '.agent', 'hard-gates'), { recursive: true });
@@ -669,7 +769,7 @@ test('G008 promotion differential rejects swapped canonical runtime ledger with 
   rmSync(join(dir, '.agent/runs/promo-after/events.jsonl'), { force: true });
   const gate = JSON.parse(readFileSync(join(dir, '.agent/hard-gates/promotion-learning.json'), 'utf8'));
   appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
-    runId: 'after',
+    runId: 'promo-after',
     source: 'runtime-manager',
     type: 'promotion.loaded',
     payload: {
@@ -688,7 +788,7 @@ test('G008 promotion differential rejects appended runtime ledger after after-st
   const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
   writeMachineHardGateFixtures(dir);
   appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
-    runId: 'after',
+    runId: 'promo-after',
     source: 'runtime-manager',
     type: 'runtime.session.started',
     payload: { status: 'later event after promotion binding' },
@@ -2031,6 +2131,115 @@ test('redact masks multi-vendor secret formats, not just OpenAI/GitHub', () => {
   assert.equal(redact('explicit command executed'), 'explicit command executed');
 });
 
+test('G012 product gate regenerates and requires explicit projection quarantine PASS evidence', async () => {
+  const dir = buildGateRepo();
+  const projectionPath = join(dir, '.agent', 'projection', 'runtime-projection-errors.json');
+  rmSync(projectionPath, { force: true });
+  const report = (await import('./product-gate.js')).runProductGate(dir);
+  assert.equal(report.decision, 'PASS');
+  const projection = JSON.parse(readFileSync(projectionPath, 'utf8'));
+  assert.equal(projection.status, 'PASS');
+  assert.equal(
+    report.result_reality_delta.some((row) => /Hard completion ceiling/.test(row.target) && /reconciliation=true/.test(row.evidence)),
+    true,
+  );
+});
+
+
+function assertNoRepoControlledCommandsBeforeFirstSecret(workflow: string): void {
+  const firstSecret = workflow.indexOf('${{ secrets.');
+  assert.ok(firstSecret > 0, 'workflow must contain a secret-scoped step');
+  const beforeSecret = workflow.slice(0, firstSecret);
+  assert.doesNotMatch(beforeSecret, /npm ci|npm run build|npm test|npm run e2e|node dist\/cli\.js/);
+}
+
+function assertNoDispatchInputsInRunBlocks(workflow: string): void {
+  const runBlocks = [...workflow.matchAll(/run: \|\n([\s\S]*?)(?=\n\s{6}- name:|\n\s{6}- uses:|\n\s{4}[A-Za-z_-]+:|$)/g)].map((match) => match[1]);
+  assert.ok(runBlocks.length > 0);
+  for (const block of runBlocks) {
+    assert.doesNotMatch(block, /\$\{\{\s*inputs\./, 'workflow dispatch inputs must not be interpolated directly in run blocks');
+  }
+}
+
+test('G012 independent review workflow requires trusted attested reviewer bundle provenance', () => {
+  const workflow = readFileSync(join(gateRepoRoot, '.github/workflows/independent-review-gate.yml'), 'utf8');
+  assert.match(workflow, /review_run_id/);
+  assert.doesNotMatch(workflow, /code_reviewer_artifact:/);
+  assert.match(workflow, /AGENT_TRUSTED_REVIEW_WORKFLOW_PATH/);
+  assert.match(workflow, /workflow_id/);
+  assert.match(workflow, /workflow_path/);
+  assert.match(workflow, /AGENT_TRUSTED_REVIEW_ACTORS/);
+  assert.match(workflow, /AGENT_REVIEW_BUNDLE_HMAC_KEY/);
+  assert.match(workflow, /reviewer-bundle-attestation\.json/);
+  assert.match(workflow, /review bundle attestation signature mismatch/);
+  assertNoRepoControlledCommandsBeforeFirstSecret(workflow);
+  assert.match(workflow, /CURRENT_REVIEW_INPUT_HASH/);
+  assert.match(workflow, /reviewInputFiles/);
+  assert.ok(workflow.indexOf('AGENT_REVIEW_BUNDLE_HMAC_KEY: ${{ secrets.AGENT_REVIEW_BUNDLE_HMAC_KEY }}') > workflow.indexOf('- name: Verify reviewer bundle attestation'));
+  assert.ok(workflow.indexOf('AGENT_REVIEW_HMAC_KEY: ${{ secrets.AGENT_REVIEW_HMAC_KEY }}') > workflow.indexOf('- name: Custody-attest independent review'));
+  assert.ok(workflow.indexOf('AGENT_REVIEW_CUSTODY_HMAC_KEY: ${{ secrets.AGENT_REVIEW_CUSTODY_HMAC_KEY }}') > workflow.indexOf('- name: Custody-attest independent review'));
+  assert.match(workflow, /source: 'codex-native-subagent'/);
+  assert.match(workflow, /status: 'completed'/);
+  assert.match(workflow, /completed_at: new Date\(\)\.toISOString\(\)/);
+  assert.match(workflow, /commands: \['npm test', 'npm run e2e', 'node dist\/cli\.js quality gate --write'\]/);
+  assertNoDispatchInputsInRunBlocks(workflow);
+  assert.match(workflow, /review_run_id.*\n[\s\S]*case "\$REVIEW_RUN_ID" in \(\*\[!0-9\]\*\|''\)/);
+  assert.match(workflow, /\[\[ "\$CODE_REVIEWER_AGENT" =~ \^019\[a-fA-F0-9\]/);
+});
+
+test('G013 trusted reviewer bundle workflow produces custody-attested artifact without run-block input interpolation', () => {
+  const workflow = readFileSync(join(gateRepoRoot, '.github/workflows/trusted-independent-review-bundle.yml'), 'utf8');
+  assert.match(workflow, /^name: Trusted Independent Reviewer Bundle/m);
+  assert.match(workflow, /environment: trusted-reviewer-custody/);
+  assertNoRepoControlledCommandsBeforeFirstSecret(workflow);
+  assert.match(workflow, /AGENT_REVIEW_BUNDLE_HMAC_KEY: \${{ secrets\.AGENT_REVIEW_BUNDLE_HMAC_KEY }}/);
+  assert.ok(workflow.indexOf('AGENT_REVIEW_BUNDLE_HMAC_KEY: ${{ secrets.AGENT_REVIEW_BUNDLE_HMAC_KEY }}') > workflow.indexOf('- name: Build signed reviewer bundle from trusted comments'));
+  assert.match(workflow, /AGENT_TRUSTED_REVIEW_WORKFLOW_PATH/);
+  assert.match(workflow, /AGENT_TRUSTED_REVIEW_ACTORS/);
+  assert.doesNotMatch(workflow, /completed_b64/i);
+  assert.doesNotMatch(workflow, /CODE_REVIEWER_COMPLETED_B64/);
+  assert.match(workflow, /code_reviewer_comment_id/);
+  assert.match(workflow, /architect_comment_id/);
+  assert.match(workflow, /issues\/comments\/\$CODE_REVIEWER_COMMENT_ID/);
+  assert.match(workflow, /comment body must be notification JSON, not prose/);
+  assert.match(workflow, /comment author is not trusted/);
+  assert.match(workflow, /reviewed_head_sha mismatch/);
+  assert.match(workflow, /reviewed_input_sha256 mismatch/);
+  assert.match(workflow, /reviewInputFiles/);
+  assert.match(workflow, /reviewer-bundle-attestation\.json/);
+  assert.match(workflow, /actions\/upload-artifact@v4/);
+  assert.match(workflow, /workflow_id=\$\(gh api repos/);
+  assert.match(workflow, /test "\$workflow_path" = "\$AGENT_TRUSTED_REVIEW_WORKFLOW_PATH"/);
+  assert.match(workflow, /reviewer and architect agent ids must differ/);
+  assert.match(workflow, /Recommendation\\s\*:\\s\*APPROVE/);
+  assert.match(workflow, /Architectural Status\\s\*:\\s\*CLEAR/);
+  assertNoDispatchInputsInRunBlocks(workflow);
+});
+
+test('G012 review input hash changes when trust-boundary implementation files change', () => {
+  for (const rel of [
+    'src/harness/verifier.ts',
+    'src/harness/promotion-differential.ts',
+    '.github/workflows/independent-review-gate.yml',
+    '.github/workflows/trusted-independent-review-bundle.yml',
+    'package.json',
+    'package-lock.json',
+    'scripts/review-custody-preflight.mjs',
+    'scripts/review-custody-bootstrap.mjs',
+    'scripts/review-custody-comment-validate.mjs',
+    'scripts/harness-os-integrity-gate.mjs',
+    'scripts/operator-browser-e2e.mjs',
+    'scripts/operator-codex-web-e2e.mjs',
+  ]) {
+    const dir = buildGateRepo();
+    const before = currentReviewInputHashForTest(dir);
+    const targetPath = join(dir, rel);
+    writeFileSync(targetPath, `${readFileSync(targetPath, 'utf8')}\n// trust boundary changed\n`);
+    const after = currentReviewInputHashForTest(dir);
+    assert.notEqual(after, before, rel);
+  }
+});
+
 test('hard completion ceiling requires independent review and reconciliation artifacts', async () => {
   const dir = buildGateRepo();
   const reviewPath = join(dir, '.agent', 'independent-review-gate.json');
@@ -2322,7 +2531,7 @@ test('machine hard gates for role, promotion, and browser evidence are required 
 test('product gate uses hardened promotion differential and rejects appended promotion ledger', async () => {
   const dir = buildGateRepo();
   appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
-    runId: 'after',
+    runId: 'promo-after',
     source: 'runtime-manager',
     type: 'runtime.session.started',
     payload: { status: 'later event after promotion binding' },

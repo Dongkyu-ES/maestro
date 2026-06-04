@@ -28,7 +28,7 @@ input_sha256:reviewer_artifact_sha256:architect_artifact_sha256
 custody:input_sha256:provenance.signature:custody_issuer:review_session_id:reviewer_agent_id:reviewer_artifact_path:architect_artifact_path:reviewer_artifact_sha256:architect_artifact_sha256
 ```
 
-The custody key is read from `AGENT_REVIEW_CUSTODY_HMAC_KEY` or `~/.dominic_orchestration/review-custody.key`. The product gate also requires `custody_issuer` to be present in `AGENT_TRUSTED_REVIEW_CUSTODY_ISSUERS`; test/fixture-looking issuers require explicit `AGENT_ALLOW_TEST_REVIEW_CUSTODY=1` and are not valid for production completion claims.
+The custody key is read from `AGENT_REVIEW_CUSTODY_HMAC_KEY` or `~/.dominic_orchestration/review-custody.key`. In the GitHub trusted-bundle path, the downloaded reviewer bundle must also include `reviewer-bundle-attestation.json` signed by `AGENT_REVIEW_BUNDLE_HMAC_KEY` and bound to the review run id, trusted workflow id/path, actor, commit SHA, agent ids, and reviewer artifact/notification digests. The product gate also requires `custody_issuer` to be present in `AGENT_TRUSTED_REVIEW_CUSTODY_ISSUERS`; test/fixture-looking issuers require explicit `AGENT_ALLOW_TEST_REVIEW_CUSTODY=1` and are not valid for production completion claims.
 
 ## Key custody rule
 
@@ -82,9 +82,16 @@ This command is a signer only. Valid signatures mean “the artifact bundle matc
 - Valid provenance signature plus valid custody signature over current artifacts and required custody metadata, with an allowlisted custody issuer: eligible for hard completion gate review, subject to external custody audit.
 - Valid custody signature from an unallowlisted issuer, or a test/fixture issuer without explicit test-only allowance: invalid and cannot lift the ceiling.
 
+
+## Trusted reviewer bundle workflow rule
+
+The repo-local producer for this path is `.github/workflows/trusted-independent-review-bundle.yml`. It is intentionally separate from the signing workflow and must run under the protected `trusted-reviewer-custody` GitHub environment with `AGENT_REVIEW_BUNDLE_HMAC_KEY` configured as an environment/repository secret. The workflow must not accept reviewer markdown or completed review prose as dispatch input. Dispatch inputs are only selectors: expected reviewer/architect agent ids, trusted GitHub comment ids, and a safe artifact name. The workflow fetches the selected GitHub issue/PR comments through the GitHub API, requires `AGENT_TRUSTED_REVIEW_ACTORS` to be configured, rejects comment authors outside that allowlist, rejects prose comment bodies, and accepts only notification-envelope JSON whose `agent_path` matches the expected agent id, whose `status.reviewed_head_sha` equals the current commit, whose `status.reviewed_input_sha256` equals the current review input hash, and whose `status.completed` contains the required `Recommendation: APPROVE` or `Architectural Status: CLEAR` verdict. It resolves its immutable GitHub workflow id/path through the Actions API and writes `reviewer-bundle-attestation.json` with an HMAC over the exact current review input hash, comment ids, comment authors, artifact digests, notification digests, workflow identity, run id, commit SHA, actor, and agent ids. Dispatch inputs are assigned through workflow `env` and are not interpolated directly inside shell `run` blocks.
+
+The GitHub signing workflow downloads reviewer artifacts from a prior successful workflow run named `Trusted Independent Reviewer Bundle` whose `head_sha` exactly matches the commit being signed, whose workflow path matches `AGENT_TRUSTED_REVIEW_WORKFLOW_PATH`, and whose actor is in `AGENT_TRUSTED_REVIEW_ACTORS` when that allowlist is configured. The dispatch inputs identify only that trusted run/artifact name and the expected agent ids; they do not accept repo-relative reviewer artifact paths. The bundle must contain a signed attestation over `head_sha`, `review_run_id`, `workflow_id`, `workflow_path`, `actor`, both agent ids, and SHA-256 digests for both review artifacts and notification envelopes. This prevents a branch author from committing fabricated `.agent/review-gates/*.md` files and asking CI to custody-sign them as independent review evidence.
+
 ## Current next action
 
-Use `.github/workflows/independent-review-gate.yml` or an equivalent reviewer-owned CI job with `AGENT_REVIEW_HMAC_KEY` and `AGENT_REVIEW_CUSTODY_HMAC_KEY` configured as CI secrets, then rerun:
+Use `.github/workflows/independent-review-gate.yml` only with a successful `Trusted Independent Reviewer Bundle` GitHub Actions run for the same commit, or use an equivalent reviewer-owned CI job with immutable artifact/run attestation plus `AGENT_REVIEW_HMAC_KEY` and `AGENT_REVIEW_CUSTODY_HMAC_KEY` configured as CI secrets. The signing workflow must not read reviewer markdown directly from caller-controlled repo paths. Then rerun:
 
 ```bash
 npm test

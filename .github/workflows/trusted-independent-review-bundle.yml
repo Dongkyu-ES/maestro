@@ -1,0 +1,237 @@
+name: Trusted Independent Reviewer Bundle
+
+on:
+  workflow_dispatch:
+    inputs:
+      code_reviewer_agent:
+        description: Code-reviewer Codex native subagent id expected in the trusted notification comment
+        required: true
+      architect_agent:
+        description: Architect Codex native subagent id expected in the trusted notification comment
+        required: true
+      code_reviewer_comment_id:
+        description: GitHub issue/PR comment id containing the trusted code-reviewer notification JSON
+        required: true
+      architect_comment_id:
+        description: GitHub issue/PR comment id containing the trusted architect notification JSON
+        required: true
+      artifact_name:
+        description: Artifact name consumed by independent-review-gate.yml
+        required: true
+        default: trusted-independent-review-bundle
+
+jobs:
+  trusted-independent-review-bundle:
+    runs-on: ubuntu-latest
+    environment: trusted-reviewer-custody
+    permissions:
+      contents: read
+      issues: read
+      pull-requests: read
+      actions: read
+    env:
+      AGENT_TRUSTED_REVIEW_WORKFLOW_PATH: ${{ vars.AGENT_TRUSTED_REVIEW_WORKFLOW_PATH || '.github/workflows/trusted-independent-review-bundle.yml' }}
+      AGENT_TRUSTED_REVIEW_ACTORS: ${{ vars.AGENT_TRUSTED_REVIEW_ACTORS }}
+      CODE_REVIEWER_AGENT: ${{ inputs.code_reviewer_agent }}
+      ARCHITECT_AGENT: ${{ inputs.architect_agent }}
+      CODE_REVIEWER_COMMENT_ID: ${{ inputs.code_reviewer_comment_id }}
+      ARCHITECT_COMMENT_ID: ${{ inputs.architect_comment_id }}
+      REVIEW_ARTIFACT_NAME: ${{ inputs.artifact_name }}
+      REVIEW_RUN_ID: ${{ github.run_id }}
+      REVIEW_HEAD_SHA: ${{ github.sha }}
+      REVIEW_ACTOR: ${{ github.actor }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Resolve current review input hash without repo code execution
+        run: |
+          node --input-type=module <<'NODE'
+          import { createHash } from 'node:crypto';
+          import { existsSync, readFileSync, appendFileSync } from 'node:fs';
+
+          const reviewInputFiles = [
+            'src/core.ts',
+            'src/cli.ts',
+            'src/product-gate.ts',
+            'src/util.ts',
+            'src/core.test.ts',
+            'src/runtime-architecture.test.ts',
+            'src/harness/verifier.ts',
+            'src/harness/verifier.test.ts',
+            'src/harness/promotion-differential.ts',
+            'src/harness/skill-contracts.ts',
+            '.github/workflows/independent-review-gate.yml',
+            '.github/workflows/trusted-independent-review-bundle.yml',
+            'scripts/goal-reachability-harness.mjs',
+            'scripts/review-custody-preflight.mjs',
+            'scripts/review-custody-bootstrap.mjs',
+            'scripts/review-custody-comment-validate.mjs',
+            'package.json',
+            'package-lock.json',
+            'scripts/harness-os-integrity-gate.mjs',
+            'scripts/operator-browser-e2e.mjs',
+            'scripts/operator-codex-web-e2e.mjs',
+            'scripts/live-integration-smoke.mjs',
+            'docs/milestones/HARD_COMPLETION_GATES.md',
+            'docs/milestones/FULL_PRODUCT_ROADMAP.md',
+            'docs/milestones/DOGFOOD_REPORT.md',
+            'docs/milestones/REVIEW_PROVENANCE.md',
+          ];
+          const reviewInputHash = () => {
+            const digest = createHash('sha256');
+            for (const rel of reviewInputFiles) {
+              digest.update(rel);
+              digest.update(existsSync(rel) ? readFileSync(rel) : 'missing');
+            }
+            return digest.digest('hex');
+          };
+          appendFileSync(process.env.GITHUB_ENV, `REVIEW_INPUT_SHA256=${reviewInputHash()}
+`);
+          NODE
+
+      - name: Validate dispatch selectors before secret use
+        run: |
+          [[ "$CODE_REVIEWER_AGENT" =~ ^019[a-fA-F0-9]{5}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$ ]] || { echo 'invalid code_reviewer_agent' >&2; exit 2; }
+          [[ "$ARCHITECT_AGENT" =~ ^019[a-fA-F0-9]{5}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$ ]] || { echo 'invalid architect_agent' >&2; exit 2; }
+          test "$CODE_REVIEWER_AGENT" != "$ARCHITECT_AGENT"
+          case "$CODE_REVIEWER_COMMENT_ID" in (*[!0-9]*|'') echo 'invalid code_reviewer_comment_id' >&2; exit 2;; esac
+          case "$ARCHITECT_COMMENT_ID" in (*[!0-9]*|'') echo 'invalid architect_comment_id' >&2; exit 2;; esac
+          test "$CODE_REVIEWER_COMMENT_ID" != "$ARCHITECT_COMMENT_ID"
+          case "$REVIEW_ARTIFACT_NAME" in (*[!A-Za-z0-9._-]*|'') echo 'invalid artifact_name' >&2; exit 2;; esac
+          test -n "$AGENT_TRUSTED_REVIEW_WORKFLOW_PATH"
+          test -n "$AGENT_TRUSTED_REVIEW_ACTORS"
+
+      - name: Resolve immutable workflow identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          workflow_id=$(gh api repos/${{ github.repository }}/actions/runs/$REVIEW_RUN_ID --jq .workflow_id)
+          workflow_path=$(gh api repos/${{ github.repository }}/actions/workflows/$workflow_id --jq .path)
+          test "$workflow_path" = "$AGENT_TRUSTED_REVIEW_WORKFLOW_PATH"
+          echo "REVIEW_WORKFLOW_ID=$workflow_id" >> "$GITHUB_ENV"
+          echo "REVIEW_WORKFLOW_PATH=$workflow_path" >> "$GITHUB_ENV"
+
+      - name: Fetch trusted reviewer notification comments
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p .agent/review-gates/comment-source
+          gh api repos/${{ github.repository }}/issues/comments/$CODE_REVIEWER_COMMENT_ID > .agent/review-gates/comment-source/code-reviewer-comment.json
+          gh api repos/${{ github.repository }}/issues/comments/$ARCHITECT_COMMENT_ID > .agent/review-gates/comment-source/architect-comment.json
+
+      - name: Build signed reviewer bundle from trusted comments
+        env:
+          AGENT_REVIEW_BUNDLE_HMAC_KEY: ${{ secrets.AGENT_REVIEW_BUNDLE_HMAC_KEY }}
+        run: |
+          mkdir -p .agent/review-gates/subagent-notifications
+          node --input-type=module <<'NODE'
+          import { createHash, createHmac } from 'node:crypto';
+          import { readFileSync, writeFileSync } from 'node:fs';
+          const required = (value, name) => {
+            if (!value) throw new Error(`missing ${name}`);
+            return value;
+          };
+          const agentIdRe = /^019[a-fA-F0-9]{5}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{4}-[a-fA-F0-9]{12}$/;
+          const shaText = (text) => createHash('sha256').update(text).digest('hex');
+          const shaFileText = (path, text) => {
+            writeFileSync(path, text);
+            return shaText(text);
+          };
+          const trustedActors = new Set(required(process.env.AGENT_TRUSTED_REVIEW_ACTORS, 'AGENT_TRUSTED_REVIEW_ACTORS').split(',').map((actor) => actor.trim()).filter(Boolean));
+          if (trustedActors.size === 0) throw new Error('trusted reviewer actor allowlist is required');
+          const parseComment = (path, expectedAgent, role, requiredPattern) => {
+            const comment = JSON.parse(readFileSync(path, 'utf8'));
+            const author = comment?.user?.login;
+            if (!trustedActors.has(author)) throw new Error(`${role} comment author is not trusted`);
+            if (comment?.author_association === 'NONE') throw new Error(`${role} comment has untrusted author association`);
+            const body = String(comment?.body || '').trim();
+            if (!body.startsWith('{')) throw new Error(`${role} comment body must be notification JSON, not prose`);
+            const notification = JSON.parse(body);
+            if (notification?.agent_path !== expectedAgent) throw new Error(`${role} notification agent_path mismatch`);
+            const status = notification?.status || {};
+            if (status.reviewed_head_sha !== process.env.REVIEW_HEAD_SHA) throw new Error(`${role} notification reviewed_head_sha mismatch`);
+            if (status.reviewed_input_sha256 !== process.env.REVIEW_INPUT_SHA256) throw new Error(`${role} notification reviewed_input_sha256 mismatch`);
+            const completed = status.completed;
+            if (typeof completed !== 'string' || completed.length < 50) throw new Error(`${role} notification missing completed text`);
+            if (!requiredPattern.test(completed)) throw new Error(`${role} completed text missing required verdict`);
+            return { author, notification, completed };
+          };
+          const codeReviewerAgent = required(process.env.CODE_REVIEWER_AGENT, 'CODE_REVIEWER_AGENT');
+          const architectAgent = required(process.env.ARCHITECT_AGENT, 'ARCHITECT_AGENT');
+          if (!agentIdRe.test(codeReviewerAgent)) throw new Error('invalid CODE_REVIEWER_AGENT');
+          if (!agentIdRe.test(architectAgent)) throw new Error('invalid ARCHITECT_AGENT');
+          if (codeReviewerAgent === architectAgent) throw new Error('reviewer and architect agent ids must differ');
+          const reviewer = parseComment(
+            '.agent/review-gates/comment-source/code-reviewer-comment.json',
+            codeReviewerAgent,
+            'code-reviewer',
+            /code-reviewer[\s\S]*Recommendation\s*:\s*APPROVE/i,
+          );
+          const architect = parseComment(
+            '.agent/review-gates/comment-source/architect-comment.json',
+            architectAgent,
+            'architect',
+            /architect[\s\S]*Architectural Status\s*:\s*CLEAR/i,
+          );
+          const reviewerPath = '.agent/review-gates/code-reviewer.md';
+          const architectPath = '.agent/review-gates/architect.md';
+          const reviewerNotificationPath = `.agent/review-gates/subagent-notifications/${codeReviewerAgent}.json`;
+          const architectNotificationPath = `.agent/review-gates/subagent-notifications/${architectAgent}.json`;
+          const reviewerSha = shaFileText(reviewerPath, reviewer.completed);
+          const architectSha = shaFileText(architectPath, architect.completed);
+          const reviewerNotificationSha = shaFileText(reviewerNotificationPath, `${JSON.stringify(reviewer.notification, null, 2)}\n`);
+          const architectNotificationSha = shaFileText(architectNotificationPath, `${JSON.stringify(architect.notification, null, 2)}\n`);
+          const expected = {
+            schema_version: 1,
+            head_sha: required(process.env.REVIEW_HEAD_SHA, 'REVIEW_HEAD_SHA'),
+            review_run_id: required(process.env.REVIEW_RUN_ID, 'REVIEW_RUN_ID'),
+            workflow_id: required(process.env.REVIEW_WORKFLOW_ID, 'REVIEW_WORKFLOW_ID'),
+            workflow_path: required(process.env.REVIEW_WORKFLOW_PATH, 'REVIEW_WORKFLOW_PATH'),
+            actor: required(process.env.REVIEW_ACTOR, 'REVIEW_ACTOR'),
+            review_input_sha256: required(process.env.REVIEW_INPUT_SHA256, 'REVIEW_INPUT_SHA256'),
+            code_reviewer_agent: codeReviewerAgent,
+            architect_agent: architectAgent,
+            code_reviewer_comment_id: required(process.env.CODE_REVIEWER_COMMENT_ID, 'CODE_REVIEWER_COMMENT_ID'),
+            architect_comment_id: required(process.env.ARCHITECT_COMMENT_ID, 'ARCHITECT_COMMENT_ID'),
+            code_reviewer_comment_author: reviewer.author,
+            architect_comment_author: architect.author,
+            code_reviewer_sha256: reviewerSha,
+            architect_sha256: architectSha,
+            code_reviewer_notification_sha256: reviewerNotificationSha,
+            architect_notification_sha256: architectNotificationSha,
+          };
+          const payload = [
+            expected.schema_version,
+            expected.head_sha,
+            expected.review_run_id,
+            expected.workflow_id,
+            expected.workflow_path,
+            expected.actor,
+            expected.review_input_sha256,
+            expected.code_reviewer_agent,
+            expected.architect_agent,
+            expected.code_reviewer_comment_id,
+            expected.architect_comment_id,
+            expected.code_reviewer_comment_author,
+            expected.architect_comment_author,
+            expected.code_reviewer_sha256,
+            expected.architect_sha256,
+            expected.code_reviewer_notification_sha256,
+            expected.architect_notification_sha256,
+          ].join(':');
+          const signature = createHmac('sha256', required(process.env.AGENT_REVIEW_BUNDLE_HMAC_KEY, 'AGENT_REVIEW_BUNDLE_HMAC_KEY')).update(payload).digest('hex');
+          writeFileSync('.agent/review-gates/reviewer-bundle-attestation.json', `${JSON.stringify({ ...expected, signature }, null, 2)}\n`);
+          NODE
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ inputs.artifact_name }}
+          path: |
+            .agent/review-gates/code-reviewer.md
+            .agent/review-gates/architect.md
+            .agent/review-gates/subagent-notifications/*.json
+            .agent/review-gates/reviewer-bundle-attestation.json
