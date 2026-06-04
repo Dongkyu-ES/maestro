@@ -14,6 +14,7 @@ import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { buildCompositionPlan } from './composition/composition.js';
 import { appendRuntimeEvent, type RuntimeEventEnvelope, readRuntimeEvents } from './events/ledger.js';
+import { skillContractIssuesForRun } from './harness/skill-contracts.js';
 import { evaluatePermission } from './policy/permission-broker.js';
 import { findProjectedRun, type RuntimeProjection, rebuildRuntimeProjection } from './projection/projection.js';
 import { writeProjectionSqlite } from './projection/sqlite-store.js';
@@ -1212,6 +1213,8 @@ ${candidateLines}
 - Reject irrelevant candidates with a concrete reason.
 - Write \`skill-usage-response.md\` next to the primary user-visible output artifact.
 - If there is no primary output directory, write \`${fallbackPath}\`.
+- Treat native skill output as advisory by default. A skill can gate completion only with a HARD \`AcceptanceContract\` in \`skill-acceptance-contracts.json\` or \`.agent/skill-contracts/*.json\`.
+- HARD contracts must use shared verifier bindings only; SOFT contracts must not gate completion.
 - The response must include: inspected_skills, selected_skills, rejected_skills_or_methods, how each selected skill changed the result, evidence that the skill was not only name-dropped, remaining_gaps.
 `;
 }
@@ -2099,6 +2102,7 @@ function evaluateSkillUsage(root: string, runDir: string, pptxPaths: string[], r
   if (!/SKILL\.md|skill file|읽|read/i.test(response)) issues.push('스킬 파일을 실제로 읽었다는 증거가 없음.');
   if (/Presentations|presentation|PowerPoint|PPTX|slides?|deck/i.test(routingContext) && !/not built with artifact-tool|artifact-tool|Keynote|rejected/i.test(response))
     issues.push('Presentations skill과 실제 사용 도구 사이의 선택/거절 근거가 없음.');
+  issues.push(...skillContractIssuesForRun(root, runDir, response).map((issue) => `AcceptanceContract: ${issue}`));
   return issues.slice(0, 8);
 }
 function findSkillUsageResponse(runDir: string, pptxPaths: string[]): string | undefined {

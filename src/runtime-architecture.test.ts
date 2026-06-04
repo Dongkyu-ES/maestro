@@ -21,6 +21,7 @@ import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js'
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { verifyNativeEvidenceRun } from './harness/native-evidence.js';
 import { runRuntimeHardGate } from './harness/runtime-gate.js';
+import { verifySkillContracts } from './harness/skill-contracts.js';
 import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
 import { appendMemoryFact } from './memory/fabric.js';
 import { validateMemoryWrite } from './memory/records.js';
@@ -383,6 +384,148 @@ test('codex prompt routes through local skill registry and collect blocks missin
   assert.equal(collected.decision, 'changes_requested');
   assert.match(readFileSync(join(commandRunDir, 'review.md'), 'utf8'), /Skill usage/);
   assert.match(readFileSync(join(commandRunDir, 'skill-usage-critique.md'), 'utf8'), /skill-usage-response\.md/);
+});
+
+test('G009 skill contracts distinguish SOFT and HARD without bespoke verifier sprawl', () => {
+  const dir = tempDir();
+  mkdirSync(join(dir, '.agent', 'skill-contracts'), { recursive: true });
+  writeFileSync(join(dir, 'hard-artifact.txt'), 'verified artifact\n');
+  const artifactSha = createHash('sha256').update(readFileSync(join(dir, 'hard-artifact.txt'))).digest('hex');
+  writeFileSync(
+    join(dir, '.agent', 'skill-contracts', 'contracts.json'),
+    JSON.stringify(
+      {
+        contracts: [
+          {
+            schema_version: 1,
+            skill_name: 'analyze',
+            skill_path: '.codex/skills/analyze/SKILL.md',
+            hardness: 'SOFT',
+            allowed_tool_intents: ['read_files'],
+          },
+          {
+            schema_version: 1,
+            skill_name: 'presentations',
+            skill_path: '.codex/plugins/cache/openai-primary-runtime/presentations/SKILL.md',
+            hardness: 'HARD',
+            allowed_tool_intents: ['write_pptx'],
+            verifier_bindings: [{ id: 'pptx-artifact', type: 'artifact', artifactRef: 'hard-artifact.txt', expectedSha256: artifactSha }],
+            forgery_fixture: { id: 'missing-artifact-forgery', binding: { id: 'forged', type: 'artifact', artifactRef: 'missing.txt' } },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  const report = verifySkillContracts({ root: dir });
+  assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
+
+  writeFileSync(
+    join(dir, '.agent', 'skill-contracts', 'bespoke.json'),
+    JSON.stringify(
+      {
+        contracts: [
+          {
+            schema_version: 1,
+            skill_name: 'bespoke-hard-skill',
+            skill_path: '.codex/skills/bespoke/SKILL.md',
+            hardness: 'HARD',
+            allowed_tool_intents: ['write_artifact'],
+            verifier_bindings: [{ id: 'custom', type: 'artifact', artifactRef: 'hard-artifact.txt', customChecker: 'trust me' }],
+            forgery_fixture: { id: 'forged', binding: { id: 'forged', type: 'artifact', artifactRef: 'missing.txt' } },
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  const rejected = verifySkillContracts({ root: dir });
+  assert.equal(rejected.decision, 'FAIL');
+  assert.match(JSON.stringify(rejected.checks), /bespoke verifier keys forbidden/);
+});
+
+test('G009 collect gate rejects skill success text without hard verifier artifacts', async () => {
+  const dir = tempDir();
+  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+  const task = addTask('skill hard gate forgery task', dir);
+  const run = createRun(task.id, { command: "node -e \"require('fs').writeFileSync('ok.txt','ok')\"" }, dir);
+  await startRun(run.id, {}, dir);
+  const approval = listApprovals(dir).find((a) => a.run_id === run.id && a.status === 'requested');
+  assert.ok(approval);
+  resolveApproval(approval.id, 'approved', dir);
+  await startRun(run.id, {}, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  writeFileSync(
+    join(runDir, 'skill-routing-candidates.md'),
+    '# Skill Routing Candidates\n\n## Candidates\n1. analyze\n   - path: .codex/skills/analyze/SKILL.md\n   - why: test candidate\n',
+  );
+  writeFileSync(
+    join(runDir, 'skill-usage-response.md'),
+    [
+      '# Skill Usage Response',
+      'inspected_skills: analyze SKILL.md read',
+      'selected_skills: analyze',
+      'rejected_skills_or_methods: none',
+      'how each selected skill changed the result: analyze was treated as a HARD PASS completion gate',
+      'evidence: skill says success',
+      'remaining_gaps: none',
+    ].join('\n'),
+  );
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'changes_requested');
+  assert.match(readFileSync(join(runDir, 'review.md'), 'utf8'), /AcceptanceContract/);
+});
+
+test('G009 SOFT skill contract remains advisory and does not gate completion', async () => {
+  const dir = tempDir();
+  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+  const task = addTask('soft skill advisory task', dir);
+  const run = createRun(task.id, { command: "node -e \"require('fs').writeFileSync('ok.txt','ok')\"" }, dir);
+  await startRun(run.id, {}, dir);
+  const approval = listApprovals(dir).find((a) => a.run_id === run.id && a.status === 'requested');
+  assert.ok(approval);
+  resolveApproval(approval.id, 'approved', dir);
+  await startRun(run.id, {}, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  writeFileSync(
+    join(runDir, 'skill-routing-candidates.md'),
+    '# Skill Routing Candidates\n\n## Candidates\n1. analyze\n   - path: .codex/skills/analyze/SKILL.md\n   - why: test candidate\n',
+  );
+  writeFileSync(
+    join(runDir, 'skill-acceptance-contracts.json'),
+    JSON.stringify(
+      {
+        contracts: [
+          {
+            schema_version: 1,
+            skill_name: 'analyze',
+            skill_path: '.codex/skills/analyze/SKILL.md',
+            hardness: 'SOFT',
+            allowed_tool_intents: ['read_files'],
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(
+    join(runDir, 'skill-usage-response.md'),
+    [
+      '# Skill Usage Response',
+      'inspected_skills: analyze SKILL.md read',
+      'selected_skills: analyze',
+      'rejected_skills_or_methods: none',
+      'how each selected skill changed the result: analyze guided the local evidence summary only',
+      'evidence: ok.txt and diff.patch were inspected outside any skill completion gate',
+      'remaining_gaps: none',
+    ].join('\n'),
+  );
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'pass');
+  assert.equal(verifySkillContracts({ root: dir, runDir }).decision, 'PASS');
 });
 
 test('review blocker: mode-specific runtime evidence points to actual process artifacts', async () => {

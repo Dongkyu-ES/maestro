@@ -43,6 +43,7 @@ import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js'
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/native-evidence.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
+import { verifySkillContracts } from './harness/skill-contracts.js';
 import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
 import { currentReviewInputHash, runProductGate } from './product-gate.js';
 import {
@@ -137,6 +138,7 @@ function usage(): string {
   agent promotions
   agent promotion approve|reject|apply <id>
   agent promotion verify-learning
+  agent skills verify-contracts [--run <run-id>]
   agent worktrees cleanup
   agent maintenance reconcile-runs
   agent quality gate [--write]
@@ -580,6 +582,13 @@ async function main() {
     }
     if (cmd === 'promotion' && sub === 'verify-learning') {
       const report = verifyPromotionDifferential({ root: process.cwd() });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'skills' && sub === 'verify-contracts') {
+      const runId = arg('--run');
+      const report = verifySkillContracts({ root: process.cwd(), runDir: runId ? runPath(runId) : undefined });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
       return;
