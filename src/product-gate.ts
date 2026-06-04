@@ -3,6 +3,7 @@ import { createHash, timingSafeEqual } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { activeStatus, rebuildIndex, reconcileRuns } from './core.js';
+import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import {
   AGENT_DIR,
   ensureDir,
@@ -195,77 +196,7 @@ function v1RoleContractGateOk(root: string): boolean {
   return true;
 }
 function promotionLearningGateOk(root: string): boolean {
-  const gate = jsonIfExists(join(root, AGENT_DIR, 'hard-gates', 'promotion-learning.json'));
-  if (gate?.status !== 'PASS') return false;
-  const required = [
-    'before_run_path',
-    'after_run_path',
-    'review_finding_path',
-    'promotion_candidate_path',
-    'promotion_approval_path',
-    'promotion_apply_path',
-    'promotion_effect_path',
-    'loaded_promotion_artifact_path',
-  ];
-  for (const key of required) if (!safeRelArtifact(root, gate[key])) return false;
-  const hashKeys: [string, string][] = [
-    ['review_finding_path', 'review_finding_sha256'],
-    ['promotion_candidate_path', 'promotion_candidate_sha256'],
-    ['promotion_approval_path', 'promotion_approval_sha256'],
-    ['promotion_apply_path', 'promotion_apply_sha256'],
-    ['promotion_effect_path', 'promotion_effect_sha256'],
-    ['loaded_promotion_artifact_path', 'loaded_promotion_artifact_sha256'],
-  ];
-  for (const [pathKey, hashKey] of hashKeys) {
-    const full = safeRelArtifact(root, gate[pathKey]);
-    if (!full || gate[hashKey] !== sha256File(full)) return false;
-  }
-  const beforeFull = safeRelArtifact(root, gate.before_run_path);
-  const afterFull = safeRelArtifact(root, gate.after_run_path);
-  if (!beforeFull || !afterFull) return false;
-  const beforeRunDir = dirname(beforeFull);
-  const afterRunDir = dirname(afterFull);
-  if (!existsSync(join(beforeRunDir, 'run.yaml')) || !existsSync(join(afterRunDir, 'run.yaml'))) return false;
-  const before = parsedJsonArtifact(root, gate.before_run_path);
-  const after = parsedJsonArtifact(root, gate.after_run_path);
-  const candidate = parsedJsonArtifact(root, gate.promotion_candidate_path);
-  const approval = parsedJsonArtifact(root, gate.promotion_approval_path);
-  const apply = parsedJsonArtifact(root, gate.promotion_apply_path);
-  const effect = parsedJsonArtifact(root, gate.promotion_effect_path);
-  const changedField = String(gate.changed_field || '');
-  if (!changedField || before?.task_context_sha256 !== after?.task_context_sha256) return false;
-  if (before?.stable_fields?.[changedField] === after?.stable_fields?.[changedField]) return false;
-  if (after?.loaded_promotion_artifact_sha256 !== gate.loaded_promotion_artifact_sha256) return false;
-  const runtimeEventsPath = safeRelArtifact(root, after?.runtime_events_path);
-  if (!runtimeEventsPath) return false;
-  const runtimeEvents = readFileSync(runtimeEventsPath, 'utf8')
-    .split('\n')
-    .filter(Boolean)
-    .map((line) => {
-      try {
-        return JSON.parse(line);
-      } catch {
-        return null;
-      }
-    });
-  if (
-    !runtimeEvents.some(
-      (event) =>
-        event?.schema_version === 1 &&
-        event?.type === 'promotion.loaded' &&
-        event?.run_id === after.run_id &&
-        event?.payload?.loaded_promotion_artifact_sha256 === gate.loaded_promotion_artifact_sha256 &&
-        event?.payload?.changed_field === changedField,
-    )
-  )
-    return false;
-  if (candidate?.review_finding_sha256 !== gate.review_finding_sha256) return false;
-  if (approval?.promotion_candidate_sha256 !== gate.promotion_candidate_sha256 || approval?.status !== 'approved')
-    return false;
-  if (apply?.promotion_approval_sha256 !== gate.promotion_approval_sha256 || apply?.status !== 'applied') return false;
-  if (effect?.promotion_apply_sha256 !== gate.promotion_apply_sha256) return false;
-  if (effect?.changed_field !== changedField) return false;
-  return true;
+  return verifyPromotionDifferential({ root, agentDir: AGENT_DIR }).decision === 'PASS';
 }
 function operatorBrowserE2EGateOk(root: string): boolean {
   const packageJson = jsonIfExists(join(root, 'package.json'));

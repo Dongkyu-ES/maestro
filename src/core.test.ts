@@ -2319,6 +2319,23 @@ test('machine hard gates for role, promotion, and browser evidence are required 
   }
 });
 
+test('product gate uses hardened promotion differential and rejects appended promotion ledger', async () => {
+  const dir = buildGateRepo();
+  appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
+    runId: 'after',
+    source: 'runtime-manager',
+    type: 'runtime.session.started',
+    payload: { status: 'later event after promotion binding' },
+  });
+  const report = (await import('./product-gate.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.notEqual(report.completion_ceiling, 95);
+  assert.equal(
+    report.checks.some((check) => check.name === 'Promotion Learning Gate' && check.status === 'FAIL'),
+    true,
+  );
+});
+
 test('roadmap current blockers prevent ceiling lift even with signed provenance', async () => {
   const dir = buildGateRepo();
   writeFileSync(
