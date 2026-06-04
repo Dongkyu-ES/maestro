@@ -68,10 +68,10 @@ function plannedCommands(currentBranch) {
     ['git', 'push', '-u', 'origin', currentBranch],
     ['gh', 'api', '-X', 'PUT', `repos/:owner/:repo/environments/${environmentName}`],
     ['gh', 'variable', 'set', 'AGENT_TRUSTED_REVIEW_ACTORS', '--body', process.env.AGENT_TRUSTED_REVIEW_ACTORS || '<AGENT_TRUSTED_REVIEW_ACTORS>'],
-    ['gh', 'secret', 'set', 'AGENT_REVIEW_BUNDLE_HMAC_KEY', '--app', 'actions', '--body-file', '-'],
-    ['gh', 'secret', 'set', 'AGENT_REVIEW_BUNDLE_HMAC_KEY', '--env', environmentName, '--body-file', '-'],
-    ['gh', 'secret', 'set', 'AGENT_REVIEW_HMAC_KEY', '--app', 'actions', '--body-file', '-'],
-    ['gh', 'secret', 'set', 'AGENT_REVIEW_CUSTODY_HMAC_KEY', '--app', 'actions', '--body-file', '-'],
+    ['gh', 'secret', 'set', 'AGENT_REVIEW_BUNDLE_HMAC_KEY', '--app', 'actions'],
+    ['gh', 'secret', 'set', 'AGENT_REVIEW_BUNDLE_HMAC_KEY', '--env', environmentName],
+    ['gh', 'secret', 'set', 'AGENT_REVIEW_HMAC_KEY', '--app', 'actions'],
+    ['gh', 'secret', 'set', 'AGENT_REVIEW_CUSTODY_HMAC_KEY', '--app', 'actions'],
     ['npm', 'run', 'harness:review-custody-preflight'],
   ];
 }
