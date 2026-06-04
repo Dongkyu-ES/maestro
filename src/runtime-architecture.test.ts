@@ -149,7 +149,7 @@ test('Story 5: Codex lifecycle spike records real binary detection but does not 
 
 test('Story 6: permission broker requires approval for upper-scope and destructive actions', () => {
   assert.equal(
-    evaluatePermission({ runId: 'r', action: 'general_tool', scope: 'sandbox', summary: 'read' }).status,
+    evaluatePermission({ runId: 'r', action: 'general_tool', scope: 'sandbox', summary: 'read', command: 'git status --short' }).status,
     'allow',
   );
   const destructive = evaluatePermission({ runId: 'r', action: 'destructive', scope: 'project', summary: 'rm' });
@@ -162,6 +162,38 @@ test('Story 6: permission broker requires approval for upper-scope and destructi
     summary: 'learn preference',
   });
   assert.equal(globalMemory.status, 'requires_approval');
+});
+
+test('G006 permission broker ignores caller-safe labels when command reality is destructive or unknown', () => {
+  const mislabeled = evaluatePermission({
+    runId: 'r',
+    action: 'general_tool',
+    scope: 'task',
+    summary: 'safe helper',
+    command: 'rm -rf build',
+  });
+  assert.equal(mislabeled.status, 'requires_approval');
+  assert.match(mislabeled.reason, /actual command risk overrides caller label/);
+
+  const unknown = evaluatePermission({
+    runId: 'r',
+    action: 'unregistered_native_action' as any,
+    scope: 'task',
+    summary: 'new tool shape',
+  });
+  assert.equal(unknown.status, 'requires_approval');
+  assert.match(unknown.reason, /unknown action/);
+
+  const native = evaluatePermission({
+    runId: 'r',
+    action: 'general_tool',
+    scope: 'task',
+    summary: 'codex exec native run',
+    tool: 'codex',
+    nativeMediation: true,
+  });
+  assert.equal(native.status, 'allow');
+  assert.equal(native.mediation, 'external/unowned');
 });
 
 test('Story 6: memory writes require provenance and upper-scope authority', () => {

@@ -505,6 +505,9 @@ Start was requested, but no explicit command or first-class executor was attache
     scope: shellMutationRequiresApproval ? 'project' : 'task',
     summary: command ? 'start runtime adapter command' : 'start runtime adapter without shell fallback',
     target: command ? 'executor-command.txt' : undefined,
+    command: command || undefined,
+    tool: meta.executor,
+    nativeMediation: meta.executor === 'codex',
   });
   if (permission.status === 'allow')
     appendRuntimeEvent(runDir, {
@@ -516,6 +519,7 @@ Start was requested, but no explicit command or first-class executor was attache
         risk: permission.risk,
         reason: permission.reason,
         runtime_label: 'permission_allowed',
+        mediation: permission.mediation,
       },
       artifactRefs: command ? ['executor-command.txt'] : [],
     });
