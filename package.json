@@ -8,11 +8,13 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/**/*.test.js",
+    "test": "npm run build && node --test \"dist/**/*.test.js\"",
     "lint": "biome lint src scripts",
     "format": "biome format --write src scripts",
     "check": "biome check --write src scripts",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "e2e": "node scripts/operator-browser-e2e.mjs && node scripts/operator-codex-web-e2e.mjs",
+    "report:github": "node scripts/github-projects-report.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",

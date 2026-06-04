@@ -28,6 +28,7 @@ export interface RuntimeEventEnvelope {
   payload: Record<string, unknown>;
   artifact_refs: string[];
   payload_sha256: string;
+  prev_event_sha256: string;
 }
 
 export interface AppendRuntimeEventInput {
@@ -68,6 +69,12 @@ export function payloadHash(payload: Record<string, unknown>): string {
   return createHash('sha256').update(stableJson(payload)).digest('hex');
 }
 
+export const GENESIS_EVENT_HASH = '0'.repeat(64);
+
+export function envelopeHash(event: RuntimeEventEnvelope): string {
+  return createHash('sha256').update(stableJson(event)).digest('hex');
+}
+
 export function eventLedgerPath(runDir: string): string {
   return join(runDir, 'events.jsonl');
 }
@@ -85,6 +92,7 @@ export function appendRuntimeEvent(runDir: string, input: AppendRuntimeEventInpu
   mkdirSync(runDir, { recursive: true });
   const existing = readRuntimeEvents(runDir);
   const payload = sanitizeJsonValue(input.payload || {}) as Record<string, unknown>;
+  const previous = existing.at(-1);
   const event: RuntimeEventEnvelope = {
     schema_version: 1,
     event_id: randomUUID(),
@@ -100,8 +108,9 @@ export function appendRuntimeEvent(runDir: string, input: AppendRuntimeEventInpu
     payload,
     artifact_refs: input.artifactRefs || [],
     payload_sha256: payloadHash(payload),
+    prev_event_sha256: previous ? envelopeHash(previous) : GENESIS_EVENT_HASH,
   };
-  validateRuntimeEvent(event, existing.at(-1));
+  validateRuntimeEvent(event, previous);
   const path = eventLedgerPath(runDir);
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, `${JSON.stringify(event)}\n`, { flag: 'a' });
@@ -110,11 +119,24 @@ export function appendRuntimeEvent(runDir: string, input: AppendRuntimeEventInpu
 
 export function validateRuntimeEvent(event: RuntimeEventEnvelope, previous?: RuntimeEventEnvelope): void {
   if (event.schema_version !== 1) throw new Error('invalid event schema_version');
-  if (!event.event_id || !event.run_id || !event.correlation_id || !event.timestamp || !event.source || !event.type)
+  if (
+    !event.event_id ||
+    !event.run_id ||
+    !event.correlation_id ||
+    !event.timestamp ||
+    !event.source ||
+    !event.type ||
+    typeof event.prev_event_sha256 !== 'string'
+  )
     throw new Error('runtime event missing required envelope fields');
   if (!Number.isInteger(event.sequence) || event.sequence < 1) throw new Error('invalid event sequence');
   if (previous && event.sequence !== previous.sequence + 1)
     throw new Error(`non-contiguous event sequence: ${previous.sequence} -> ${event.sequence}`);
+  if (previous) {
+    if (event.prev_event_sha256 !== envelopeHash(previous)) throw new Error('broken event hash chain');
+  } else if (event.prev_event_sha256 !== GENESIS_EVENT_HASH) {
+    throw new Error('first event must chain to genesis');
+  }
   if (event.payload_sha256 !== payloadHash(event.payload)) throw new Error('payload hash mismatch');
   if (!Array.isArray(event.artifact_refs)) throw new Error('artifact_refs must be an array');
 }
