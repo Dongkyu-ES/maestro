@@ -527,6 +527,9 @@ test('G009 SOFT skill contract remains advisory and does not gate completion', a
   const collected = collectRun(run.id, dir);
   assert.equal(collected.decision, 'pass');
   assert.equal(verifySkillContracts({ root: dir, runDir }).decision, 'PASS');
+  const detail = renderRun(run.id, dir);
+  assert.match(detail, /not yet trusted/);
+  assert.doesNotMatch(detail, /trusted by current evidence/);
 });
 
 test('G009 SOFT skill contract cannot authorize HARD PASS completion prose', async () => {

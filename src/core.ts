@@ -13,7 +13,7 @@ import {
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { buildCompositionPlan } from './composition/composition.js';
-import { appendRuntimeEvent, type RuntimeEventEnvelope, readRuntimeEvents } from './events/ledger.js';
+import { appendRuntimeEvent, createRuntimeLedgerHeadBinding, envelopeHash, type RuntimeEventEnvelope, readRuntimeEvents } from './events/ledger.js';
 import { skillContractIssuesForRun } from './harness/skill-contracts.js';
 import { evaluatePermission } from './policy/permission-broker.js';
 import { findProjectedRun, type RuntimeProjection, rebuildRuntimeProjection } from './projection/projection.js';
@@ -899,7 +899,7 @@ function writePromotionLearningGateForRun(runDir: string, root: string, runId: s
     task_context_sha256: taskContextSha,
     stable_fields: { [changedField]: 'promotion-not-loaded' },
   });
-  appendRuntimeEvent(runDir, {
+  const loadedEvent = appendRuntimeEvent(runDir, {
     runId,
     source: 'runtime-manager',
     type: 'promotion.loaded',
@@ -912,12 +912,21 @@ function writePromotionLearningGateForRun(runDir: string, root: string, runId: s
     },
     artifactRefs: [applied.applied_path],
   });
+  const runtimeEventsPath = join(runDir, 'events.jsonl');
+  const runtimeEvents = readRuntimeEvents(runDir);
+  const runtimeLedgerHead = createRuntimeLedgerHeadBinding(runtimeEvents);
+  const persistedLoadedEvent = runtimeEvents.find((event) => event.sequence === loadedEvent.sequence && event.type === 'promotion.loaded') || loadedEvent;
   const afterPath = join(runDir, 'promotion-state.json');
   const afterSha = writeJsonWithHash(afterPath, {
     run_id: runId,
     task_context_sha256: taskContextSha,
     loaded_promotion_artifact_sha256: loadedSha,
     runtime_events_path: `${relative(root, runDir)}/events.jsonl`,
+    runtime_events_sha256: fileShaIfExists(runtimeEventsPath),
+    promotion_loaded_event_sequence: persistedLoadedEvent.sequence,
+    promotion_loaded_event_sha256: envelopeHash(persistedLoadedEvent),
+    runtime_event_count: runtimeLedgerHead.event_count,
+    runtime_ledger_head_sha256: runtimeLedgerHead.ledger_head_sha256,
     stable_fields: { [changedField]: `loaded:${applied.id}` },
   });
   const findingPath = join(hardGateDir, 'review-finding.json');

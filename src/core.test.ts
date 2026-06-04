@@ -31,7 +31,7 @@ import {
   startRun,
   updateTask,
 } from './core.js';
-import { appendRuntimeEvent } from './events/ledger.js';
+import { appendRuntimeEvent, createRuntimeLedgerHeadBinding, envelopeHash, readRuntimeEvents } from './events/ledger.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
@@ -149,7 +149,7 @@ function writeMachineHardGateFixtures(dir: string): void {
     join(dir, '.agent/runs/promo-after/run.yaml'),
     'id: promo-after\ntask_id: task-promo\nrun_dir: .agent/runs/promo-after\nmode: basic\nstatus: completed\ndecision: pass\n',
   );
-  appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
+  const loadedEvent = appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
     runId: 'after',
     source: 'runtime-manager',
     type: 'promotion.loaded',
@@ -160,11 +160,21 @@ function writeMachineHardGateFixtures(dir: string): void {
     },
     artifactRefs: ['.agent/promotions/applied/agent_instruction/fixture.md'],
   });
+  const runtimeEventsRel = '.agent/runs/promo-after/events.jsonl';
+  const runtimeEventsSha = hashTextForTest(readFileSync(join(dir, runtimeEventsRel), 'utf8'));
+  const runtimeEvents = readRuntimeEvents(join(dir, '.agent/runs/promo-after'));
+  const runtimeLedgerHead = createRuntimeLedgerHeadBinding(runtimeEvents);
+  const persistedLoadedEvent = runtimeEvents.find((event) => event.sequence === loadedEvent.sequence && event.type === 'promotion.loaded') || loadedEvent;
   const afterRunSha = writeJsonArtifact(dir, '.agent/runs/promo-after/promotion-state.json', {
     run_id: 'after',
     task_context_sha256: taskContextSha,
     loaded_promotion_artifact_sha256: loadedPromotionSha,
-    runtime_events_path: '.agent/runs/promo-after/events.jsonl',
+    runtime_events_path: runtimeEventsRel,
+    runtime_events_sha256: runtimeEventsSha,
+    promotion_loaded_event_sequence: persistedLoadedEvent.sequence,
+    promotion_loaded_event_sha256: envelopeHash(persistedLoadedEvent),
+    runtime_event_count: runtimeLedgerHead.event_count,
+    runtime_ledger_head_sha256: runtimeLedgerHead.ledger_head_sha256,
     stable_fields: { recommendation: 'new-guard' },
   });
   const reviewFindingSha = writeJsonArtifact(dir, '.agent/hard-gates/promotion/review-finding.json', {
@@ -648,6 +658,27 @@ test('G008 promotion differential rejects forged loaded event text without canon
       payload: { promotion_id: 'promotion-fixture', loaded_promotion_artifact_sha256: 'contains matching words only', changed_field: 'recommendation' },
     })}\n`,
   );
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.loaded_artifact_proves_after, false);
+});
+
+test('G008 promotion differential rejects swapped canonical runtime ledger with stale after-state binding', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  writeMachineHardGateFixtures(dir);
+  rmSync(join(dir, '.agent/runs/promo-after/events.jsonl'), { force: true });
+  const gate = JSON.parse(readFileSync(join(dir, '.agent/hard-gates/promotion-learning.json'), 'utf8'));
+  appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
+    runId: 'after',
+    source: 'runtime-manager',
+    type: 'promotion.loaded',
+    payload: {
+      promotion_id: 'promotion-fixture',
+      loaded_promotion_artifact_sha256: gate.loaded_promotion_artifact_sha256,
+      changed_field: 'recommendation',
+    },
+    artifactRefs: ['.agent/promotions/applied/agent_instruction/fixture.md'],
+  });
   const report = verifyPromotionDifferential({ root: dir });
   assert.equal(report.decision, 'FAIL');
   assert.equal(report.checks.loaded_artifact_proves_after, false);

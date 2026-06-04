@@ -157,6 +157,18 @@ function readJsonArtifact(runDir: string, file: string): Record<string, unknown>
     return { parse_error: file };
   }
 }
+function isPositiveTrustArtifact(file: string, artifact: Record<string, unknown>, value: string): boolean {
+  if (artifact.parse_error) return false;
+  if (file === 'skill-contracts-verification.json') {
+    const checks = Array.isArray(artifact.checks) ? artifact.checks : [];
+    return checks.some((check) => {
+      if (!check || typeof check !== 'object') return false;
+      const item = check as Record<string, unknown>;
+      return item.hardness === 'HARD' && item.status === 'PASS';
+    });
+  }
+  return /PASS|supported/i.test(value);
+}
 function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[]; refs: string[]; positiveRefs: string[] } {
   const red: string[] = [];
   const yellow: string[] = [];
@@ -178,7 +190,7 @@ function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[
     if (/FAIL|BLOCKED|failed|blocked/i.test(value)) red.push(`${file}: ${value}`);
     if (file === 'full-target-gate.json' && value && !/PASS/i.test(value)) red.push(`${file}: ${value}`);
     if (artifact.parse_error) red.push(`${file}: parse_error`);
-    if (/PASS|supported/i.test(value) && !artifact.parse_error) positiveRefs.push(file);
+    if (isPositiveTrustArtifact(file, artifact, value)) positiveRefs.push(file);
   }
   const native = readJsonArtifact(runDir, 'native-evidence.json');
   if (native) {

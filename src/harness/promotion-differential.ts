@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { type RuntimeEventEnvelope, validateRuntimeLedger } from '../events/ledger.js';
+import { createRuntimeLedgerHeadBinding, envelopeHash, type RuntimeEventEnvelope, validateRuntimeLedger } from '../events/ledger.js';
 
 export interface PromotionDifferentialReport {
   schema_version: 1;
@@ -32,7 +32,13 @@ function digestMatches(root: string, rel: unknown, expected: unknown): boolean {
   return existsSync(full) && sha256(readFileSync(full)) === expected;
 }
 
-function readCanonicalPromotionLoadedEvent(root: string, rel: unknown, gate: Record<string, any> | undefined, changedField: string): boolean {
+function readCanonicalPromotionLoadedEvent(
+  root: string,
+  rel: unknown,
+  gate: Record<string, any> | undefined,
+  after: Record<string, any> | undefined,
+  changedField: string,
+): boolean {
   if (typeof rel !== 'string' || rel.startsWith('/') || rel.includes('..')) return false;
   const full = join(root, rel);
   if (!existsSync(full)) return false;
@@ -42,10 +48,21 @@ function readCanonicalPromotionLoadedEvent(root: string, rel: unknown, gate: Rec
       .filter((line) => line.trim())
       .map((line) => JSON.parse(line)) as RuntimeEventEnvelope[];
     validateRuntimeLedger(events);
+    const binding = createRuntimeLedgerHeadBinding(events);
+    if (
+      typeof after?.promotion_loaded_event_sequence !== 'number' ||
+      typeof after?.promotion_loaded_event_sha256 !== 'string' ||
+      typeof after?.runtime_event_count !== 'number' ||
+      after.runtime_event_count > binding.event_count ||
+      (after?.run_id && after.run_id !== binding.run_id)
+    )
+      return false;
     return events.some((event) => {
       const payload = event.payload as Record<string, unknown>;
       return (
         event.type === 'promotion.loaded' &&
+        event.sequence === after.promotion_loaded_event_sequence &&
+        envelopeHash(event) === after.promotion_loaded_event_sha256 &&
         payload.loaded_promotion_artifact_sha256 === gate?.loaded_promotion_artifact_sha256 &&
         payload.changed_field === changedField &&
         (!gate?.source_promotion_id || payload.promotion_id === gate.source_promotion_id)
@@ -109,7 +126,7 @@ export function verifyPromotionDifferential(options: { root: string; agentDir?: 
     loaded_artifact_proves_after:
       Boolean(
         after?.loaded_promotion_artifact_sha256 === gate?.loaded_promotion_artifact_sha256 &&
-          readCanonicalPromotionLoadedEvent(options.root, eventPath, gate, changedField),
+          readCanonicalPromotionLoadedEvent(options.root, eventPath, gate, after, changedField),
       ),
   };
   const report: PromotionDifferentialReport = {
