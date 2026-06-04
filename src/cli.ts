@@ -40,6 +40,7 @@ import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exerc
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
+import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/native-evidence.js';
 import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
 import { currentReviewInputHash, runProductGate } from './product-gate.js';
 import {
@@ -113,13 +114,16 @@ function usage(): string {
   agent index rebuild|show
   agent task add|list|show|status|update|archive
   agent run create|start|collect|cancel|latest
+  agent run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
   agent run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
   agent runtime projection
+  agent runtime verify-ledger <run-id>
   agent runtime full-target-gate <run-id> [--append-pass-event]
   agent runtime m8-boundary-evidence <run-id>
   agent runtime codex-lifecycle-proof <run-id> --thread-id <thread-id>
   agent runtime ui-agreement <run-id>
   agent runtime verify-full-target <run-id> [--append-verified-event]
+  agent verifier run --run <run-id>
   agent runtime prepare-review-gate --code-reviewer-artifact .agent/review-gates/code-reviewer.md --architect-artifact .agent/review-gates/architect.md --code-reviewer-notification .agent/review-gates/subagent-notifications/code-reviewer.json --architect-notification .agent/review-gates/subagent-notifications/architect.json --code-reviewer-agent PASTE_CODE_REVIEWER_AGENT_ID --architect-agent PASTE_ARCHITECT_AGENT_ID
   agent runtime sign-review [--custody reviewer-ci|reviewer-owned|review-service]
   agent review latest
@@ -265,8 +269,32 @@ async function main() {
       console.log(latestRunId() || 'no runs');
       return;
     }
+    if (cmd === 'run' && sub === 'native-evidence-smoke') {
+      const task = arg('--task');
+      if (!task) throw new Error('usage: agent run native-evidence-smoke --task <fixture-task> [--timeout-ms N]');
+      const timeoutArg = arg('--timeout-ms');
+      const report = await runNativeEvidenceSmoke({
+        root: process.cwd(),
+        task,
+        sandbox: arg('--sandbox') as 'read-only' | 'workspace-write' | 'danger-full-access' | undefined,
+        timeoutMs: timeoutArg !== undefined ? Number(timeoutArg) : undefined,
+      });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.verification.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
     if (cmd === 'runtime' && sub === 'projection') {
       console.log(JSON.stringify(rebuildRuntimeProjectionStore(), null, 2));
+      return;
+    }
+    if (cmd === 'runtime' && sub === 'verify-ledger') {
+      const id = rest[0] || latestRunId();
+      if (!id) throw new Error('usage: agent runtime verify-ledger <run-id>');
+      const runDir = runPath(id);
+      const events = readRuntimeEvents(runDir);
+      const { createRuntimeLedgerHeadBinding, validateRuntimeLedger } = await import('./events/ledger.js');
+      validateRuntimeLedger(events);
+      console.log(JSON.stringify({ status: 'PASS', runId: id, ...createRuntimeLedgerHeadBinding(events) }, null, 2));
       return;
     }
     if (cmd === 'runtime' && sub === 'full-target-gate') {
@@ -321,6 +349,14 @@ async function main() {
         runId: id,
         appendVerifiedEvent: has('--append-verified-event'),
       });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'verifier' && sub === 'run') {
+      const id = arg('--run') || rest[0] || latestRunId();
+      if (!id) throw new Error('usage: agent verifier run --run <run-id>');
+      const report = verifyNativeEvidenceRun({ root: process.cwd(), runId: id });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
       return;

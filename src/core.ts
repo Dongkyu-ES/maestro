@@ -724,6 +724,63 @@ function writeJsonWithHash(path: string, value: unknown): string {
   writeFileSync(path, text);
   return sha256Local(text);
 }
+
+function changedFilesFromDiff(diff: string): string[] {
+  return diff
+    .split('\n')
+    .filter((line) => line.startsWith('diff --git '))
+    .map((line) => line.match(/^diff --git a\/(.*?) b\//)?.[1] || '')
+    .filter(Boolean);
+}
+
+function collectNativeExecutorDiff(root: string): string {
+  const tracked = git(['diff', '--binary'], root);
+  const untracked = existsSync(join(root, '.git'))
+    ? git(['ls-files', '--others', '--exclude-standard'], root)
+        .split('\n')
+        .filter(Boolean)
+        .map((file) => normalizeNoIndexPatch(gitNoIndexPatch(root, file)))
+        .join('\n')
+    : '';
+  return [tracked, untracked].filter((part) => part.trim()).join('\n');
+}
+
+function writeNativeExecutorEvidence(runDir: string, root: string, runId: string, result: { session_id?: string; exit_code: number; last_message: string }): void {
+  const diffText = collectNativeExecutorDiff(root);
+  writeFileSync(join(runDir, 'native-diff.patch'), diffText);
+  const refs = [
+    'executor.process.json',
+    'executor.stdout.log',
+    'executor.stderr.log',
+    'codex-events.jsonl',
+    'codex-last-message.txt',
+    'native-diff.patch',
+  ].filter((ref) => existsSync(join(runDir, ref)));
+  const artifact = {
+    schema_version: 1,
+    run_id: runId,
+    executor: 'codex',
+    status: 'native-harness-assisted',
+    generated_at: nowIso(),
+    session_id: result.session_id,
+    unowned_surfaces: [
+      'native executor owns in-loop shell/file mediation',
+      'native executor owns model/tool scheduling inside codex exec',
+      'Dominic verifies only captured process, transcript, diff, ledger, and artifact hashes',
+    ],
+    raw_artifacts: refs.map((ref) => ({ ref, sha256: sha256Local(readFileSync(join(runDir, ref), 'utf8')) })),
+    diff_ref: 'native-diff.patch',
+    diff_sha256: sha256Local(diffText),
+    effect_classification: {
+      process_exit_zero: result.exit_code === 0,
+      last_message_present: result.last_message.length > 0,
+      session_identifier_present: Boolean(result.session_id),
+      diff_present: diffText.trim().startsWith('diff --git'),
+      changed_files: changedFilesFromDiff(diffText),
+    },
+  };
+  writeFileSync(join(runDir, 'native-evidence.json'), `${JSON.stringify(artifact, null, 2)}\n`);
+}
 function writeRoleContractGate(runDir: string, root: string): void {
   const hardGateDir = join(root, AGENT_DIR, 'hard-gates');
   ensureDir(hardGateDir);
@@ -1237,6 +1294,7 @@ async function runCodexExecutor(
     timeoutMs,
     cancelRequested: () => existsSync(join(runDir, 'cancel.requested')),
   });
+  writeNativeExecutorEvidence(runDir, root, runId, result);
   appendRuntimeEvent(runDir, {
     runId,
     source: 'codex-adapter',
@@ -1245,9 +1303,14 @@ async function runCodexExecutor(
     payload: {
       requested_adapter_kind: 'codex',
       adapter_kind: 'codex',
-      runtime_label: 'codex_cli',
+      runtime_label: 'native-harness-assisted',
       first_class: Boolean(result.session_id),
       evidence_status: result.session_id ? 'executed' : 'unproven',
+      native_status: 'native-harness-assisted',
+      unowned_surfaces: [
+        'native executor owns in-loop shell/file mediation',
+        'native executor owns model/tool scheduling inside codex exec',
+      ],
       session_id: result.session_id,
       exit_code: result.exit_code,
       timed_out: result.timed_out,
@@ -1257,7 +1320,13 @@ async function runCodexExecutor(
       codex_version: detected.version,
       last_message_present: Boolean(result.last_message),
     },
-    artifactRefs: ['executor.process.json', 'codex-events.jsonl', 'codex-last-message.txt'],
+    artifactRefs: [
+      'executor.process.json',
+      'codex-events.jsonl',
+      'codex-last-message.txt',
+      'native-diff.patch',
+      'native-evidence.json',
+    ],
   });
 }
 

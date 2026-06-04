@@ -18,6 +18,7 @@ import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exerc
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
+import { verifyNativeEvidenceRun } from './harness/native-evidence.js';
 import { runRuntimeHardGate } from './harness/runtime-gate.js';
 import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
 import { appendMemoryFact } from './memory/fabric.js';
@@ -485,6 +486,79 @@ test('Priority 1: codex executor runs codex for real and never falls back to pri
     events.some((event) => event.source === 'shell-adapter'),
     false,
   );
+});
+
+test('G005 native evidence smoke verifies raw diff artifacts and exposes unowned native surfaces', async () => {
+  const dir = tempDir();
+  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+  const task = addTask('daily native evidence smoke writes a real artifact', dir);
+  const run = createRun(task.id, { executor: 'codex', source: 'web' }, dir);
+  await startRun(run.id, {}, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const report = verifyNativeEvidenceRun({ root: dir, runId: run.id });
+  assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
+
+  const evidence = JSON.parse(readFileSync(join(runDir, 'native-evidence.json'), 'utf8'));
+  assert.equal(evidence.status, 'native-harness-assisted');
+  assert.ok(evidence.unowned_surfaces.some((surface: string) => surface.includes('in-loop shell/file mediation')));
+  assert.ok(evidence.effect_classification.changed_files.includes('codex-change.txt'));
+  assert.equal(existsSync(join(runDir, 'native-diff.patch')), true);
+
+  const event = readRuntimeEvents(runDir).find((item) => item.source === 'codex-adapter' && item.type === 'runtime.session.started');
+  assert.equal(event?.payload.runtime_label, 'native-harness-assisted');
+  assert.equal(event?.payload.native_status, 'native-harness-assisted');
+  assert.equal(event?.artifact_refs.includes('native-evidence.json'), true);
+});
+
+test('G005 native evidence verifier rejects native completion text without matching diff artifacts', () => {
+  const dir = tempDir();
+  const runId = 'forged-native-run';
+  const runDir = join(dir, '.agent', 'runs', runId);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, 'executor.process.json'),
+    JSON.stringify({ exit_code: 0, session_id: 'fake-session', last_message: 'native executor says done' }, null, 2),
+  );
+  writeFileSync(join(runDir, 'executor.stdout.log'), 'native executor says done');
+  writeFileSync(join(runDir, 'executor.stderr.log'), '');
+  writeFileSync(join(runDir, 'codex-events.jsonl'), `${JSON.stringify({ type: 'thread.started', thread_id: 'fake-session' })}\n`);
+  writeFileSync(join(runDir, 'codex-last-message.txt'), 'native executor says done');
+  writeFileSync(
+    join(runDir, 'native-evidence.json'),
+    JSON.stringify(
+      {
+        schema_version: 1,
+        run_id: runId,
+        executor: 'codex',
+        status: 'native-harness-assisted',
+        unowned_surfaces: ['native harness owns hidden work'],
+        raw_artifacts: [],
+        diff_ref: 'native-diff.patch',
+        diff_sha256: 'not-a-real-diff',
+        effect_classification: {
+          process_exit_zero: true,
+          last_message_present: true,
+          session_identifier_present: true,
+          diff_present: false,
+          changed_files: [],
+        },
+      },
+      null,
+      2,
+    ),
+  );
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'codex-adapter',
+    type: 'runtime.session.started',
+    sessionId: 'fake-session',
+    payload: { runtime_label: 'native-harness-assisted', evidence_status: 'executed' },
+    artifactRefs: ['native-evidence.json'],
+  });
+  const report = verifyNativeEvidenceRun({ root: dir, runId });
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.raw_artifact_hashes_match, false);
+  assert.equal(report.checks.diff_matches_effect, false);
 });
 
 test('Priority 1: Codex transcript evidence upgrades launch attach stream without shell fallback', () => {
