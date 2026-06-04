@@ -684,6 +684,20 @@ test('G008 promotion differential rejects swapped canonical runtime ledger with 
   assert.equal(report.checks.loaded_artifact_proves_after, false);
 });
 
+test('G008 promotion differential rejects appended runtime ledger after after-state binding', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  writeMachineHardGateFixtures(dir);
+  appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
+    runId: 'after',
+    source: 'runtime-manager',
+    type: 'runtime.session.started',
+    payload: { status: 'later event after promotion binding' },
+  });
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.loaded_artifact_proves_after, false);
+});
+
 test('applyApprovedPromotion writes the target artifact and sets status applied', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
   gitInit(dir);

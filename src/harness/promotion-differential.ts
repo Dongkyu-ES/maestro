@@ -50,10 +50,12 @@ function readCanonicalPromotionLoadedEvent(
     validateRuntimeLedger(events);
     const binding = createRuntimeLedgerHeadBinding(events);
     if (
+      typeof after?.runtime_events_sha256 !== 'string' ||
+      sha256(readFileSync(full, 'utf8')) !== after.runtime_events_sha256 ||
       typeof after?.promotion_loaded_event_sequence !== 'number' ||
       typeof after?.promotion_loaded_event_sha256 !== 'string' ||
-      typeof after?.runtime_event_count !== 'number' ||
-      after.runtime_event_count > binding.event_count ||
+      after?.runtime_event_count !== binding.event_count ||
+      after?.runtime_ledger_head_sha256 !== binding.ledger_head_sha256 ||
       (after?.run_id && after.run_id !== binding.run_id)
     )
       return false;

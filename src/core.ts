@@ -524,9 +524,9 @@ Start was requested, but no explicit command or first-class executor was attache
       },
       artifactRefs: command ? ['executor-command.txt'] : [],
     });
-  writePromotionLearningGateForRun(runDir, root, runId);
   if (meta.executor === 'codex') {
     await runCodexExecutor(runDir, root, meta, options.sandbox, options.timeoutMs);
+    writePromotionLearningGateForRun(runDir, root, runId);
     return readYaml(join(runDir, 'run.yaml')) as unknown as RunMeta;
   }
   if (meta.executor === 'omx' || meta.executor === 'agy') {
@@ -616,6 +616,7 @@ Start was requested, but no explicit command or first-class executor was attache
       artifactRefs,
     });
   }
+  writePromotionLearningGateForRun(runDir, root, runId);
   return readYaml(join(runDir, 'run.yaml')) as unknown as RunMeta;
 }
 interface ProcessLog {
