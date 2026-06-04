@@ -15,6 +15,7 @@ import {
   validateRuntimeLedger,
 } from './events/ledger.js';
 import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
+import { verifyContextProvenance, writeContextProvenanceBundle } from './harness/context-provenance.js';
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
@@ -730,6 +731,74 @@ test('Phase 7: agy adapter participates in runtime parity gate without bypass', 
   ]);
   assert.equal(report.decision, 'PASS');
   assert.ok(report.checks.some((check) => check.name === 'Primitive Shell Non-Bypass Gate' && check.status === 'PASS'));
+});
+
+test('G007 context provenance verifies recomputed context memory and projection against current ledger', () => {
+  const dir = tempDir();
+  const agentDir = join(dir, '.agent');
+  const runId = 'context-run';
+  const runDir = join(agentDir, 'runs', runId);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(join(runDir, 'task.md'), '# Task\ncurrent context proof');
+  writeFileSync(join(runDir, 'context.md'), 'context');
+  writeFileSync(join(runDir, 'prompt.md'), 'prompt');
+  writeFileSync(join(runDir, 'composition.json'), JSON.stringify({ schema_version: 1 }));
+  const goal = appendRuntimeEvent(runDir, { runId, source: 'web', type: 'goal.received', payload: { ok: true } });
+  appendRuntimeEvent(runDir, {
+    runId,
+    source: 'runtime-manager',
+    type: 'run.completed',
+    payload: { decision: 'pass', runtime_label: 'run_lifecycle' },
+    artifactRefs: ['context.md'],
+  });
+  appendMemoryFact(agentDir, {
+    layer: 'module_learning',
+    key: 'context',
+    value: 'fresh fact',
+    run_id: runId,
+    source_event_ids: [goal.event_id],
+    artifact_refs: ['context.md'],
+    outcome: 'success',
+    modules: ['context-provenance'],
+  });
+  const report = verifyContextProvenance({ root: dir, runId, writeIfMissing: true });
+  assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
+});
+
+test('G007 context provenance rejects stale bundles and copied old-run memory as current fact', () => {
+  const dir = tempDir();
+  const agentDir = join(dir, '.agent');
+  const runId = 'context-stale-run';
+  const runDir = join(agentDir, 'runs', runId);
+  mkdirSync(runDir, { recursive: true });
+  for (const file of ['task.md', 'context.md', 'prompt.md', 'composition.json']) writeFileSync(join(runDir, file), file);
+  const current = appendRuntimeEvent(runDir, { runId, source: 'web', type: 'goal.received', payload: { ok: true } });
+  appendMemoryFact(agentDir, {
+    layer: 'module_learning',
+    key: 'stale',
+    value: 'copied old fact',
+    run_id: runId,
+    source_event_ids: ['old-run-event-id'],
+    artifact_refs: ['context.md'],
+    outcome: 'success',
+    modules: ['context-provenance'],
+  });
+  writeContextProvenanceBundle({ root: dir, runId });
+  appendRuntimeEvent(runDir, { runId, source: 'runtime-manager', type: 'run.completed', payload: { decision: 'pass' } });
+  const stale = verifyContextProvenance({ root: dir, runId });
+  assert.equal(stale.decision, 'FAIL');
+  assert.equal(stale.checks.bundle_bound_to_current_head, false);
+  assert.equal(stale.checks.memory_source_events_current, false);
+
+  const validSourceButStaleBundle = appendMemoryFact(agentDir, {
+    layer: 'sequential_handoff',
+    key: 'current',
+    value: 'current source id but stale bundle remains stale',
+    run_id: runId,
+    source_event_ids: [current.event_id],
+    artifact_refs: ['context.md'],
+  });
+  assert.ok(validSourceButStaleBundle.id);
 });
 
 test('Phase 5 PRD memory fabric records outcomes and changes later module recommendations', async () => {

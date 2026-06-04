@@ -37,6 +37,7 @@ import {
 } from './core.js';
 import { readRuntimeEvents } from './events/ledger.js';
 import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
+import { verifyContextProvenance } from './harness/context-provenance.js';
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
@@ -117,6 +118,7 @@ function usage(): string {
   agent run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
   agent run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
   agent runtime projection
+  agent context verify --run <run-id>
   agent runtime verify-ledger <run-id>
   agent runtime full-target-gate <run-id> [--append-pass-event]
   agent runtime m8-boundary-evidence <run-id>
@@ -281,6 +283,14 @@ async function main() {
       });
       console.log(JSON.stringify(report, null, 2));
       if (report.verification.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'context' && sub === 'verify') {
+      const id = arg('--run') || rest[0] || latestRunId();
+      if (!id) throw new Error('usage: agent context verify --run <run-id>');
+      const report = verifyContextProvenance({ root: process.cwd(), runId: id, writeIfMissing: true });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.decision !== 'PASS') process.exitCode = 2;
       return;
     }
     if (cmd === 'runtime' && sub === 'projection') {
