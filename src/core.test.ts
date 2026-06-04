@@ -31,6 +31,7 @@ import {
   startRun,
   updateTask,
 } from './core.js';
+import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
 function currentReviewInputHashForTest(dir = process.cwd()): string {
@@ -588,6 +589,38 @@ test('promotion engine classifies a multi run into a workflow candidate', async 
     promotions.some((p) => p.target_type === 'workflow'),
     'multi run with a scheduler/work-orders yields a workflow candidate',
   );
+});
+
+test('G008 promotion differential verifies three-run effect from raw artifacts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('g008 source task', dir);
+  const run = createRun(task.id, {}, dir);
+  await startForEvidence(run, dir);
+  collectRun(run.id, dir);
+  const memory = listPromotions(dir).find((p) => p.run_id === run.id && p.target_type === 'memory');
+  assert.ok(memory);
+  resolvePromotion(memory!.id, 'approved', dir);
+  applyApprovedPromotion(memory!.id, dir);
+  const afterTask = addTask('g008 after promotion task', dir);
+  const afterRun = createRun(afterTask.id, {}, dir);
+  await startForEvidence(afterRun, dir);
+
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
+});
+
+test('G008 promotion differential rejects edited PASS summary without raw run evidence', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  mkdirSync(join(dir, '.agent', 'hard-gates'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent', 'hard-gates', 'promotion-learning.json'),
+    JSON.stringify({ status: 'PASS', changed_field: 'recommendation', source_promotion_id: 'forged' }, null, 2),
+  );
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.all_hashes_match, false);
+  assert.equal(report.checks.deterministic_before_after, false);
 });
 
 test('applyApprovedPromotion writes the target artifact and sets status applied', async () => {

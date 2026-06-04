@@ -42,6 +42,7 @@ import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/native-evidence.js';
+import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
 import { currentReviewInputHash, runProductGate } from './product-gate.js';
 import {
@@ -135,6 +136,7 @@ function usage(): string {
   agent report github-projects [--github-dir ~/Documents/github] [--out-dir reports/github-projects/<timestamp>]
   agent promotions
   agent promotion approve|reject|apply <id>
+  agent promotion verify-learning
   agent worktrees cleanup
   agent maintenance reconcile-runs
   agent quality gate [--write]
@@ -574,6 +576,12 @@ async function main() {
       const id = rest[0];
       if (!id) throw new Error('usage: agent promotion apply <id>');
       console.log(JSON.stringify(applyApprovedPromotion(id), null, 2));
+      return;
+    }
+    if (cmd === 'promotion' && sub === 'verify-learning') {
+      const report = verifyPromotionDifferential({ root: process.cwd() });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.decision !== 'PASS') process.exitCode = 2;
       return;
     }
     if (cmd === 'worktrees' && sub === 'cleanup') {
