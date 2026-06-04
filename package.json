@@ -14,7 +14,9 @@
     "check": "biome check --write src scripts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "e2e": "node scripts/operator-browser-e2e.mjs && node scripts/operator-codex-web-e2e.mjs",
-    "report:github": "node scripts/github-projects-report.mjs"
+    "report:github": "node scripts/github-projects-report.mjs",
+    "harness:integrity": "node scripts/harness-os-integrity-gate.mjs",
+    "harness:integrity:self-test": "node scripts/harness-os-integrity-gate.mjs --self-test"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.16",

@@ -1,7 +1,7 @@
 # Dominic Orchestration Full Product Roadmap: v0 → v2
 
 
-> **REDESIGN NOTE (2026-06-04):** The ultimate direction is now provider-neutral harness ownership. OMX/Codex/Claude Code style native agent harnesses are compatibility adapters, not the canonical runtime. Direct model executors plus Dominic-owned BaseRule, Memory, Hook, Context, Tool, Verifier, and Promotion layers are the proof path. See `docs/milestones/ULTIMATE_GOAL_DIVIDE_AND_CONQUER_PLAN.md` and `docs/milestones/PROVIDER_NEUTRAL_HARNESS_CONTRACT.md`.
+> **REDESIGN NOTE (2026-06-04):** The ultimate direction is provider-neutral harness ownership, corrected by `docs/milestones/HARNESS_OS_CORRECTED_PLAN.md`: Phase A canonical substrate is a rented native executor wrapped by Dominic-owned evidence/verifier/policy/ledger/promotion contracts. Direct model executors remain future adapters behind the same contract, not the current proof path. See `docs/milestones/ULTIMATE_GOAL_DIVIDE_AND_CONQUER_PLAN.md`, `docs/milestones/PROVIDER_NEUTRAL_HARNESS_CONTRACT.md`, and `docs/adr/0001-provider-neutral-supersedes-omx-first.md`.
 > **CORRECTION (2026-06-02):** The historical pass-candidate wording was inflated. Since then the product gate has been hardened to require executable evidence for v1 role contracts, review-derived promotion learning, browser/operator E2E, and custody-attested independent review. Current local machine gates for v1 role contract, promotion learning, browser E2E, dogfood, safety, evidence integrity, and regression are green; final hard completion remains blocked by external independent-review custody.
 
 **Status:** LOCAL EXECUTABLE GATES GREEN; EXTERNAL REVIEW CUSTODY STILL BLOCKS HARD COMPLETION. See latest `.agent/product-gates/product-gate-*.json`.
