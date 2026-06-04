@@ -1753,6 +1753,11 @@ function updateConflictAndSynthesis(runDir: string): void {
   const overlaps = [...changedByWorker.entries()].filter(([, workers]) => new Set(workers).size > 1);
   const hasConflict =
     overlaps.length > 0 || denied.length > 0 || worktreeIssues.length > 0 || evidenceIssues.length > 0;
+  const multiVerifier = writeMultiExecutorVerification(runDir, outputs, worktreeChanges, hasConflict, [
+    ...denied,
+    ...worktreeIssues,
+    ...evidenceIssues,
+  ]);
   const status = hasConflict ? 'blocked' : 'clear';
   writeFileSync(
     join(runDir, 'conflict-report.generated.md'),
@@ -1786,8 +1791,85 @@ function updateConflictAndSynthesis(runDir: string): void {
   );
   writeFileSync(
     join(runDir, 'synthesis.generated.md'),
-    `# Synthesis\n\n## Accepted Outputs\n${outputs.map((o) => `- ${o}`).join('\n')}\n\n## Rejected Outputs\n${hasConflict ? '- Conflicting, denied, non-isolated, or mismatched worker evidence requires review before apply.' : 'None.'}\n\n## Conflicts\n${hasConflict ? 'Blocking conflicts, denied paths, worktree issues, or evidence mismatches found. See conflict-report.generated.md.' : 'No blocking conflicts detected from worker-reported changed files and actual worktree diffs.'}\n\n## Recommendation\n${hasConflict ? 'Do not apply automatically; resolve blockers first.' : 'Proceed to review.'}\n`,
+    `# Synthesis\n\n## Verifier Decision\n${multiVerifier.decision}\n\nVerifier artifact: multi-executor-verification.json\n\n## Accepted Outputs\n${multiVerifier.workers
+      .filter((worker) => worker.raw_evidence_supported)
+      .map((worker) => `- ${worker.output_ref}`)
+      .join('\n') || 'None.'}\n\n## Rejected Outputs\n${multiVerifier.issues.length ? multiVerifier.issues.map((issue) => `- ${issue}`).join('\n') : 'None.'}\n\n## Conflicts\n${hasConflict ? 'Blocking conflicts, denied paths, worktree issues, or evidence mismatches found. See conflict-report.generated.md.' : 'No blocking conflicts detected from worker-reported changed files and actual worktree diffs.'}\n\n## Recommendation\n${multiVerifier.decision === 'PASS' ? 'Proceed to review from verifier-backed artifacts only.' : 'Do not apply automatically; resolve verifier or conflict blockers first.'}\n`,
   );
+}
+interface MultiWorkerVerification {
+  worker_id: string;
+  output_ref: string;
+  process_ref: string;
+  process_exit_code: number | null;
+  declared_changed_files: string[];
+  actual_changed_files: string[];
+  pass_summary_claimed: boolean;
+  self_promotion_claimed: boolean;
+  raw_evidence_supported: boolean;
+}
+interface MultiExecutorVerificationReport {
+  schema_version: 1;
+  generated_at: string;
+  decision: 'PASS' | 'FAIL';
+  workers: MultiWorkerVerification[];
+  issues: string[];
+}
+function readWorkerExitCode(runDir: string, workerId: string): number | null {
+  const path = join(runDir, `${workerId}.process.json`);
+  if (!existsSync(path)) return null;
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as { exit_code?: unknown };
+    return typeof parsed.exit_code === 'number' ? parsed.exit_code : null;
+  } catch {
+    return null;
+  }
+}
+function writeMultiExecutorVerification(
+  runDir: string,
+  outputs: string[],
+  worktreeChanges: Map<string, string[]>,
+  hasConflict: boolean,
+  inheritedIssues: string[],
+): MultiExecutorVerificationReport {
+  const workers = outputs.map((output): MultiWorkerVerification => {
+    const workerId = output.replace(/\.md$/, '');
+    const text = readFileSync(join(runDir, 'worker-outputs', output), 'utf8');
+    const declared = extractFilesChanged(text);
+    const actual = worktreeChanges.get(workerId) || [];
+    const processExitCode = readWorkerExitCode(runDir, workerId);
+    const declaredMatchesActual =
+      declared.every((file) => actual.includes(file)) && actual.every((file) => declared.includes(file));
+    const passSummaryClaimed = /\b(PASS|passed|done|complete|completed|success)\b/i.test(text);
+    const selfPromotionClaimed = /self[-\s]?promot|promote\s+(?:my|this)\s+(?:output|worker|result)|overall\s+PASS/i.test(text);
+    return {
+      worker_id: workerId,
+      output_ref: `worker-outputs/${output}`,
+      process_ref: `${workerId}.process.json`,
+      process_exit_code: processExitCode,
+      declared_changed_files: declared,
+      actual_changed_files: actual,
+      pass_summary_claimed: passSummaryClaimed,
+      self_promotion_claimed: selfPromotionClaimed,
+      raw_evidence_supported: processExitCode === 0 && declaredMatchesActual && !selfPromotionClaimed,
+    };
+  });
+  const issues = [...inheritedIssues];
+  for (const worker of workers) {
+    if (worker.process_exit_code !== 0) issues.push(`${worker.worker_id}: process exit was ${worker.process_exit_code ?? 'missing'}`);
+    if (worker.self_promotion_claimed) issues.push(`${worker.worker_id}: worker attempted self-promotion/PASS authority`);
+    if (worker.pass_summary_claimed && !worker.raw_evidence_supported)
+      issues.push(`${worker.worker_id}: PASS/done summary is contradicted by raw process or diff evidence`);
+  }
+  const report: MultiExecutorVerificationReport = {
+    schema_version: 1,
+    generated_at: nowIso(),
+    decision: !hasConflict && workers.length > 0 && workers.every((worker) => worker.raw_evidence_supported) && issues.length === 0 ? 'PASS' : 'FAIL',
+    workers,
+    issues: [...new Set(issues)],
+  };
+  writeFileSync(join(runDir, 'multi-executor-verification.json'), JSON.stringify(report, null, 2));
+  return report;
 }
 function collectWorktreeIssues(runDir: string): string[] {
   const workOrdersDir = join(runDir, 'work-orders');
@@ -1893,6 +1975,7 @@ function writeReview(runDir: string, mode: RunMode): Decision {
       'conflict-report.md',
       'synthesis.generated.md',
       'conflict-report.generated.md',
+      'multi-executor-verification.json',
     );
     const ordersDir = join(runDir, 'work-orders');
     if (existsSync(ordersDir))
@@ -1905,6 +1988,10 @@ function writeReview(runDir: string, mode: RunMode): Decision {
     : 'conflict-report.md';
   const conflictReport = existsSync(join(runDir, conflictPath)) ? readFileSync(join(runDir, conflictPath), 'utf8') : '';
   const hasConflict = /Status: blocked/.test(conflictReport);
+  const multiVerifierPath = join(runDir, 'multi-executor-verification.json');
+  const multiVerifierFailed =
+    mode === 'multi' &&
+    (!existsSync(multiVerifierPath) || /"decision":\s*"FAIL"/.test(readFileSync(multiVerifierPath, 'utf8')));
   const processSummary = readRunProcessSummary(runDir);
   if (processSummary.invalid > 0)
     writeFileSync(
@@ -1917,13 +2004,14 @@ function writeReview(runDir: string, mode: RunMode): Decision {
     ? (JSON.parse(readFileSync(join(runDir, 'evidence-errors.json'), 'utf8')) as any[])
     : [];
   const processInvalid = (!adapterEvidence && processSummary.valid === 0) || processSummary.invalid > 0;
-  const hasIssue = missing.length > 0 || hasConflict || exitCode !== 0 || evidenceErrors.length > 0 || processInvalid;
+  const hasIssue = missing.length > 0 || hasConflict || multiVerifierFailed || exitCode !== 0 || evidenceErrors.length > 0 || processInvalid;
   const score = hasIssue ? 6 : 9;
   const decision: Decision =
-    hasConflict || evidenceErrors.length > 0 || processInvalid ? 'blocked' : hasIssue ? 'changes_requested' : 'pass';
+    hasConflict || multiVerifierFailed || evidenceErrors.length > 0 || processInvalid ? 'blocked' : hasIssue ? 'changes_requested' : 'pass';
   const blockingIssues = [
     ...missing.map((m) => `- Missing ${m}`),
     ...(hasConflict ? ['- Conflict report is blocked'] : []),
+    ...(multiVerifierFailed ? ['- Multi-executor verifier rejected worker synthesis'] : []),
     ...(evidenceErrors.length ? evidenceErrors.map((e) => `- Evidence capture failed: ${e.label}`) : []),
     ...(processSummary.errors.length ? processSummary.errors.map((e) => `- Invalid process evidence: ${e}`) : []),
     ...(exitCode !== 0 ? [`- Executor exit code ${exitCode}`] : []),

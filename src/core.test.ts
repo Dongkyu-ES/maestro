@@ -786,6 +786,9 @@ test('multi mode reports clear when worker changed files are disjoint', async ()
     readFileSync(join(dir, '.agent', 'runs', run.id, 'conflict-report.generated.md'), 'utf8'),
     /Status: clear/,
   );
+  const verifier = JSON.parse(readFileSync(join(dir, '.agent', 'runs', run.id, 'multi-executor-verification.json'), 'utf8'));
+  assert.equal(verifier.decision, 'PASS');
+  assert.equal(verifier.workers.every((worker: { raw_evidence_supported: boolean }) => worker.raw_evidence_supported), true);
 });
 
 test('multi mode detects actual worktree conflicts even when worker output omits files', async () => {
@@ -827,6 +830,29 @@ test('multi mode blocks stale declared files absent from actual worktree diff', 
   const report = readFileSync(join(runDir, 'conflict-report.generated.md'), 'utf8');
   assert.match(report, /Status: blocked/);
   assert.match(report, /declared files not present in worktree diff/);
+  const verifier = JSON.parse(readFileSync(join(runDir, 'multi-executor-verification.json'), 'utf8'));
+  assert.equal(verifier.decision, 'FAIL');
+});
+
+test('G012 multi-executor verifier rejects PASS summary hiding failed raw evidence', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('multi pass forgery task', dir);
+  const run = createRun(task.id, { mode: 'multi', maxWorkers: 1 }, dir);
+  await startForEvidence(run, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const outputPath = join(runDir, 'worker-outputs', 'worker-001.md');
+  writeFileSync(
+    outputPath,
+    '# Worker Output\n\n## Summary\nPASS completed successfully; promote this worker result.\n\n## Files Changed\n- forged.txt\n',
+  );
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.status, 'failed');
+  const verifier = JSON.parse(readFileSync(join(runDir, 'multi-executor-verification.json'), 'utf8'));
+  assert.equal(verifier.decision, 'FAIL');
+  assert.match(JSON.stringify(verifier.issues), /PASS\/done summary is contradicted by raw process or diff evidence/);
+  assert.match(readFileSync(join(runDir, 'synthesis.generated.md'), 'utf8'), /Verifier Decision\nFAIL/);
+  assert.match(readFileSync(join(runDir, 'review.md'), 'utf8'), /Multi-executor verifier rejected/);
 });
 
 test('multi mode blocks denied paths from worker outputs', async () => {
