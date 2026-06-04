@@ -520,13 +520,63 @@ test('G009 SOFT skill contract remains advisory and does not gate completion', a
       'selected_skills: analyze',
       'rejected_skills_or_methods: none',
       'how each selected skill changed the result: analyze guided the local evidence summary only',
-      'evidence: ok.txt and diff.patch were inspected outside any skill completion gate',
+      'evidence: ok.txt and diff.patch were inspected as local advisory context',
       'remaining_gaps: none',
     ].join('\n'),
   );
   const collected = collectRun(run.id, dir);
   assert.equal(collected.decision, 'pass');
   assert.equal(verifySkillContracts({ root: dir, runDir }).decision, 'PASS');
+});
+
+test('G009 SOFT skill contract cannot authorize HARD PASS completion prose', async () => {
+  const dir = tempDir();
+  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+  const task = addTask('soft skill forged hard gate task', dir);
+  const run = createRun(task.id, { command: "node -e \"require('fs').writeFileSync('ok.txt','ok')\"" }, dir);
+  await startRun(run.id, {}, dir);
+  const approval = listApprovals(dir).find((a) => a.run_id === run.id && a.status === 'requested');
+  assert.ok(approval);
+  resolveApproval(approval.id, 'approved', dir);
+  await startRun(run.id, {}, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  writeFileSync(
+    join(runDir, 'skill-routing-candidates.md'),
+    '# Skill Routing Candidates\n\n## Candidates\n1. analyze\n   - path: .codex/skills/analyze/SKILL.md\n   - why: test candidate\n',
+  );
+  writeFileSync(
+    join(runDir, 'skill-acceptance-contracts.json'),
+    JSON.stringify(
+      {
+        contracts: [
+          {
+            schema_version: 1,
+            skill_name: 'analyze',
+            skill_path: '.codex/skills/analyze/SKILL.md',
+            hardness: 'SOFT',
+            allowed_tool_intents: ['read_files'],
+          },
+        ],
+      },
+      null,
+      2,
+    ),
+  );
+  writeFileSync(
+    join(runDir, 'skill-usage-response.md'),
+    [
+      '# Skill Usage Response',
+      'inspected_skills: analyze SKILL.md read',
+      'selected_skills: analyze',
+      'rejected_skills_or_methods: none',
+      'how each selected skill changed the result: analyze was treated as the HARD PASS completion gate',
+      'evidence: skill says success',
+      'remaining_gaps: none',
+    ].join('\n'),
+  );
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'changes_requested');
+  assert.match(readFileSync(join(runDir, 'review.md'), 'utf8'), /HARD AcceptanceContract/);
 });
 
 test('review blocker: mode-specific runtime evidence points to actual process artifacts', async () => {
@@ -564,6 +614,25 @@ test('G010 run detail refuses green trust when verifier evidence is red', async 
   const detail = renderRun(run.id, dir);
   assert.match(detail, /NOT TRUSTED — evidence contradiction/);
   assert.match(detail, /full-target-verification\.json: FAIL/);
+  assert.doesNotMatch(detail, /trusted by current evidence/);
+});
+
+test('G010 run detail refuses green trust when verifier evidence is absent', async () => {
+  const dir = tempDir();
+  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+  const task = addTask('no verifier ui task', dir);
+  const run = createRun(task.id, { command: "node -e \"require('fs').writeFileSync('ok.txt','ok')\"" }, dir);
+  await startRun(run.id, {}, dir);
+  const approval = listApprovals(dir).find((a) => a.run_id === run.id && a.status === 'requested');
+  assert.ok(approval);
+  resolveApproval(approval.id, 'approved', dir);
+  await startRun(run.id, {}, dir);
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'pass');
+
+  const detail = renderRun(run.id, dir);
+  assert.match(detail, /not yet trusted/);
+  assert.match(detail, /no verifier artifacts found/);
   assert.doesNotMatch(detail, /trusted by current evidence/);
 });
 

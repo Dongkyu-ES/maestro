@@ -31,6 +31,7 @@ import {
   startRun,
   updateTask,
 } from './core.js';
+import { appendRuntimeEvent } from './events/ledger.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
@@ -135,7 +136,7 @@ function writeMachineHardGateFixtures(dir: string): void {
     join(dir, '.agent/runs/promo-before/run.yaml'),
     'id: promo-before\ntask_id: task-promo\nrun_dir: .agent/runs/promo-before\nmode: basic\nstatus: completed\ndecision: pass\n',
   );
-  writeJsonArtifact(dir, '.agent/runs/promo-before/promotion-state.json', {
+  const beforeRunSha = writeJsonArtifact(dir, '.agent/runs/promo-before/promotion-state.json', {
     run_id: 'before',
     task_context_sha256: taskContextSha,
     stable_fields: { recommendation: 'old-guard' },
@@ -148,15 +149,22 @@ function writeMachineHardGateFixtures(dir: string): void {
     join(dir, '.agent/runs/promo-after/run.yaml'),
     'id: promo-after\ntask_id: task-promo\nrun_dir: .agent/runs/promo-after\nmode: basic\nstatus: completed\ndecision: pass\n',
   );
-  writeFileSync(
-    join(dir, '.agent/runs/promo-after/promotion-loaded.jsonl'),
-    `${JSON.stringify({ schema_version: 1, run_id: 'after', type: 'promotion.loaded', payload: { loaded_promotion_artifact_sha256: loadedPromotionSha, changed_field: 'recommendation' } })}\n`,
-  );
-  writeJsonArtifact(dir, '.agent/runs/promo-after/promotion-state.json', {
+  appendRuntimeEvent(join(dir, '.agent/runs/promo-after'), {
+    runId: 'after',
+    source: 'runtime-manager',
+    type: 'promotion.loaded',
+    payload: {
+      promotion_id: 'promotion-fixture',
+      loaded_promotion_artifact_sha256: loadedPromotionSha,
+      changed_field: 'recommendation',
+    },
+    artifactRefs: ['.agent/promotions/applied/agent_instruction/fixture.md'],
+  });
+  const afterRunSha = writeJsonArtifact(dir, '.agent/runs/promo-after/promotion-state.json', {
     run_id: 'after',
     task_context_sha256: taskContextSha,
     loaded_promotion_artifact_sha256: loadedPromotionSha,
-    runtime_events_path: '.agent/runs/promo-after/promotion-loaded.jsonl',
+    runtime_events_path: '.agent/runs/promo-after/events.jsonl',
     stable_fields: { recommendation: 'new-guard' },
   });
   const reviewFindingSha = writeJsonArtifact(dir, '.agent/hard-gates/promotion/review-finding.json', {
@@ -182,11 +190,15 @@ function writeMachineHardGateFixtures(dir: string): void {
     changed_field: 'recommendation',
     before: 'old-guard',
     after: 'new-guard',
+    before_run_sha256: beforeRunSha,
+    after_run_sha256: afterRunSha,
   });
   writeJsonArtifact(dir, '.agent/hard-gates/promotion-learning.json', {
     status: 'PASS',
     before_run_path: '.agent/runs/promo-before/promotion-state.json',
+    before_run_sha256: beforeRunSha,
     after_run_path: '.agent/runs/promo-after/promotion-state.json',
+    after_run_sha256: afterRunSha,
     review_finding_path: '.agent/hard-gates/promotion/review-finding.json',
     review_finding_sha256: reviewFindingSha,
     promotion_candidate_path: '.agent/hard-gates/promotion/candidate.json',
@@ -200,6 +212,7 @@ function writeMachineHardGateFixtures(dir: string): void {
     loaded_promotion_artifact_path: '.agent/promotions/applied/agent_instruction/fixture.md',
     loaded_promotion_artifact_sha256: loadedPromotionSha,
     changed_field: 'recommendation',
+    source_promotion_id: 'promotion-fixture',
   });
 
   const traceSha = writeJsonArtifact(dir, '.agent/hard-gates/browser-trace.json', {
@@ -623,6 +636,23 @@ test('G008 promotion differential rejects edited PASS summary without raw run ev
   assert.equal(report.checks.deterministic_before_after, false);
 });
 
+test('G008 promotion differential rejects forged loaded event text without canonical runtime ledger', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  writeMachineHardGateFixtures(dir);
+  writeFileSync(
+    join(dir, '.agent/runs/promo-after/events.jsonl'),
+    `${JSON.stringify({
+      schema_version: 1,
+      run_id: 'after',
+      type: 'promotion.loaded',
+      payload: { promotion_id: 'promotion-fixture', loaded_promotion_artifact_sha256: 'contains matching words only', changed_field: 'recommendation' },
+    })}\n`,
+  );
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.loaded_artifact_proves_after, false);
+});
+
 test('applyApprovedPromotion writes the target artifact and sets status applied', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
   gitInit(dir);
@@ -853,6 +883,29 @@ test('G012 multi-executor verifier rejects PASS summary hiding failed raw eviden
   assert.match(JSON.stringify(verifier.issues), /PASS\/done summary is contradicted by raw process or diff evidence/);
   assert.match(readFileSync(join(runDir, 'synthesis.generated.md'), 'utf8'), /Verifier Decision\nFAIL/);
   assert.match(readFileSync(join(runDir, 'review.md'), 'utf8'), /Multi-executor verifier rejected/);
+});
+
+test('G012 multi-executor verifier requires output from every scheduled worker', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('multi missing output task', dir);
+  const run = createRun(task.id, { mode: 'multi', maxWorkers: 2 }, dir);
+  await startForEvidence(run, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const order1 = readFileSync(join(runDir, 'work-orders', 'worker-001.yaml'), 'utf8');
+  const order2 = readFileSync(join(runDir, 'work-orders', 'worker-002.yaml'), 'utf8');
+  const ws1 = order1.match(/isolated_workspace: "([^"]+)"/)![1];
+  const ws2 = order2.match(/isolated_workspace: "([^"]+)"/)![1];
+  writeFileSync(join(ws1, 'one.txt'), 'worker 1');
+  writeFileSync(join(ws2, 'two.txt'), 'worker 2');
+  writeFileSync(join(runDir, 'worker-outputs', 'worker-001.md'), '# Worker Output\n\n## Files Changed\n- one.txt\n');
+  rmSync(join(runDir, 'worker-outputs', 'worker-002.md'), { force: true });
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.status, 'failed');
+  const verifier = JSON.parse(readFileSync(join(runDir, 'multi-executor-verification.json'), 'utf8'));
+  assert.equal(verifier.decision, 'FAIL');
+  assert.equal(verifier.workers.find((worker: { worker_id: string }) => worker.worker_id === 'worker-002').output_exists, false);
+  assert.match(JSON.stringify(verifier.issues), /worker-002: worker output is missing/);
 });
 
 test('multi mode blocks denied paths from worker outputs', async () => {

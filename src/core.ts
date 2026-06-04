@@ -962,7 +962,9 @@ function writePromotionLearningGateForRun(runDir: string, root: string, runId: s
     status: 'PASS',
     source_promotion_id: applied.id,
     before_run_path: relative(root, beforePath),
+    before_run_sha256: beforeSha,
     after_run_path: relative(root, afterPath),
+    after_run_sha256: afterSha,
     review_finding_path: relative(root, findingPath),
     review_finding_sha256: findingSha,
     promotion_candidate_path: relative(root, candidatePath),
@@ -1800,6 +1802,7 @@ function updateConflictAndSynthesis(runDir: string): void {
 interface MultiWorkerVerification {
   worker_id: string;
   output_ref: string;
+  output_exists: boolean;
   process_ref: string;
   process_exit_code: number | null;
   declared_changed_files: string[];
@@ -1832,9 +1835,19 @@ function writeMultiExecutorVerification(
   hasConflict: boolean,
   inheritedIssues: string[],
 ): MultiExecutorVerificationReport {
-  const workers = outputs.map((output): MultiWorkerVerification => {
-    const workerId = output.replace(/\.md$/, '');
-    const text = readFileSync(join(runDir, 'worker-outputs', output), 'utf8');
+  const workOrdersDir = join(runDir, 'work-orders');
+  const expectedWorkerIds = existsSync(workOrdersDir)
+    ? readdirSync(workOrdersDir)
+        .filter((file) => file.endsWith('.yaml'))
+        .map((file) => file.replace(/\.yaml$/, ''))
+        .sort()
+    : outputs.map((output) => output.replace(/\.md$/, '')).sort();
+  const outputSet = new Set(outputs.map((output) => output.replace(/\.md$/, '')));
+  const workers = expectedWorkerIds.map((workerId): MultiWorkerVerification => {
+    const output = `${workerId}.md`;
+    const outputPath = join(runDir, 'worker-outputs', output);
+    const outputExists = outputSet.has(workerId) && existsSync(outputPath);
+    const text = outputExists ? readFileSync(outputPath, 'utf8') : '';
     const declared = extractFilesChanged(text);
     const actual = worktreeChanges.get(workerId) || [];
     const processExitCode = readWorkerExitCode(runDir, workerId);
@@ -1845,6 +1858,7 @@ function writeMultiExecutorVerification(
     return {
       worker_id: workerId,
       output_ref: `worker-outputs/${output}`,
+      output_exists: outputExists,
       process_ref: `${workerId}.process.json`,
       process_exit_code: processExitCode,
       declared_changed_files: declared,
@@ -1856,6 +1870,7 @@ function writeMultiExecutorVerification(
   });
   const issues = [...inheritedIssues];
   for (const worker of workers) {
+    if (!worker.output_exists) issues.push(`${worker.worker_id}: worker output is missing`);
     if (worker.process_exit_code !== 0) issues.push(`${worker.worker_id}: process exit was ${worker.process_exit_code ?? 'missing'}`);
     if (worker.self_promotion_claimed) issues.push(`${worker.worker_id}: worker attempted self-promotion/PASS authority`);
     if (worker.pass_summary_claimed && !worker.raw_evidence_supported)

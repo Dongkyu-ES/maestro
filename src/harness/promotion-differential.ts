@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { type RuntimeEventEnvelope, validateRuntimeLedger } from '../events/ledger.js';
 
 export interface PromotionDifferentialReport {
   schema_version: 1;
@@ -31,6 +32,30 @@ function digestMatches(root: string, rel: unknown, expected: unknown): boolean {
   return existsSync(full) && sha256(readFileSync(full)) === expected;
 }
 
+function readCanonicalPromotionLoadedEvent(root: string, rel: unknown, gate: Record<string, any> | undefined, changedField: string): boolean {
+  if (typeof rel !== 'string' || rel.startsWith('/') || rel.includes('..')) return false;
+  const full = join(root, rel);
+  if (!existsSync(full)) return false;
+  try {
+    const events = readFileSync(full, 'utf8')
+      .split(/\r?\n/)
+      .filter((line) => line.trim())
+      .map((line) => JSON.parse(line)) as RuntimeEventEnvelope[];
+    validateRuntimeLedger(events);
+    return events.some((event) => {
+      const payload = event.payload as Record<string, unknown>;
+      return (
+        event.type === 'promotion.loaded' &&
+        payload.loaded_promotion_artifact_sha256 === gate?.loaded_promotion_artifact_sha256 &&
+        payload.changed_field === changedField &&
+        (!gate?.source_promotion_id || payload.promotion_id === gate.source_promotion_id)
+      );
+    });
+  } catch {
+    return false;
+  }
+}
+
 export function verifyPromotionDifferential(options: { root: string; agentDir?: string }): PromotionDifferentialReport {
   const agentDir = options.agentDir || '.agent';
   const gateRel = `${agentDir}/hard-gates/promotion-learning.json`;
@@ -44,7 +69,6 @@ export function verifyPromotionDifferential(options: { root: string; agentDir?: 
   const finding = readJson(options.root, gate?.review_finding_path);
   const loadedPath = typeof gate?.loaded_promotion_artifact_path === 'string' ? gate.loaded_promotion_artifact_path : '';
   const eventPath = typeof after?.runtime_events_path === 'string' ? after.runtime_events_path : '';
-  const eventText = eventPath && existsSync(join(options.root, eventPath)) ? readFileSync(join(options.root, eventPath), 'utf8') : '';
   const changedField = String(gate?.changed_field || '');
   const beforeValue = changedField ? before?.stable_fields?.[changedField] : undefined;
   const afterValue = changedField ? after?.stable_fields?.[changedField] : undefined;
@@ -56,6 +80,8 @@ export function verifyPromotionDifferential(options: { root: string; agentDir?: 
       digestMatches(options.root, gate?.promotion_approval_path, gate?.promotion_approval_sha256) &&
       digestMatches(options.root, gate?.promotion_apply_path, gate?.promotion_apply_sha256) &&
       digestMatches(options.root, gate?.promotion_effect_path, gate?.promotion_effect_sha256) &&
+      digestMatches(options.root, gate?.before_run_path, gate?.before_run_sha256) &&
+      digestMatches(options.root, gate?.after_run_path, gate?.after_run_sha256) &&
       digestMatches(options.root, loadedPath, gate?.loaded_promotion_artifact_sha256),
     chain_links:
       Boolean(
@@ -76,14 +102,14 @@ export function verifyPromotionDifferential(options: { root: string; agentDir?: 
           beforeValue !== afterValue &&
           effect?.changed_field === changedField &&
           effect?.before === beforeValue &&
-          effect?.after === afterValue,
+          effect?.after === afterValue &&
+          effect?.before_run_sha256 === gate?.before_run_sha256 &&
+          effect?.after_run_sha256 === gate?.after_run_sha256,
       ),
     loaded_artifact_proves_after:
       Boolean(
         after?.loaded_promotion_artifact_sha256 === gate?.loaded_promotion_artifact_sha256 &&
-          eventText.includes('promotion.loaded') &&
-          eventText.includes(String(gate?.loaded_promotion_artifact_sha256 || '')) &&
-          eventText.includes(changedField),
+          readCanonicalPromotionLoadedEvent(options.root, eventPath, gate, changedField),
       ),
   };
   const report: PromotionDifferentialReport = {

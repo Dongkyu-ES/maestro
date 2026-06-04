@@ -157,10 +157,11 @@ function readJsonArtifact(runDir: string, file: string): Record<string, unknown>
     return { parse_error: file };
   }
 }
-function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[]; refs: string[] } {
+function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[]; refs: string[]; positiveRefs: string[] } {
   const red: string[] = [];
   const yellow: string[] = [];
   const refs: string[] = [];
+  const positiveRefs: string[] = [];
   for (const file of [
     'full-target-gate.json',
     'full-target-verification.json',
@@ -168,6 +169,7 @@ function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[
     'context-provenance-verification.json',
     'skill-contracts-verification.json',
     'promotion-differential-verification.json',
+    'multi-executor-verification.json',
   ]) {
     const artifact = readJsonArtifact(runDir, file);
     if (!artifact) continue;
@@ -176,6 +178,7 @@ function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[
     if (/FAIL|BLOCKED|failed|blocked/i.test(value)) red.push(`${file}: ${value}`);
     if (file === 'full-target-gate.json' && value && !/PASS/i.test(value)) red.push(`${file}: ${value}`);
     if (artifact.parse_error) red.push(`${file}: parse_error`);
+    if (/PASS|supported/i.test(value) && !artifact.parse_error) positiveRefs.push(file);
   }
   const native = readJsonArtifact(runDir, 'native-evidence.json');
   if (native) {
@@ -185,12 +188,12 @@ function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[
       yellow.push(`native-harness-assisted: ${surfaces}`);
     }
   }
-  return { red, yellow, refs: [...new Set(refs)] };
+  return { red, yellow, refs: [...new Set(refs)], positiveRefs: [...new Set(positiveRefs)] };
 }
 function renderEvidenceTrustPanel(runDir: string, meta: RunMeta): string {
   const findings = evidenceTrustFindings(runDir);
   const claimsComplete = meta.status === 'completed' || meta.decision === 'pass';
-  const trusted = claimsComplete && findings.red.length === 0;
+  const trusted = claimsComplete && findings.red.length === 0 && findings.positiveRefs.length > 0;
   const css = findings.red.length ? 'trust-red' : findings.yellow.length ? 'trust-yellow' : 'hero';
   const verdict = findings.red.length ? 'NOT TRUSTED — evidence contradiction' : trusted ? 'trusted by current evidence' : 'not yet trusted';
   const redBlock = findings.red.length

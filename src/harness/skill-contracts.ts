@@ -170,5 +170,8 @@ export function skillContractIssuesForRun(root: string, runDir: string, response
   for (const check of report.checks) {
     if (check.status === 'FAIL') issues.push(`${check.skill_name} ${check.hardness}: ${check.reasons.join('; ')}`);
   }
+  const hasPassingHardContract = report.checks.some((check) => check.hardness === 'HARD' && check.status === 'PASS');
+  if (claimsHardGate && !hasPassingHardContract)
+    issues.push('native skill output claims HARD/gated/PASS success but no passing HARD AcceptanceContract verifier evidence exists');
   return issues.slice(0, 8);
 }
