@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   appendRuntimeEvent,
+  createRuntimeLedgerHeadBinding,
   type RuntimeEventEnvelope,
   readRuntimeEvents,
   validateRuntimeLedger,
@@ -25,6 +26,8 @@ export interface FullTargetGateArtifact {
   decision: 'PASS' | 'FAIL';
   requirements: FullTargetRequirement[];
   source_event_ids: string[];
+  ledger_head_sha256: string;
+  ledger_event_count: number;
   projection_status?: string;
 }
 
@@ -63,9 +66,8 @@ function eventWith(
   return events.find((event) => event.type === type && predicate(event));
 }
 
-function approvedApprovalArtifact(runDir: string, event: RuntimeEventEnvelope): boolean {
-  const approvalId = String(event.payload.approval_id || '');
-  if (!approvalId || event.payload.decision !== 'approved') return false;
+function approvalArtifactMatches(runDir: string, event: RuntimeEventEnvelope, approvalId: string): boolean {
+  if (!approvalId) return false;
   return event.artifact_refs.some((ref) => {
     if (!hasArtifact(runDir, ref)) return false;
     try {
@@ -79,6 +81,11 @@ function approvedApprovalArtifact(runDir: string, event: RuntimeEventEnvelope): 
       return false;
     }
   });
+}
+
+function approvedApprovalArtifact(runDir: string, event: RuntimeEventEnvelope): boolean {
+  const approvalId = String(event.payload.approval_id || '');
+  return event.payload.decision === 'approved' && approvalArtifactMatches(runDir, event, approvalId);
 }
 
 function approvedBoundary(
@@ -120,7 +127,7 @@ function approvedRuntimeAction(
         event.type === 'runtime.action.approved' &&
         event.payload.approval_id === boundary.approvalId &&
         event.payload.action === action &&
-        event.artifact_refs.every((ref) => hasArtifact(runDir, ref)),
+        approvalArtifactMatches(runDir, event, boundary.approvalId),
     ),
   );
 }
@@ -293,6 +300,7 @@ export function writeFullTargetGateArtifact(options: {
   ];
   if (requirements.map((item) => item.name).join('\n') !== FULL_TARGET_REQUIREMENTS.join('\n'))
     throw new Error('full target requirement drift');
+  const ledgerHeadBinding = createRuntimeLedgerHeadBinding(events);
   const artifact: FullTargetGateArtifact = {
     schema_version: 1,
     generated_at: new Date().toISOString(),
@@ -300,6 +308,8 @@ export function writeFullTargetGateArtifact(options: {
     decision: requirements.every((item) => item.status === 'PASS') ? 'PASS' : 'FAIL',
     requirements,
     source_event_ids: events.map((event) => event.event_id),
+    ledger_head_sha256: ledgerHeadBinding.ledger_head_sha256,
+    ledger_event_count: ledgerHeadBinding.event_count,
     projection_status: projected?.status,
   };
   writeFileSync(join(runDir, 'full-target-gate.json'), JSON.stringify(artifact, null, 2));

@@ -53,6 +53,8 @@ function fullTargetArtifactPasses(root: string | undefined, ref: string): boolea
       decision?: unknown;
       requirements?: unknown;
       source_event_ids?: unknown;
+      ledger_head_sha256?: unknown;
+      ledger_event_count?: unknown;
     };
     const requirements = Array.isArray(artifact.requirements)
       ? (artifact.requirements as Array<{ status?: unknown }>)
@@ -81,7 +83,9 @@ function fullTargetArtifactPasses(root: string | undefined, ref: string): boolea
       requiredNames.every((name) => names.has(name)) &&
       requirements.every((item) => item.status === 'PASS') &&
       Array.isArray(artifact.source_event_ids) &&
-      artifact.source_event_ids.length > 0
+      artifact.source_event_ids.length > 0 &&
+      typeof artifact.ledger_head_sha256 === 'string' &&
+      Number.isInteger(artifact.ledger_event_count)
     );
   } catch {
     return false;
@@ -130,6 +134,8 @@ export function runRuntimeHardGate(input: RuntimeHardGateInput): RuntimeHardGate
       event.source === 'harness' &&
       event.artifact_refs.length > 0 &&
       event.artifact_refs.every((ref) => artifactExists(input.artifactRoot, ref)) &&
+      event.payload.ledger_head_sha256 === event.prev_event_sha256 &&
+      event.payload.ledger_event_count === event.sequence - 1 &&
       (event.payload.artifact_sha256
         ? event.artifact_refs.some(
             (ref) =>

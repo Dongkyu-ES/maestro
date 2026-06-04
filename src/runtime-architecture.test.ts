@@ -7,7 +7,13 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { buildCompositionPlan } from './composition/composition.js';
 import { addTask, collectRun, createRun, listApprovals, rebuildRuntimeProjectionStore, resolveApproval, startRun } from './core.js';
-import { appendRuntimeEvent, payloadHash, readRuntimeEvents, validateRuntimeLedger } from './events/ledger.js';
+import {
+  appendRuntimeEvent,
+  createRuntimeLedgerHeadBinding,
+  payloadHash,
+  readRuntimeEvents,
+  validateRuntimeLedger,
+} from './events/ledger.js';
 import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
@@ -717,6 +723,7 @@ test('Phase 8: full-target hard gate requires a digest-matched PASS artifact, no
   });
   assert.equal(forgedReport.decision, 'FAIL');
 
+  const passBinding = createRuntimeLedgerHeadBinding(readRuntimeEvents(dir));
   const passArtifact = {
     schema_version: 1,
     run_id: 'run-full-pass',
@@ -740,6 +747,8 @@ test('Phase 8: full-target hard gate requires a digest-matched PASS artifact, no
       'ledger projection UI render agreement',
     ].map((name) => ({ name, status: 'PASS' })),
     source_event_ids: [session.event_id],
+    ledger_head_sha256: passBinding.ledger_head_sha256,
+    ledger_event_count: passBinding.event_count,
     projection_status: 'completed',
   };
   writeFileSync(join(dir, 'full-target-gate-v2.json'), JSON.stringify(passArtifact, null, 2));
@@ -750,7 +759,11 @@ test('Phase 8: full-target hard gate requires a digest-matched PASS artifact, no
     runId: 'run-full-pass',
     source: 'harness',
     type: 'gate.full_target.verified',
-    payload: { artifact_sha256: passSha },
+    payload: {
+      artifact_sha256: passSha,
+      ledger_head_sha256: passBinding.ledger_head_sha256,
+      ledger_event_count: passBinding.event_count,
+    },
     artifactRefs: ['full-target-gate-v2.json'],
   });
   const passReport = runRuntimeHardGate({
@@ -912,7 +925,11 @@ test('Phase 8: full-target artifact writer lists concrete missing requirements a
     artifactRefs: ['approvals/approval-shell.json'],
   });
   const passArtifact = writeFullTargetGateArtifact({ root: dir, agentDir, runId, appendPassEvent: true });
-  assert.equal(passArtifact.decision, 'PASS');
+  assert.equal(
+    passArtifact.decision,
+    'PASS',
+    JSON.stringify(passArtifact.requirements.filter((item) => item.status === 'FAIL'), null, 2),
+  );
   assert.equal(
     readRuntimeEvents(runDir).some((event) => event.type === 'gate.full_target.passed'),
     true,
