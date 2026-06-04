@@ -475,7 +475,7 @@ review finding
 
 ---
 
-### M10 — Native Harness Compatibility Adapters
+### M10 — Native Executor Substrate / Compatibility Surface
 
 **Goal:** Support Codex CLI, Claude Code, OMX, agy as optional executors without letting them own truth.
 
@@ -546,12 +546,12 @@ review finding
           └───────────┬───────────┘
                       │
      ┌────────────────▼────────────────┐
-     │ M10 Native Harness Compatibility │
+     │ M10 Native Executor Evidence Substrate │
      │ M11 Multi-Executor Orchestration │
      └─────────────────────────────────┘
 ```
 
-The key design choice: **M10 is downstream of the harness spine.** Codex/Claude Code compatibility cannot be used to define M1–M8.
+The corrected key design choice: **native executor over the evidence contract is the Phase-A substrate, while unowned native surfaces remain explicitly labeled.** Codex/Claude Code output cannot define M1–M8 truth by itself; only Dominic-owned ledger/verifier evidence can.
 
 ---
 
@@ -591,10 +591,10 @@ The key design choice: **M10 is downstream of the harness spine.** Codex/Claude 
 
 ### Phase E — Compatibility and Scale
 
-- M10 Native Harness Compatibility Adapters
+- M10 Native Executor Substrate / Compatibility Surface
 - M11 Multi-Executor Orchestration
 
-**Exit condition:** Codex/Claude Code can be used as optional compatibility executors, while direct-provider mode remains the canonical proof path.
+**Exit condition:** Codex/Claude Code-style native executors can be used as the Phase-A working substrate only when wrapped by Dominic-owned ledger/verifier evidence; direct-provider mode remains an optional future adapter behind the same contract, not the current proof path.
 
 ---
 
