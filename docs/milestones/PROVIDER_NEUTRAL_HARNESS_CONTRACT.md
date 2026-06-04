@@ -315,7 +315,7 @@ The first acceptable slice is not multi-agent, and it is **not a mock executor**
 5. **run it through the existing native executor (`codex-exec-runner`), wrapped by this contract** — real edits happen;
 6. ingest the executor's tool effects (`git diff --stat` + per-file hashes) as evidence;
 7. classify policy from those effects. **Honest caveat for native mode:** `codex exec` runs its OWN tool loop inside the child process and exposes only a final message + session id — the harness does NOT see per-tool intents, so per-`tool+args` mediation is **impossible** here; native runs enforce policy via the pre-launch sandbox flag (`--sandbox`) + **post-hoc git-diff classification**, and carry a permanent `mediation: external/unowned` status. Per-`tool+args` mediation holds only for the future direct-model mode where the harness owns the loop;
-8. append every step to the event ledger (**work-item L: add `prev_event_sha256` chain; today it is sequence-only and NOT yet tamper-evident**);
+8. append every step to the event ledger with `prev_event_sha256` hash-chain and bind downstream evidence to the current `ledger_head_sha256`;
 9. run the **new M7 verifier** (not the demolished `product-gate.ts`) over recomputable evidence;
 10. transition state **only** through the verifier result;
 11. label the run `native-harness-assisted` and enumerate unowned surfaces.

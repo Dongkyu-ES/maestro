@@ -141,6 +141,38 @@ export function validateRuntimeEvent(event: RuntimeEventEnvelope, previous?: Run
   if (!Array.isArray(event.artifact_refs)) throw new Error('artifact_refs must be an array');
 }
 
+export interface RuntimeLedgerHeadBinding {
+  run_id: string;
+  event_count: number;
+  ledger_head_sha256: string;
+}
+
+export function runtimeLedgerHeadHash(events: RuntimeEventEnvelope[]): string {
+  validateRuntimeLedger(events);
+  const last = events.at(-1);
+  return last ? envelopeHash(last) : GENESIS_EVENT_HASH;
+}
+
+export function createRuntimeLedgerHeadBinding(events: RuntimeEventEnvelope[]): RuntimeLedgerHeadBinding {
+  validateRuntimeLedger(events);
+  const last = events.at(-1);
+  return {
+    run_id: last?.run_id || '',
+    event_count: events.length,
+    ledger_head_sha256: runtimeLedgerHeadHash(events),
+  };
+}
+
+export function assertEvidenceBoundToLedgerHead(
+  binding: RuntimeLedgerHeadBinding,
+  events: RuntimeEventEnvelope[],
+): void {
+  const current = createRuntimeLedgerHeadBinding(events);
+  if (binding.run_id !== current.run_id) throw new Error('evidence bound to different run ledger');
+  if (binding.event_count !== current.event_count) throw new Error('stale evidence event count does not match ledger head');
+  if (binding.ledger_head_sha256 !== current.ledger_head_sha256) throw new Error('stale evidence ledger head mismatch');
+}
+
 export function validateRuntimeLedger(events: RuntimeEventEnvelope[]): void {
   let previous: RuntimeEventEnvelope | undefined;
   const seen = new Set<string>();

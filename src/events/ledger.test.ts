@@ -3,7 +3,14 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { appendRuntimeEvent, payloadHash, readRuntimeEvents, validateRuntimeLedger } from './ledger.js';
+import {
+  appendRuntimeEvent,
+  assertEvidenceBoundToLedgerHead,
+  createRuntimeLedgerHeadBinding,
+  payloadHash,
+  readRuntimeEvents,
+  validateRuntimeLedger,
+} from './ledger.js';
 
 function tempRunDir(): string {
   return mkdtempSync(join(tmpdir(), 'dominic-ledger-'));
@@ -52,4 +59,33 @@ test('mutating a previous event hash link is rejected', () => {
   events[1].prev_event_sha256 = `${replacement}${events[1].prev_event_sha256.slice(1)}`;
 
   assert.throws(() => validateRuntimeLedger(events));
+});
+
+
+test('current ledger-head binding rejects stale evidence after later events append', () => {
+  const runDir = tempRunDir();
+  appendRuntimeEvent(runDir, {
+    runId: 'run-ledger',
+    source: 'runtime-manager',
+    type: 'goal.received',
+    payload: { step: 1 },
+  });
+  const staleBinding = createRuntimeLedgerHeadBinding(readRuntimeEvents(runDir));
+  appendRuntimeEvent(runDir, {
+    runId: 'run-ledger',
+    source: 'runtime-manager',
+    type: 'run.completed',
+    payload: { step: 2 },
+  });
+
+  assert.throws(() => assertEvidenceBoundToLedgerHead(staleBinding, readRuntimeEvents(runDir)), /stale evidence event count/);
+});
+
+test('current ledger-head binding rejects a tampered head hash even when event count matches', () => {
+  const events = appendThreeEvents(tempRunDir());
+  const binding = createRuntimeLedgerHeadBinding(events);
+  const replacement = binding.ledger_head_sha256.startsWith('f') ? 'e' : 'f';
+  const forged = { ...binding, ledger_head_sha256: `${replacement}${binding.ledger_head_sha256.slice(1)}` };
+
+  assert.throws(() => assertEvidenceBoundToLedgerHead(forged, events), /ledger head mismatch/);
 });
