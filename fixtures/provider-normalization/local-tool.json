@@ -1,0 +1,6 @@
+{
+  "provider": "local",
+  "raw": {
+    "tool": { "id": "local_1", "name": "write_file", "args": { "path": "out.txt", "content": "hello" } }
+  }
+}

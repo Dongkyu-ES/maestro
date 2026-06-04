@@ -128,6 +128,12 @@ export function runRuntimeHardGate(input: RuntimeHardGateInput): RuntimeHardGate
       event.artifact_refs.length > 0 &&
       event.artifact_refs.every((ref) => artifactExists(input.artifactRoot, ref)),
   );
+  const hasDirectProviderDemo = input.events.some(
+    (event) =>
+      event.payload.mode === 'direct_model' ||
+      event.payload.runtime_label === 'direct_provider_demo' ||
+      ['openai', 'anthropic', 'gemini', 'local'].includes(String(event.payload.adapter_kind || '')),
+  );
   const authoritativeFullGate = input.events.some(
     (event) =>
       event.type === 'gate.full_target.verified' &&
@@ -163,6 +169,11 @@ export function runRuntimeHardGate(input: RuntimeHardGateInput): RuntimeHardGate
       'shell-only evidence cannot satisfy full product/runtime completion claim',
     ),
     check(
+      'Direct Provider Future Adapter Gate',
+      !(hasDirectProviderDemo && claimsFullCompletion),
+      'direct provider conformance/demo fixtures are future adapters and cannot satisfy Phase-A full completion proof',
+    ),
+    check(
       'Codex Evidence Label Gate',
       Boolean(codex) && hasCodexLabelEvidence,
       'Codex lifecycle must be labeled supported/unproven/unsupported without pretending unproven is complete',
@@ -183,7 +194,11 @@ export function runRuntimeHardGate(input: RuntimeHardGateInput): RuntimeHardGate
     schema_version: 1,
     decision,
     slice_label: input.events.some((e) => e.type.startsWith('runtime.')) ? 'capability_slice' : 'compatibility_slice',
-    false_completion_result: checks.find((c) => c.name === 'Shell False Completion Gate')?.status || 'FAIL',
+    false_completion_result: checks
+      .filter((c) => /False Completion|Future Adapter/.test(c.name))
+      .every((c) => c.status === 'PASS')
+      ? 'PASS'
+      : 'FAIL',
     checks,
     current_target_gaps:
       decision === 'PASS'

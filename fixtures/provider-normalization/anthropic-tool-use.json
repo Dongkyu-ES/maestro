@@ -1,0 +1,13 @@
+{
+  "provider": "anthropic",
+  "raw": {
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_1",
+        "name": "write_file",
+        "input": { "path": "out.txt", "content": "hello" }
+      }
+    ]
+  }
+}

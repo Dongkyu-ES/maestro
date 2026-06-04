@@ -20,6 +20,7 @@ import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { verifyNativeEvidenceRun } from './harness/native-evidence.js';
+import { normalizeProviderFixture, runProviderConformance } from './harness/provider-normalization.js';
 import { runRuntimeHardGate } from './harness/runtime-gate.js';
 import { verifySkillContracts } from './harness/skill-contracts.js';
 import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
@@ -564,6 +565,58 @@ test('G010 run detail refuses green trust when verifier evidence is red', async 
   assert.match(detail, /NOT TRUSTED — evidence contradiction/);
   assert.match(detail, /full-target-verification\.json: FAIL/);
   assert.doesNotMatch(detail, /trusted by current evidence/);
+});
+
+test('G011 provider normalization maps tool and refusal fixtures but forbids Phase-A proof credit', () => {
+  const openai = normalizeProviderFixture({
+    provider: 'openai',
+    raw: { choices: [{ message: { tool_calls: [{ id: 'o1', function: { name: 'write_file', arguments: '{"path":"out.txt"}' } }] } }] },
+  });
+  const anthropic = normalizeProviderFixture({
+    provider: 'anthropic',
+    raw: { content: [{ type: 'tool_use', id: 'a1', name: 'write_file', input: { path: 'out.txt' } }] },
+  });
+  const gemini = normalizeProviderFixture({
+    provider: 'gemini',
+    raw: { candidates: [{ content: { parts: [{ functionCall: { name: 'write_file', args: { path: 'out.txt' } } }] } }] },
+  });
+  const local = normalizeProviderFixture({
+    provider: 'local',
+    raw: { tool: { id: 'l1', name: 'write_file', args: { path: 'out.txt' } } },
+  });
+  for (const result of [openai, anthropic, gemini, local]) {
+    assert.equal(result.status, 'tool_intent');
+    assert.equal(result.tool_intents[0].tool_name, 'write_file');
+    assert.deepEqual(result.tool_intents[0].args, { path: 'out.txt' });
+  }
+  const refusal = normalizeProviderFixture({ provider: 'openai', raw: { choices: [{ message: { refusal: 'no' } }] } });
+  assert.equal(refusal.status, 'refusal');
+  const doneText = normalizeProviderFixture({ provider: 'local', raw: { text: 'done, trust me' } });
+  assert.equal(doneText.status, 'unsupported');
+});
+
+test('G011 provider conformance fixture PASS remains explicitly unusable as Phase-A proof', () => {
+  const report = runProviderConformance({ root: process.cwd() });
+  assert.equal(report.decision, 'PASS', JSON.stringify(report.results, null, 2));
+  assert.equal(report.phase_a_proof_allowed, false);
+
+  const dir = tempDir();
+  writeFileSync(join(dir, 'provider-conformance.json'), JSON.stringify(report, null, 2));
+  appendRuntimeEvent(dir, {
+    runId: 'run-direct-provider-demo',
+    source: 'harness',
+    type: 'runtime.session.started',
+    payload: { adapter_kind: 'openai', mode: 'direct_model', evidence_status: 'supported', runtime_label: 'direct_provider_demo' },
+    artifactRefs: ['provider-conformance.json'],
+  });
+  const hardGate = runRuntimeHardGate({
+    events: readRuntimeEvents(dir),
+    capabilities: [],
+    artifactRoot: dir,
+    milestoneClaim: 'full target via direct provider demo',
+  });
+  assert.equal(hardGate.decision, 'FAIL');
+  assert.equal(hardGate.false_completion_result, 'FAIL');
 });
 
 test('review blocker: hard gate rejects forged supported Codex and missing full-gate artifact', () => {

@@ -1,0 +1,8 @@
+{
+  "provider": "openai",
+  "raw": {
+    "choices": [
+      { "message": { "refusal": "refused by fixture" } }
+    ]
+  }
+}

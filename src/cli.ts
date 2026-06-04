@@ -43,6 +43,7 @@ import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js'
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/native-evidence.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
+import { runProviderConformance } from './harness/provider-normalization.js';
 import { verifySkillContracts } from './harness/skill-contracts.js';
 import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
 import { currentReviewInputHash, runProductGate } from './product-gate.js';
@@ -138,6 +139,7 @@ function usage(): string {
   agent promotions
   agent promotion approve|reject|apply <id>
   agent promotion verify-learning
+  agent provider conformance --all
   agent skills verify-contracts [--run <run-id>]
   agent worktrees cleanup
   agent maintenance reconcile-runs
@@ -582,6 +584,13 @@ async function main() {
     }
     if (cmd === 'promotion' && sub === 'verify-learning') {
       const report = verifyPromotionDifferential({ root: process.cwd() });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'provider' && sub === 'conformance') {
+      if (!has('--all')) throw new Error('usage: agent provider conformance --all');
+      const report = runProviderConformance({ root: process.cwd() });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
       return;
