@@ -48,7 +48,8 @@ test('middle event payload forgery is rejected when only its payload hash is rec
 
 test('mutating a previous event hash link is rejected', () => {
   const events = appendThreeEvents(tempRunDir());
-  events[1].prev_event_sha256 = `f${events[1].prev_event_sha256.slice(1)}`;
+  const replacement = events[1].prev_event_sha256.startsWith('f') ? 'e' : 'f';
+  events[1].prev_event_sha256 = `${replacement}${events[1].prev_event_sha256.slice(1)}`;
 
   assert.throws(() => validateRuntimeLedger(events));
 });
