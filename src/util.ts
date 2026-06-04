@@ -298,6 +298,14 @@ export function reviewProvenanceKey(): string {
   return '';
 }
 
+export function reviewCustodyKey(): string {
+  const env = process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY;
+  if (typeof env === 'string' && env.trim()) return env.trim();
+  const keyFile = join(homedir(), '.dominic_orchestration', 'review-custody.key');
+  if (existsSync(keyFile)) return readFileSync(keyFile, 'utf8').trim();
+  return '';
+}
+
 export function reviewProvenanceSignature(
   key: string,
   inputHash: string,
@@ -305,4 +313,36 @@ export function reviewProvenanceSignature(
   architectSha: string,
 ): string {
   return createHmac('sha256', key).update(`${inputHash}:${reviewerSha}:${architectSha}`).digest('hex');
+}
+
+export interface ReviewCustodyMetadata {
+  custody_issuer?: string;
+  review_session_id?: string;
+  reviewer_agent_id?: string;
+  reviewer_artifact_path?: string;
+  architect_artifact_path?: string;
+  reviewer_artifact_sha256?: string;
+  architect_artifact_sha256?: string;
+}
+
+export function reviewCustodySignature(
+  key: string,
+  custody: string,
+  inputHash: string,
+  provenanceSignature: string,
+  metadata: ReviewCustodyMetadata = {},
+): string {
+  const payload = [
+    custody,
+    inputHash,
+    provenanceSignature,
+    metadata.custody_issuer || '',
+    metadata.review_session_id || '',
+    metadata.reviewer_agent_id || '',
+    metadata.reviewer_artifact_path || '',
+    metadata.architect_artifact_path || '',
+    metadata.reviewer_artifact_sha256 || '',
+    metadata.architect_artifact_sha256 || '',
+  ].join(':');
+  return createHmac('sha256', key).update(payload).digest('hex');
 }

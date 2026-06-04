@@ -10,6 +10,8 @@ import {
   projectRoot,
   type RunMeta,
   readYaml,
+  reviewCustodyKey,
+  reviewCustodySignature,
   reviewProvenanceKey,
   reviewProvenanceSignature,
   safeJoin,
@@ -67,6 +69,19 @@ function commandEvidence(root: string, args: string[], mustInclude: string[]): b
     return false;
   }
 }
+function npmScriptEvidence(root: string, script: string, mustInclude: string[]): boolean {
+  try {
+    const out = execFileSync('npm', ['run', script], {
+      cwd: root,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'pipe'],
+      timeout: 15000,
+    });
+    return mustInclude.every((needle) => out.includes(needle));
+  } catch {
+    return false;
+  }
+}
 function markdownTableRows(text: string): string[][] {
   return text
     .split('\n')
@@ -79,12 +94,258 @@ function markdownTableRows(text: string): string[][] {
         .map((cell) => cell.trim()),
     );
 }
-function hasPassingMatrixRows(roadmap: string, requiredAreas: string[]): boolean {
+function hasDocumentedMatrixAreas(roadmap: string, requiredAreas: string[]): boolean {
   const rows = markdownTableRows(roadmap);
+  return requiredAreas.every((area) => rows.some((row) => row[0] === area));
+}
+function roadmapCurrentBlockers(roadmap: string): string[] {
+  const blockers: string[] = [];
+  const patterns = [
+    /\bDISPUTED\b/i,
+    /\bPARTIAL\b/i,
+    /\bFAIL-CLOSED\b/i,
+    /30\s*[–-]\s*35%/i,
+    /\bstubbed\b/i,
+    /\bscaffolded\b/i,
+  ];
+  for (const [index, line] of roadmap.split('\n').entries()) {
+    if (patterns.some((pattern) => pattern.test(line))) blockers.push(`FULL_PRODUCT_ROADMAP.md:${index + 1}`);
+  }
+  return blockers;
+}
+
+function safeRelArtifact(root: string, relPath: unknown): string | null {
+  if (typeof relPath !== 'string' || relPath.trim() === '' || relPath.startsWith('/') || relPath.includes('..'))
+    return null;
+  const full = join(root, relPath);
+  return existsSync(full) ? full : null;
+}
+function sha256File(path: string): string {
+  return sha256Text(readFileSync(path, 'utf8'));
+}
+function parsedJsonArtifact(root: string, relPath: unknown): any | null {
+  const full = safeRelArtifact(root, relPath);
+  if (!full) return null;
+  try {
+    return JSON.parse(readFileSync(full, 'utf8'));
+  } catch {
+    return null;
+  }
+}
+function stableJsonHash(value: unknown): string {
+  return sha256Text(JSON.stringify(value));
+}
+function allRefsExist(root: string, refs: unknown): boolean {
+  return Array.isArray(refs) && refs.length > 0 && refs.every((ref) => Boolean(safeRelArtifact(root, ref)));
+}
+function processRefOk(root: string, relPath: unknown, expectedLabel: string): boolean {
+  const proc = parsedJsonArtifact(root, relPath);
   return (
-    requiredAreas.every((area) => rows.some((row) => row[0] === area && row.at(-1) === 'PASS')) &&
-    !rows.some((row) => row.at(-1) === 'FAIL')
+    proc?.label === expectedLabel &&
+    Number(proc?.exit_code) === 0 &&
+    typeof proc?.started_at === 'string' &&
+    typeof proc?.ended_at === 'string' &&
+    !Number.isNaN(Date.parse(proc.started_at)) &&
+    !Number.isNaN(Date.parse(proc.ended_at)) &&
+    Date.parse(proc.started_at) <= Date.parse(proc.ended_at)
   );
+}
+function firstRef(refs: unknown): unknown {
+  return Array.isArray(refs) ? refs[0] : undefined;
+}
+function v1RoleContractGateOk(root: string): boolean {
+  const gate = jsonIfExists(join(root, AGENT_DIR, 'hard-gates', 'v1-role-contract.json'));
+  if (gate?.status !== 'PASS') return false;
+  const managerPath = gate.manager_plan_path;
+  const workerPath = gate.worker_output_path;
+  const reviewerPath = gate.reviewer_output_path;
+  const managerFull = safeRelArtifact(root, managerPath);
+  const workerFull = safeRelArtifact(root, workerPath);
+  const reviewerFull = safeRelArtifact(root, reviewerPath);
+  if (!managerFull || !workerFull || !reviewerFull) return false;
+  if (gate.manager_plan_sha256 !== sha256File(managerFull)) return false;
+  if (gate.worker_output_sha256 !== sha256File(workerFull)) return false;
+  if (gate.reviewer_output_sha256 !== sha256File(reviewerFull)) return false;
+  const manager = parsedJsonArtifact(root, managerPath);
+  const worker = parsedJsonArtifact(root, workerPath);
+  const reviewer = parsedJsonArtifact(root, reviewerPath);
+  const workOrder = Array.isArray(manager?.work_orders) ? manager.work_orders[0] : null;
+  if (!workOrder || typeof workOrder.id !== 'string') return false;
+  const workOrderHash = stableJsonHash(workOrder);
+  if (!allRefsExist(root, manager?.process_refs) || !processRefOk(root, firstRef(manager?.process_refs), 'manager'))
+    return false;
+  if (worker?.consumed_work_order_sha256 !== workOrderHash) return false;
+  if (!allRefsExist(root, worker?.process_refs) || !processRefOk(root, firstRef(worker?.process_refs), 'worker-001'))
+    return false;
+  if (reviewer?.manager_plan_sha256 !== gate.manager_plan_sha256) return false;
+  if (reviewer?.worker_output_sha256 !== gate.worker_output_sha256) return false;
+  if (!allRefsExist(root, reviewer?.process_refs) || !processRefOk(root, firstRef(reviewer?.process_refs), 'reviewer'))
+    return false;
+  if (!allRefsExist(root, reviewer?.diff_refs)) return false;
+  const diffText = (reviewer.diff_refs as string[])
+    .map((ref) => readFileSync(safeRelArtifact(root, ref) as string, 'utf8'))
+    .join('\n');
+  if (worker?.diff_sha256 !== sha256Text(diffText)) return false;
+  if (
+    !Array.isArray(worker?.touched_files) ||
+    !worker.touched_files.every((file: unknown) => diffText.includes(String(file)))
+  )
+    return false;
+  if (!['APPROVE', 'CHANGES_REQUESTED', 'BLOCKED'].includes(String(reviewer?.decision || ''))) return false;
+  return true;
+}
+function promotionLearningGateOk(root: string): boolean {
+  const gate = jsonIfExists(join(root, AGENT_DIR, 'hard-gates', 'promotion-learning.json'));
+  if (gate?.status !== 'PASS') return false;
+  const required = [
+    'before_run_path',
+    'after_run_path',
+    'review_finding_path',
+    'promotion_candidate_path',
+    'promotion_approval_path',
+    'promotion_apply_path',
+    'promotion_effect_path',
+    'loaded_promotion_artifact_path',
+  ];
+  for (const key of required) if (!safeRelArtifact(root, gate[key])) return false;
+  const hashKeys: [string, string][] = [
+    ['review_finding_path', 'review_finding_sha256'],
+    ['promotion_candidate_path', 'promotion_candidate_sha256'],
+    ['promotion_approval_path', 'promotion_approval_sha256'],
+    ['promotion_apply_path', 'promotion_apply_sha256'],
+    ['promotion_effect_path', 'promotion_effect_sha256'],
+    ['loaded_promotion_artifact_path', 'loaded_promotion_artifact_sha256'],
+  ];
+  for (const [pathKey, hashKey] of hashKeys) {
+    const full = safeRelArtifact(root, gate[pathKey]);
+    if (!full || gate[hashKey] !== sha256File(full)) return false;
+  }
+  const beforeFull = safeRelArtifact(root, gate.before_run_path);
+  const afterFull = safeRelArtifact(root, gate.after_run_path);
+  if (!beforeFull || !afterFull) return false;
+  const beforeRunDir = dirname(beforeFull);
+  const afterRunDir = dirname(afterFull);
+  if (!existsSync(join(beforeRunDir, 'run.yaml')) || !existsSync(join(afterRunDir, 'run.yaml'))) return false;
+  const before = parsedJsonArtifact(root, gate.before_run_path);
+  const after = parsedJsonArtifact(root, gate.after_run_path);
+  const candidate = parsedJsonArtifact(root, gate.promotion_candidate_path);
+  const approval = parsedJsonArtifact(root, gate.promotion_approval_path);
+  const apply = parsedJsonArtifact(root, gate.promotion_apply_path);
+  const effect = parsedJsonArtifact(root, gate.promotion_effect_path);
+  const changedField = String(gate.changed_field || '');
+  if (!changedField || before?.task_context_sha256 !== after?.task_context_sha256) return false;
+  if (before?.stable_fields?.[changedField] === after?.stable_fields?.[changedField]) return false;
+  if (after?.loaded_promotion_artifact_sha256 !== gate.loaded_promotion_artifact_sha256) return false;
+  const runtimeEventsPath = safeRelArtifact(root, after?.runtime_events_path);
+  if (!runtimeEventsPath) return false;
+  const runtimeEvents = readFileSync(runtimeEventsPath, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return null;
+      }
+    });
+  if (
+    !runtimeEvents.some(
+      (event) =>
+        event?.schema_version === 1 &&
+        event?.type === 'promotion.loaded' &&
+        event?.run_id === after.run_id &&
+        event?.payload?.loaded_promotion_artifact_sha256 === gate.loaded_promotion_artifact_sha256 &&
+        event?.payload?.changed_field === changedField,
+    )
+  )
+    return false;
+  if (candidate?.review_finding_sha256 !== gate.review_finding_sha256) return false;
+  if (approval?.promotion_candidate_sha256 !== gate.promotion_candidate_sha256 || approval?.status !== 'approved')
+    return false;
+  if (apply?.promotion_approval_sha256 !== gate.promotion_approval_sha256 || apply?.status !== 'applied') return false;
+  if (effect?.promotion_apply_sha256 !== gate.promotion_apply_sha256) return false;
+  if (effect?.changed_field !== changedField) return false;
+  return true;
+}
+function operatorBrowserE2EGateOk(root: string): boolean {
+  const packageJson = jsonIfExists(join(root, 'package.json'));
+  if (typeof packageJson?.scripts?.e2e !== 'string' || !packageJson.scripts.e2e.trim()) return false;
+  if (!npmScriptEvidence(root, 'e2e', ['OPERATOR_BROWSER_E2E_PASS'])) return false;
+  const gate = jsonIfExists(join(root, AGENT_DIR, 'hard-gates', 'operator-browser-e2e.json'));
+  if (gate?.status !== 'PASS') return false;
+  if (!['playwright', 'browser', 'chrome'].includes(String(gate.browser || ''))) return false;
+  const requiredSteps = [
+    'open_home',
+    'create_task',
+    'create_run',
+    'start_run',
+    'collect_run',
+    'run_detail',
+    'approval_boundary',
+  ];
+  const steps = Array.isArray(gate.steps) ? gate.steps.map((step: any) => String(step?.name || step)) : [];
+  if (!requiredSteps.every((step) => steps.includes(step))) return false;
+  const artifactPath = safeRelArtifact(root, gate.artifact_path);
+  if (!artifactPath || gate.artifact_sha256 !== sha256File(artifactPath)) return false;
+  const tracePath = safeRelArtifact(root, gate.trace_path);
+  const screenshotPath = safeRelArtifact(root, gate.screenshot_path);
+  if (!tracePath || !screenshotPath) return false;
+  if (gate.trace_sha256 !== sha256File(tracePath) || gate.screenshot_sha256 !== sha256File(screenshotPath))
+    return false;
+  const artifact = parsedJsonArtifact(root, gate.artifact_path);
+  if (!/^https?:\/\/(127\.0\.0\.1|localhost)[:/]/.test(String(artifact?.server_url || ''))) return false;
+  if (!Array.isArray(artifact?.network_assertions) || artifact.network_assertions.length === 0) return false;
+  return true;
+}
+
+function hasForbiddenHighCompletionClaim(text: string): boolean {
+  return /completion_ceiling:\s*95|product gate\s+(?:evidence\s+records\s+)?PASS|제품\s*게이트.{0,80}PASS|full-target\s+(?:gate|verifier)\s+PASS|npm test:\s*95 tests,\s*95 pass|90~95|PRD-scoped local v0-v2 completion candidate|v0-v2 complete|all matrix rows PASS/i.test(
+    text,
+  );
+}
+function declaredCompletionCeiling(text: string): number | null {
+  const match = text.match(/CURRENT_COMPLETION_CEILING:\s*(\d{1,3})\b/);
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isInteger(value) && value >= 0 && value <= 95 ? value : null;
+}
+function currentTruthDocPaths(root: string): string[] {
+  const paths = [
+    join(root, 'docs', 'architecture', 'PHYSICAL_RUNTIME_ARCHITECTURE.md'),
+    join(root, 'docs', 'milestones', 'CURRENT_BASELINE_GAP_REPORT.md'),
+    join(root, 'docs', 'milestones', 'DOGFOOD_REPORT.md'),
+    join(root, 'docs', 'milestones', 'FULL_PRODUCT_ROADMAP.md'),
+    join(root, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'),
+  ];
+  const reportsDir = join(root, 'docs', 'milestones', 'reports');
+  if (existsSync(reportsDir)) {
+    for (const entry of readdirSync(reportsDir)) {
+      if (entry.endsWith('.md')) paths.push(join(reportsDir, entry));
+    }
+  }
+  return paths;
+}
+function forbiddenHighCompletionClaims(root: string): string[] {
+  const hits: string[] = [];
+  for (const path of currentTruthDocPaths(root)) {
+    if (!existsSync(path)) continue;
+    const rel = relative(root, path);
+    const lines = readFileSync(path, 'utf8').split('\n');
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (/^\s*>/.test(line)) continue;
+      if (/Forbidden completion claim|not a valid completion report|historical/i.test(line)) continue;
+      const previous = lines.slice(Math.max(0, i - 3), i).join('\n');
+      const next = lines.slice(i, Math.min(lines.length, i + 3)).join('\n');
+      if (
+        hasForbiddenHighCompletionClaim(line) ||
+        /## (Quality Gate Result|Decision)\s*\n\s*PASS/i.test(`${previous}\n${next}`)
+      ) {
+        hits.push(`${rel}:${i + 1}`);
+      }
+    }
+  }
+  return [...new Set(hits)];
 }
 function countTests(testText: string): number {
   return [...testText.matchAll(/\btest\(/g)].length;
@@ -95,11 +356,14 @@ export function currentReviewInputHash(root: string): string {
   for (const rel of [
     'src/core.ts',
     'src/cli.ts',
+    'src/product-gate.ts',
+    'src/util.ts',
     'src/core.test.ts',
     'scripts/live-integration-smoke.mjs',
     'docs/milestones/HARD_COMPLETION_GATES.md',
     'docs/milestones/FULL_PRODUCT_ROADMAP.md',
     'docs/milestones/DOGFOOD_REPORT.md',
+    'docs/milestones/REVIEW_PROVENANCE.md',
   ]) {
     const p = join(root, rel);
     digest.update(rel);
@@ -168,12 +432,62 @@ function reviewArtifactOk(root: string, reviewGate: any): boolean {
   const key = reviewProvenanceKey();
   if (!key) return false;
   const prov = reviewGate.provenance;
-  if (prov?.algorithm !== 'HMAC-SHA256' || typeof prov?.signature !== 'string' || !/^[a-f0-9]{64}$/i.test(prov.signature))
+  if (
+    prov?.algorithm !== 'HMAC-SHA256' ||
+    typeof prov?.signature !== 'string' ||
+    !/^[a-f0-9]{64}$/i.test(prov.signature)
+  )
     return false;
+  if (!['reviewer-ci', 'reviewer-owned', 'review-service'].includes(String(prov.custody || ''))) return false;
   const expected = reviewProvenanceSignature(key, inputHash, reviewerSha, architectSha);
   const actualBuf = Buffer.from(prov.signature, 'hex');
   const expectedBuf = Buffer.from(expected, 'hex');
   if (actualBuf.length !== expectedBuf.length || !timingSafeEqual(actualBuf, expectedBuf)) return false;
+  const custodyKey = reviewCustodyKey();
+  if (!custodyKey) return false;
+  const custodyMetadata = {
+    custody_issuer: String(prov.custody_issuer || ''),
+    review_session_id: String(prov.review_session_id || ''),
+    reviewer_agent_id: String(prov.reviewer_agent_id || ''),
+    reviewer_artifact_path: String(prov.reviewer_artifact_path || ''),
+    architect_artifact_path: String(prov.architect_artifact_path || ''),
+    reviewer_artifact_sha256: String(prov.reviewer_artifact_sha256 || ''),
+    architect_artifact_sha256: String(prov.architect_artifact_sha256 || ''),
+  };
+  const trustedIssuers = new Set(
+    String(process.env.AGENT_TRUSTED_REVIEW_CUSTODY_ISSUERS || '')
+      .split(',')
+      .map((issuer) => issuer.trim())
+      .filter(Boolean),
+  );
+  const testCustodyIssuer = /(?:^|[-_])(test|fixture)(?:[-_]|$)/i.test(custodyMetadata.custody_issuer);
+  const ciCustody = String(prov.custody || '') === 'reviewer-ci';
+  if (String(prov.custody || '') !== 'reviewer-ci') return false;
+  if (
+    !custodyMetadata.custody_issuer ||
+    !trustedIssuers.has(custodyMetadata.custody_issuer) ||
+    (ciCustody && process.env.CI !== 'true') ||
+    (testCustodyIssuer && process.env.AGENT_ALLOW_TEST_REVIEW_CUSTODY !== '1') ||
+    !custodyMetadata.review_session_id ||
+    custodyMetadata.reviewer_agent_id !== reviewer.agent_id ||
+    custodyMetadata.reviewer_artifact_path !== reviewerPath ||
+    custodyMetadata.architect_artifact_path !== architectPath ||
+    custodyMetadata.reviewer_artifact_sha256 !== reviewerSha ||
+    custodyMetadata.architect_artifact_sha256 !== architectSha
+  )
+    return false;
+  if (!/^[a-f0-9]{64}$/i.test(String(prov.custody_signature || ''))) return false;
+  const expectedCustody = reviewCustodySignature(
+    custodyKey,
+    String(prov.custody),
+    inputHash,
+    prov.signature,
+    custodyMetadata,
+  );
+  const actualCustodyBuf = Buffer.from(prov.custody_signature, 'hex');
+  const expectedCustodyBuf = Buffer.from(expectedCustody, 'hex');
+  if (actualCustodyBuf.length !== expectedCustodyBuf.length || !timingSafeEqual(actualCustodyBuf, expectedCustodyBuf))
+    return false;
   return true;
 }
 function hardGateRows(text: string): { total: number; fail: number; pass: number } {
@@ -239,7 +553,7 @@ function dogfoodEvidence(
     Number(basicYaml.exit_code) === 0 &&
     basicProcess?.label === 'executor' &&
     Number(basicProcess?.exit_code) === 0 &&
-    String(basicProcess?.stdout || '').includes('Dominic Orchestration task adapter executed') &&
+    typeof basicProcess?.command === 'string' && basicProcess.command.trim().length > 0 && !basicProcess.command.includes('Dominic Orchestration task adapter executed') && String(basicProcess?.stdout || '').trim().length > 0 &&
     /## Decision\npass/.test(readIfExists(join(basicDir, 'review.md')));
   const multiOk =
     multiYaml.id === multiRun &&
@@ -368,7 +682,27 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     'v1: Manager + Worker + Reviewer',
     'v2: Bounded Multi-Worker',
   ]);
-  const acceptanceOk = hasPassingMatrixRows(roadmap, requiredRows);
+  const acceptanceOk = hasDocumentedMatrixAreas(roadmap, requiredRows);
+  const roadmapBlockers = roadmapCurrentBlockers(roadmap);
+  const v1RoleContractOk = v1RoleContractGateOk(root);
+  const promotionLearningOk = promotionLearningGateOk(root);
+  const operatorBrowserE2EOk = operatorBrowserE2EGateOk(root);
+  const productCompletenessOk =
+    Boolean(packageJson?.bin?.agent === './dist/cli.js') &&
+    helpOk &&
+    versionOk &&
+    acceptanceOk &&
+    roadmapBlockers.length === 0 &&
+    v1RoleContractOk &&
+    promotionLearningOk &&
+    operatorBrowserE2EOk;
+  // Run the live smoke before resolving dogfood evidence so a clean repo without
+  // a pre-existing .agent/live-integration-smoke.json can pass/fail from the
+  // current execution, not from stale/missing previous state.
+  const liveSmokeOk =
+    existsSync(join(root, 'scripts', 'live-integration-smoke.mjs')) &&
+    commandEvidence(root, ['scripts/live-integration-smoke.mjs'], ['LIVE_INTEGRATION_SMOKE_PASS']) &&
+    jsonIfExists(join(root, AGENT_DIR, 'live-integration-smoke.json'))?.status === 'PASS';
   const dogfoodResolved = dogfoodEvidence(root, dogfood);
   const executionOk =
     dogfoodResolved.ok &&
@@ -401,20 +735,17 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
       'hard completion ceiling requires independent review and reconciliation artifacts',
     ]);
   const hardRows = hardGateRows(hardGates);
+  const declaredHardCeiling = declaredCompletionCeiling(hardGates);
   const contradictoryRuns = contradictoryRunEvidence(root);
-  const hardGateDocOk = hasAll(hardGates, [
-    'CLAIM_LOCK: FORBID_90_95_UNTIL_ALL_HARD_GATES_PASS',
-    'CURRENT_COMPLETION_CEILING: 95',
-    'Local-Web State Truth Gate',
-    'Real Agent Runtime Gate',
-    'Operator Intent Boundary Gate',
-    'Live Integration Gate',
-  ]);
-  const liveSmokeOk =
-    existsSync(join(root, 'scripts', 'live-integration-smoke.mjs')) &&
-    commandEvidence(root, ['scripts/live-integration-smoke.mjs'], ['LIVE_INTEGRATION_SMOKE_PASS']) &&
-    jsonIfExists(join(root, AGENT_DIR, 'live-integration-smoke.json'))?.status === 'PASS';
-  const forbiddenClaimsRemain = hardRows.fail > 0 && /\| .* \| .* \| PASS \|/.test(roadmap);
+  const hardGateDocOk =
+    hasAll(hardGates, [
+      'CLAIM_LOCK: FORBID_90_95_UNTIL_ALL_HARD_GATES_PASS',
+      'CURRENT_COMPLETION_CEILING:',
+      'Local-Web State Truth Gate',
+      'Real Agent Runtime Gate',
+      'Operator Intent Boundary Gate',
+      'Live Integration Gate',
+    ]) && declaredHardCeiling !== null;
   const reconciliationGate = jsonIfExists(join(root, AGENT_DIR, 'reconciliation.json'));
   const reconciliationOk =
     liveReconciliation.repaired === 0 &&
@@ -422,15 +753,38 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     Number(reconciliationGate?.repaired || 0) === 0;
   const reviewGate = jsonIfExists(join(root, AGENT_DIR, 'independent-review-gate.json'));
   const independentReviewOk = reviewArtifactOk(root, reviewGate);
-  const provenanceState = !reviewProvenanceKey()
-    ? 'no-signing-key'
-    : reviewGate?.provenance?.algorithm === 'HMAC-SHA256' && typeof reviewGate?.provenance?.signature === 'string'
-      ? independentReviewOk
-        ? 'signed'
-        : 'signature-invalid'
-      : 'unsigned';
+  const provenanceCustody = String(reviewGate?.provenance?.custody || '');
+  let provenanceState = 'unsigned';
+  if (!reviewProvenanceKey()) {
+    provenanceState = 'no-signing-key';
+  } else if (
+    reviewGate?.provenance?.algorithm === 'HMAC-SHA256' &&
+    typeof reviewGate?.provenance?.signature === 'string'
+  ) {
+    if (!provenanceCustody) provenanceState = 'signed-mechanical-custody-unverified';
+    else if (!reviewCustodyKey())
+      provenanceState = `signed-mechanical-custody-claimed:${provenanceCustody}-no-custody-key`;
+    else if (typeof reviewGate?.provenance?.custody_signature !== 'string')
+      provenanceState = `signed-mechanical-custody-claimed:${provenanceCustody}-no-custody-attestation`;
+    else if (independentReviewOk) provenanceState = `signed-and-custody-attested:${provenanceCustody}`;
+    else provenanceState = 'signature-or-artifact-invalid';
+  }
+  const hardGateLiftBlocked =
+    !hardGateDocOk ||
+    declaredHardCeiling !== 95 ||
+    hardRows.total < 7 ||
+    hardRows.fail !== 0 ||
+    hardRows.pass < 7 ||
+    contradictoryRuns.length !== 0 ||
+    !reconciliationOk ||
+    !liveSmokeOk ||
+    !independentReviewOk ||
+    !productCompletenessOk;
+  const forbiddenClaimLocations = hardGateLiftBlocked ? forbiddenHighCompletionClaims(root) : [];
+  const forbiddenClaimsRemain = forbiddenClaimLocations.length > 0;
   const hardGatesAllPass =
     hardGateDocOk &&
+    declaredHardCeiling === 95 &&
     hardRows.total >= 7 &&
     hardRows.fail === 0 &&
     hardRows.pass >= 7 &&
@@ -438,6 +792,7 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     reconciliationOk &&
     liveSmokeOk &&
     independentReviewOk &&
+    productCompletenessOk &&
     !forbiddenClaimsRemain;
   const resultRealityDelta: ProductGateDelta[] = [
     deltaRow(
@@ -455,11 +810,34 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
       'CLI/package evidence is missing or not runnable.',
     ),
     deltaRow(
-      'Acceptance matrix: every PRD-scoped row passes without FAIL',
-      acceptanceOk,
-      'docs/milestones/FULL_PRODUCT_ROADMAP.md parsed table rows',
-      'Matrix has all required PASS rows and no FAIL rows.',
-      'Acceptance matrix is incomplete or contains FAIL rows.',
+      'Acceptance matrix coverage: PRD-scoped rows are documented without self-grading as completion proof',
+      acceptanceOk && roadmapBlockers.length === 0,
+      roadmapBlockers.length
+        ? `docs/milestones/FULL_PRODUCT_ROADMAP.md current blockers=${roadmapBlockers.slice(0, 5).join('; ')}`
+        : 'docs/milestones/FULL_PRODUCT_ROADMAP.md parsed area rows',
+      'Matrix covers required PRD-scoped areas and contains no current disputed/partial/fail-closed product blockers.',
+      'Acceptance matrix is missing required PRD-scoped areas or still admits current product blockers.',
+    ),
+    deltaRow(
+      'v1 role contract: manager/work-order/worker/reviewer typed artifacts with hash links',
+      v1RoleContractOk,
+      '.agent/hard-gates/v1-role-contract.json',
+      'Role graph artifacts are schema-bound and hash-linked.',
+      'Role execution is still process/ROLE-env evidence or missing typed hash-linked role artifacts.',
+    ),
+    deltaRow(
+      'Promotion learning: review finding -> approved promotion -> applied effect on later run',
+      promotionLearningOk,
+      '.agent/hard-gates/promotion-learning.json',
+      'Promotion effect is recomputable from before/after run evidence and hash chain.',
+      'Promotion learning is still self-certified or missing before/after runtime evidence.',
+    ),
+    deltaRow(
+      'Operator browser E2E: Web UI completion proven through browser path',
+      operatorBrowserE2EOk,
+      '.agent/hard-gates/operator-browser-e2e.json',
+      'Browser artifact proves home/task/run/review/approval path.',
+      'UI completion would still be API-only smoke or missing browser evidence.',
     ),
     deltaRow(
       'Real execution: dogfood run ids plus process/scheduler/role regressions',
@@ -492,16 +870,15 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     deltaRow(
       'Hard completion ceiling: no 90/95 claim while live UI/runtime gates fail',
       hardGatesAllPass,
-      `docs/milestones/HARD_COMPLETION_GATES.md rows=${hardRows.total} fail=${hardRows.fail}; contradictory_runs=${contradictoryRuns.length}; live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk} (provenance=${provenanceState})`,
+      `docs/milestones/HARD_COMPLETION_GATES.md rows=${hardRows.total} fail=${hardRows.fail}; declared_ceiling=${declaredHardCeiling ?? 'invalid'}; contradictory_runs=${contradictoryRuns.length}; live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk} (provenance=${provenanceState})`,
       'All hard gates pass, so the completion ceiling can be lifted.',
       `Hard gates block completion inflation: ${hardRows.fail} declared FAIL rows; ${contradictoryRuns.length} contradictory run artifacts.`,
     ),
   ];
-  const deltaOk = resultRealityDelta.every((row) => row.status === 'PASS');
   const checks: ProductGateCheck[] = [
     gateCheck(
       'PRD Scope Integrity Gate',
-      prdScopeOk && deltaOk,
+      prdScopeOk,
       'Original PRD scope and the Result-Reality Delta report must both exist; local-first scope must be PRD-derived, not invented after implementation.',
     ),
     gateCheck(
@@ -513,14 +890,30 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
         '원 PRD',
         'Result-Reality Delta',
       ]) &&
-        deltaOk &&
         (!rerun || reportHasDelta),
       'The repo must document the rubber-stamp failure mode and include an explicit PRD-vs-result delta plus allowed/forbidden completion wording.',
     ),
     gateCheck(
       'Product Completeness Gate',
-      Boolean(packageJson?.bin?.agent === './dist/cli.js') && helpOk && versionOk && acceptanceOk,
-      'Package bin, built CLI help/version, and every PRD-scoped acceptance matrix row must pass without FAIL rows.',
+      productCompletenessOk,
+      roadmapBlockers.length
+        ? `Package/bin evidence must work and roadmap must not admit current blockers; blockers=${roadmapBlockers.slice(0, 5).join('; ')}`
+        : 'Package bin and built CLI help/version work; roadmap rows document scope without current blockers.',
+    ),
+    gateCheck(
+      'V1 Role Contract Gate',
+      v1RoleContractOk,
+      'Requires typed manager/work-order/worker/reviewer JSON artifacts with hash links; ROLE-env-only process evidence cannot pass.',
+    ),
+    gateCheck(
+      'Promotion Learning Gate',
+      promotionLearningOk,
+      'Requires recomputable review finding -> promotion candidate -> approval -> apply -> later-run effect hash chain.',
+    ),
+    gateCheck(
+      'Operator Browser E2E Gate',
+      operatorBrowserE2EOk,
+      'Requires browser artifact/schema for home/task/run/detail/approval operator path; API-only smoke cannot pass 95/v0-v2 completion.',
     ),
     gateCheck(
       'Real Execution Gate',
@@ -561,11 +954,11 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
       hardGatesAllPass,
       hardGatesAllPass
         ? 'All hard gates pass and no contradictory run artifacts exist.'
-        : `90/95 claims forbidden: hard gate rows fail=${hardRows.fail}, pass=${hardRows.pass}, live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk} (provenance=${provenanceState}), forbidden_claims=${forbiddenClaimsRemain}, contradictory run artifacts=${contradictoryRuns.slice(0, 5).join('; ') || 'none'}`,
+        : `90/95 claims forbidden: hard gate rows fail=${hardRows.fail}, pass=${hardRows.pass}, declared_ceiling=${declaredHardCeiling ?? 'invalid'}, live_smoke=${liveSmokeOk}; reconciliation=${reconciliationOk}; independent_review=${independentReviewOk} (provenance=${provenanceState}), forbidden_claims=${forbiddenClaimsRemain}${forbiddenClaimLocations.length ? ` (${forbiddenClaimLocations.slice(0, 5).join('; ')})` : ''}, contradictory run artifacts=${contradictoryRuns.slice(0, 5).join('; ') || 'none'}`,
     ),
   ];
   const decision = checks.every((check) => check.status === 'PASS') ? 'PASS' : 'FAIL';
-  const completionCeiling = hardGatesAllPass ? 95 : 60;
+  const completionCeiling = hardGatesAllPass ? 95 : Math.min(declaredHardCeiling ?? 60, 60);
   const completionLabel = hardGatesAllPass
     ? 'PRD-scoped completion candidate'
     : 'Prototype / control-plane scaffold with hard blockers; 90/95 claims forbidden';

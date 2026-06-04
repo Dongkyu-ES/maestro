@@ -1,7 +1,7 @@
 # Current Baseline Gap Report
 
 **Date:** 2026-06-01  
-**Verdict:** Prior scaffold-level completion was invalid. Current implementation has since been reworked into a PRD-scoped local v0-v2 completion candidate with product gate PASS; remaining gaps are runtime breadth/audit cleanliness, not the original scaffold gaps.
+**Verdict:** Prior scaffold-level completion was invalid. Current implementation is now a stronger local control-plane prototype, but the current product gate is **FAIL / completion ceiling 60** until signed independent-review provenance exists. Remaining gaps are completion integrity, runtime breadth, and audit cleanliness.
 
 ## What Exists Now
 
@@ -12,7 +12,7 @@
 - Process-backed execution, v1 role execution evidence, v2 bounded worktree scheduler/conflict/apply evidence.
 - Runtime adapter layer for shell, Codex, OMX, and agy evidence.
 - Codex app-server lifecycle proof harness for resume/fork/interrupt.
-- Full-target gate plus separate verifier; latest product gate PASS with completion ceiling 95 for PRD-scoped local v0-v2.
+- Full-target gate plus separate verifier exist, but the latest product gate intentionally fails closed at completion ceiling 60 because signed independent-review provenance is absent.
 
 ## Previously Invalidated Baseline Gaps
 
@@ -31,7 +31,7 @@ The previous scaffold/prototype was not a 95% complete product because the follo
 
 ## Corrective Action
 
-Use `FULL_PRODUCT_ROADMAP.md`, `PRODUCT_COMPLETION_STANDARD.md`, and `HARD_COMPLETION_GATES.md` as the controlling standard. The current code is no longer baseline infrastructure only; it is a gated PRD-scoped local v0-v2 candidate.
+Use `HARD_COMPLETION_GATES.md` as the controlling current-truth standard. The current code is no longer baseline infrastructure only, but it must be reported as `Prototype / control-plane scaffold with hard blockers` until the hard completion gate passes with signed provenance.
 
 
 ## 2026-06-01 Progress Update

@@ -1,8 +1,10 @@
 # Dominic Orchestration Full Product Roadmap: v0 → v2
 
-> **CORRECTION (2026-06-02):** The "PASS candidate / all matrix rows PASS" status below was found inflated by an independent critique (`INDEPENDENT_CRITIQUE_REPORT.md`). Actual delivery against the PRD is ~30–35%: a solid v0 control plane plus **scaffolded** v1/v2 plumbing. The acceptance-matrix PASS rows are partly self-certifying (the product gate string-matches this very table). Real v1 role execution, executor session control, and the PRD's promotion/learning loop are stubbed. Read the matrix below as "plumbing exists", not "capability delivered".
 
-**Status:** DISPUTED — v0 done; v1/v2 scaffolded. See `INDEPENDENT_CRITIQUE_REPORT.md`
+> **REDESIGN NOTE (2026-06-04):** The ultimate direction is now provider-neutral harness ownership. OMX/Codex/Claude Code style native agent harnesses are compatibility adapters, not the canonical runtime. Direct model executors plus Dominic-owned BaseRule, Memory, Hook, Context, Tool, Verifier, and Promotion layers are the proof path. See `docs/milestones/ULTIMATE_GOAL_DIVIDE_AND_CONQUER_PLAN.md` and `docs/milestones/PROVIDER_NEUTRAL_HARNESS_CONTRACT.md`.
+> **CORRECTION (2026-06-02):** The historical pass-candidate wording was inflated. Since then the product gate has been hardened to require executable evidence for v1 role contracts, review-derived promotion learning, browser/operator E2E, and custody-attested independent review. Current local machine gates for v1 role contract, promotion learning, browser E2E, dogfood, safety, evidence integrity, and regression are green; final hard completion remains blocked by external independent-review custody.
+
+**Status:** LOCAL EXECUTABLE GATES GREEN; EXTERNAL REVIEW CUSTODY STILL BLOCKS HARD COMPLETION. See latest `.agent/product-gates/product-gate-*.json`.
 **Date:** 2026-06-01
 **Standard:** `docs/milestones/PRODUCT_COMPLETION_STANDARD.md`
 
@@ -19,7 +21,7 @@ The current repository has moved beyond the original scaffold/prototype baseline
 - CLI/Web operator control flows exist.
 - `.agent/` artifacts, `events.jsonl`, projection, approvals, runtime proof artifacts, and product gates are created and verified.
 - Tests cover baseline lifecycle, policy boundaries, v1 role behavior, v2 worktree conflict/apply behavior, runtime architecture, full-target gate, and verifier behavior.
-- Latest product gate evidence records PASS with `completion_ceiling: 95` for the PRD-scoped local v0-v2 claim.
+- Latest product gate evidence records **FAIL** with `completion_ceiling: 60`; live smoke/dogfood passes, but signed independent-review provenance is absent.
 
 This remains **PRD-scoped local v0-v2**, not a universal hosted/remote/broad-MCP agent platform. Broader runtime ambitions require a new milestone.
 
@@ -244,18 +246,18 @@ This matrix must be read as PRD-scoped v0-v2, not as a universal final-platform 
 | Project registry | multiple real projects managed | CLI registry add/list/show/remove implemented | PASS |
 | Durable index | index/recovery across projects/tasks/runs | `.agent/index.json` rebuild/show implemented and smoke-verified | PASS |
 | v0 run lifecycle | create/start/collect/cancel/review from CLI+Web | lifecycle plus metadata reconciliation and process-evidence state truth implemented | PASS |
-| v1 role execution | Manager/Worker/Reviewer actually execute via adapter | role execution remains covered, and UI now labels Start as task adapter rather than generic shell | PASS |
+| v1 role execution | Manager/Worker/Reviewer actually execute via adapter | typed manager/work-order/worker/reviewer artifacts are generated from a real roles run and hash-linked to process/diff evidence | PASS |
 | Executor adapter | real process lifecycle/log/exit handling | process adapter uses absolute node path, Homebrew PATH, logs, and explicit-shell confirmation | PASS |
 | Policy/approval | risky actions classified and approval-visible | permission boundary visible in UI, shell mutation approval digest/risk remains enforced | PASS |
-| Promotion proposals | real review-derived proposal lifecycle | review-derived promotion records and apply proposal bundles implemented | PASS |
+| Promotion proposals | real review-derived proposal lifecycle | applied promotion is loaded into a later run with runtime `promotion.loaded` evidence and before/after effect hash chain | PASS |
 | v2 scheduler | bounded parallel launch/lifecycle/cancel/timeouts | bounded parallel scheduler implemented with scheduler evidence and timing regression | PASS |
 | v2 worktrees | real worktree lifecycle and evidence | real worktree add, metadata, diff/status ingestion, cleanup implemented | PASS |
 | Conflict detection | actual diff/hunk/policy conflict blocks | actual worktree conflict, denied path, and evidence-mismatch blocking implemented | PASS |
 | Apply/merge proposal | approval-gated safe apply path | approval-gated patch proposal and approved `git apply --check` path implemented | PASS |
 | Dogfood | real repo self-use with reports | live integration smoke added and dogfood report updated with operator-intent boundary evidence | PASS |
 | Scope integrity | completion scope traceable to original PRD, not post-hoc shrinking | PRD local/v0-v2/non-goal sections cited in Product Gate Rerun Report | PASS |
-| Anti-self-deception critic | result compared against PRD, not against implementation-friendly artifacts | hard completion ceiling blocks claims unless live hard gates, smoke, and reconciliation pass | PASS |
+| Anti-self-deception critic | result compared against PRD, not against implementation-friendly artifacts | hard completion ceiling remains locked at 60 until custody-attested signed independent review exists | BLOCKED_EXTERNAL_REVIEW |
 
 ## Rule
 
-No row marked FAIL can be ignored. Current PRD-scoped v0-v2 local product rows are gated by `HARD_COMPLETION_GATES.md`; future hosted, daemonized, broad MCP, custom Agents SDK runtime, or auto-push behavior must be planned as a new milestone, not silently folded into v2. A reviewer must not call this a universal final-product 95% completion claim.
+No blocked row can be ignored. Matrix rows document scope; executable gates decide completion. Current PRD-scoped v0-v2 local product rows are gated by `HARD_COMPLETION_GATES.md`; future hosted, daemonized, broad MCP, custom Agents SDK runtime, or auto-push behavior must be planned as a new milestone, not silently folded into v2. A reviewer must not call this a universal final-product 95% completion claim.

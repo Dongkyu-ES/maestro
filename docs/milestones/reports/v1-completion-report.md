@@ -21,7 +21,7 @@ Implement Manager + Worker + Reviewer single-worker runtime artifacts while keep
 - `run collect` validates and reviews v1 artifacts.
 - Tests cover roles-mode lifecycle.
 
-## Goal vs Result Comparison
+## Historical Goal vs Result Comparison
 
 | Requirement | Expected | Actual | Status | Evidence |
 | --- | --- | --- | --- | --- |
@@ -45,7 +45,7 @@ test -f .agent/runs/<run-id>/worker-outputs/worker-001.md
 
 ## Quality Gate Result
 
-PASS.
+Historical PASS under the old scaffold-level standard; not a current product completion gate result.
 
 ## Failures / Rework Items
 
@@ -53,4 +53,4 @@ None after id collision fix from v0.
 
 ## Decision
 
-PASS
+Historical PASS under the old scaffold-level milestone definition; not a current completion claim.

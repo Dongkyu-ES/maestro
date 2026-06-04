@@ -1,5 +1,7 @@
 # Product Gate Rerun Report
 
+> **CURRENT TRUTH (2026-06-02):** This historical rerun report is superseded by `HARD_COMPLETION_GATES.md`. The current gate is FAIL / completion ceiling 60 because signed independent-review provenance is absent. Treat older PASS wording below as historical, not current.
+
 **Date:** 2026-06-01  
 **Trigger:** User rejected the previous automatic critic because it only became realistic after implementation and did not enforce the final-product/PRD target during the loop.  
 **Decision standard:** `docs/milestones/PRODUCT_COMPLETION_STANDARD.md` with Scope Integrity Gate and Anti-Self-Deception Critic Gate.
@@ -31,7 +33,7 @@ The gate must compare the actual product against `dominic_orchestration_PRD.md` 
 
 ## 3. Scope Integrity Gate
 
-**Decision:** PASS for PRD-scoped v0-v2 only.
+**Decision:** HISTORICAL PASS for PRD-scoped v0-v2 only; current completion gate is FAIL-CLOSED / ceiling 60 until signed independent-review provenance exists.
 
 Evidence:
 
@@ -45,7 +47,7 @@ This PASS does **not** mean “universal final agent platform 95% complete.” I
 
 ## 4. Anti-Self-Deception Critic Gate
 
-**Decision:** PASS after hardening.
+**Decision:** PARTIAL after hardening; current hard completion gate still fails closed without signed independent-review provenance.
 
 Why it passes now:
 
@@ -65,15 +67,15 @@ Why the previous loop failed:
 
 | Gate | Result | Evidence |
 | --- | --- | --- |
-| Scope Integrity Gate | PASS | PRD-backed local v0-v2 scope; no post-hoc local-only invention |
-| Anti-Self-Deception Critic Gate | PASS | standard hardened; executable gate added; regression test added |
-| Product Completeness Gate | PASS | acceptance matrix + CLI/Web controls + run viewer |
-| Real Execution Gate | PASS | process JSON, scheduler JSON, stdout/stderr logs |
-| Evidence Integrity Gate | PASS | actual worktree diff compared to worker output |
-| Safety and Policy Gate | PASS | safeJoin, secret deny, shell approvals, CSRF/auth, apply digest/check |
-| Operator UX Gate | PASS | CLI + Web task/run/approval/product evidence paths |
-| Regression Gate | PASS after `npm test` rerun | see command evidence below |
-| Dogfood Gate | PASS for existing recorded dogfood | `DOGFOOD_REPORT.md` evidence |
+| Scope Integrity Gate | HISTORICAL PASS | PRD-backed local v0-v2 scope; no post-hoc local-only invention |
+| Anti-Self-Deception Critic Gate | HISTORICAL PASS | standard hardened; executable gate added; regression test added |
+| Product Completeness Gate | HISTORICAL PASS | acceptance matrix + CLI/Web controls + run viewer |
+| Real Execution Gate | HISTORICAL PASS | process JSON, scheduler JSON, stdout/stderr logs |
+| Evidence Integrity Gate | HISTORICAL PASS | actual worktree diff compared to worker output |
+| Safety and Policy Gate | HISTORICAL PASS | safeJoin, secret deny, shell approvals, CSRF/auth, apply digest/check |
+| Operator UX Gate | HISTORICAL PASS | CLI + Web task/run/approval/product evidence paths |
+| Regression Gate | HISTORICAL PASS after `npm test` rerun | see command evidence below |
+| Dogfood Gate | HISTORICAL PASS for existing recorded dogfood | `DOGFOOD_REPORT.md` evidence |
 
 ## 6. Commands rerun
 
@@ -87,9 +89,9 @@ The exact command output is recorded in the current agent transcript and the lat
 
 ## 7. Final wording guard
 
-Allowed completion claim:
+Allowed completion claim now:
 
-> PRD-scoped local v0-v2 product gates pass after anti-self-deception hardening.
+> Prototype / control-plane scaffold with hard blockers; 90/95 claims forbidden until signed independent-review provenance exists and `agent quality gate --write` passes.
 
 Forbidden completion claim:
 

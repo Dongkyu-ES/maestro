@@ -1,0 +1,94 @@
+name: Independent Review Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      code_reviewer_artifact:
+        description: Repo-relative code-reviewer artifact path
+        required: true
+        default: .agent/review-gates/code-reviewer.md
+      architect_artifact:
+        description: Repo-relative architect artifact path
+        required: true
+        default: .agent/review-gates/architect.md
+      code_reviewer_notification:
+        description: Repo-relative code-reviewer notification envelope path
+        required: true
+        default: .agent/review-gates/subagent-notifications/code-reviewer.json
+      architect_notification:
+        description: Repo-relative architect notification envelope path
+        required: true
+        default: .agent/review-gates/subagent-notifications/architect.json
+      code_reviewer_agent:
+        description: Code-reviewer agent id recorded in the notification envelope
+        required: true
+      architect_agent:
+        description: Architect agent id recorded in the notification envelope
+        required: true
+      custody_issuer:
+        description: Trusted reviewer CI issuer label
+        required: true
+        default: github-actions-reviewer-ci
+
+jobs:
+  independent-review-gate:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      CI: "true"
+      AGENT_REVIEW_HMAC_KEY: ${{ secrets.AGENT_REVIEW_HMAC_KEY }}
+      AGENT_REVIEW_CUSTODY_HMAC_KEY: ${{ secrets.AGENT_REVIEW_CUSTODY_HMAC_KEY }}
+      AGENT_REVIEW_CUSTODY_ISSUER: ${{ inputs.custody_issuer }}
+      AGENT_TRUSTED_REVIEW_CUSTODY_ISSUERS: ${{ inputs.custody_issuer }}
+      AGENT_REVIEW_SESSION_ID: ${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci || npm install
+
+      - name: Build
+        run: npm run build
+
+      - name: Regression tests
+        run: npm test
+
+      - name: Operator browser E2E
+        run: npm run e2e
+
+      - name: Prepare independent review gate
+        run: |
+          node dist/cli.js runtime prepare-review-gate \
+            --code-reviewer-artifact "${{ inputs.code_reviewer_artifact }}" \
+            --architect-artifact "${{ inputs.architect_artifact }}" \
+            --code-reviewer-notification "${{ inputs.code_reviewer_notification }}" \
+            --architect-notification "${{ inputs.architect_notification }}" \
+            --code-reviewer-agent "${{ inputs.code_reviewer_agent }}" \
+            --architect-agent "${{ inputs.architect_agent }}"
+
+      - name: Custody-attest independent review
+        run: |
+          test -n "$AGENT_REVIEW_HMAC_KEY"
+          test -n "$AGENT_REVIEW_CUSTODY_HMAC_KEY"
+          node dist/cli.js runtime sign-review \
+            --custody reviewer-ci \
+            --custody-issuer "$AGENT_REVIEW_CUSTODY_ISSUER" \
+            --review-session "$AGENT_REVIEW_SESSION_ID"
+
+      - name: Product quality gate
+        run: node dist/cli.js quality gate --write
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: independent-review-gate-artifacts
+          path: |
+            .agent/independent-review-gate.json
+            .agent/product-gates/*.json
+            .agent/hard-gates/*.json

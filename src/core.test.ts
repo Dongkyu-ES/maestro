@@ -31,18 +31,21 @@ import {
   startRun,
   updateTask,
 } from './core.js';
-import { renderHtml, renderRun } from './view.js';
+import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
 function currentReviewInputHashForTest(dir = process.cwd()): string {
   const digest = createHash('sha256');
   for (const rel of [
     'src/core.ts',
     'src/cli.ts',
+    'src/product-gate.ts',
+    'src/util.ts',
     'src/core.test.ts',
     'scripts/live-integration-smoke.mjs',
     'docs/milestones/HARD_COMPLETION_GATES.md',
     'docs/milestones/FULL_PRODUCT_ROADMAP.md',
     'docs/milestones/DOGFOOD_REPORT.md',
+    'docs/milestones/REVIEW_PROVENANCE.md',
   ]) {
     const fp = join(dir, rel);
     digest.update(rel);
@@ -51,8 +54,183 @@ function currentReviewInputHashForTest(dir = process.cwd()): string {
   return digest.digest('hex');
 }
 
+function hashTextForTest(text: string): string {
+  return createHash('sha256').update(text).digest('hex');
+}
+function writeJsonArtifact(dir: string, rel: string, value: unknown): string {
+  const full = join(dir, rel);
+  mkdirSync(dirname(full), { recursive: true });
+  const text = `${JSON.stringify(value, null, 2)}\n`;
+  writeFileSync(full, text);
+  return hashTextForTest(text);
+}
+function writeMachineHardGateFixtures(dir: string): void {
+  const processWindow = { started_at: '2026-06-01T00:00:00.000Z', ended_at: '2026-06-01T00:00:01.000Z' };
+  writeJsonArtifact(dir, '.agent/runs/fixture/manager.process.json', {
+    label: 'manager',
+    exit_code: 0,
+    ...processWindow,
+  });
+  writeJsonArtifact(dir, '.agent/runs/fixture/worker-001.process.json', {
+    label: 'worker-001',
+    exit_code: 0,
+    ...processWindow,
+  });
+  writeJsonArtifact(dir, '.agent/runs/fixture/reviewer.process.json', {
+    label: 'reviewer',
+    exit_code: 0,
+    ...processWindow,
+  });
+  const diffText = 'diff --git a/fixture.txt b/fixture.txt\n+++ b/fixture.txt\n';
+  writeFileSync(join(dir, '.agent/runs/fixture/diff.patch'), diffText);
+  const workOrder = { id: 'work-001', scope: 'fixture', acceptance: ['prove role contract'] };
+  const manager = {
+    schema_version: 1,
+    role: 'manager',
+    task_sha256: hashTextForTest('task'),
+    context_sha256: hashTextForTest('context'),
+    acceptance_criteria: ['prove role contract'],
+    work_orders: [workOrder],
+    risk_hints: ['fixture only'],
+    process_refs: ['.agent/runs/fixture/manager.process.json'],
+  };
+  const managerSha = writeJsonArtifact(dir, '.agent/hard-gates/role/manager-plan.json', manager);
+  const worker = {
+    schema_version: 1,
+    role: 'worker',
+    worker_id: 'worker-001',
+    consumed_work_order_sha256: hashTextForTest(JSON.stringify(workOrder)),
+    process_refs: ['.agent/runs/fixture/worker-001.process.json'],
+    touched_files: ['fixture.txt'],
+    diff_refs: ['.agent/runs/fixture/diff.patch'],
+    diff_sha256: hashTextForTest(diffText),
+    result_summary: 'fixture worker output',
+  };
+  const workerSha = writeJsonArtifact(dir, '.agent/hard-gates/role/worker-output.json', worker);
+  const reviewer = {
+    schema_version: 1,
+    role: 'reviewer',
+    manager_plan_sha256: managerSha,
+    worker_output_sha256: workerSha,
+    diff_refs: ['.agent/runs/fixture/diff.patch'],
+    process_refs: ['.agent/runs/fixture/reviewer.process.json'],
+    decision: 'APPROVE',
+    findings: [{ id: 'finding-001', severity: 'info' }],
+  };
+  const reviewerSha = writeJsonArtifact(dir, '.agent/hard-gates/role/reviewer-output.json', reviewer);
+  writeJsonArtifact(dir, '.agent/hard-gates/v1-role-contract.json', {
+    status: 'PASS',
+    manager_plan_path: '.agent/hard-gates/role/manager-plan.json',
+    manager_plan_sha256: managerSha,
+    worker_output_path: '.agent/hard-gates/role/worker-output.json',
+    worker_output_sha256: workerSha,
+    reviewer_output_path: '.agent/hard-gates/role/reviewer-output.json',
+    reviewer_output_sha256: reviewerSha,
+  });
+
+  const taskContextSha = hashTextForTest('same-task-context');
+  mkdirSync(join(dir, '.agent/runs/promo-before'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent/runs/promo-before/run.yaml'),
+    'id: promo-before\ntask_id: task-promo\nrun_dir: .agent/runs/promo-before\nmode: basic\nstatus: completed\ndecision: pass\n',
+  );
+  writeJsonArtifact(dir, '.agent/runs/promo-before/promotion-state.json', {
+    run_id: 'before',
+    task_context_sha256: taskContextSha,
+    stable_fields: { recommendation: 'old-guard' },
+  });
+  const loadedPromotionSha = writeJsonArtifact(dir, '.agent/promotions/applied/agent_instruction/fixture.md', {
+    instruction: 'new-guard',
+  });
+  mkdirSync(join(dir, '.agent/runs/promo-after'), { recursive: true });
+  writeFileSync(
+    join(dir, '.agent/runs/promo-after/run.yaml'),
+    'id: promo-after\ntask_id: task-promo\nrun_dir: .agent/runs/promo-after\nmode: basic\nstatus: completed\ndecision: pass\n',
+  );
+  writeFileSync(
+    join(dir, '.agent/runs/promo-after/promotion-loaded.jsonl'),
+    `${JSON.stringify({ schema_version: 1, run_id: 'after', type: 'promotion.loaded', payload: { loaded_promotion_artifact_sha256: loadedPromotionSha, changed_field: 'recommendation' } })}\n`,
+  );
+  writeJsonArtifact(dir, '.agent/runs/promo-after/promotion-state.json', {
+    run_id: 'after',
+    task_context_sha256: taskContextSha,
+    loaded_promotion_artifact_sha256: loadedPromotionSha,
+    runtime_events_path: '.agent/runs/promo-after/promotion-loaded.jsonl',
+    stable_fields: { recommendation: 'new-guard' },
+  });
+  const reviewFindingSha = writeJsonArtifact(dir, '.agent/hard-gates/promotion/review-finding.json', {
+    id: 'finding-001',
+    finding: 'old guard missed a repeated issue',
+  });
+  const candidateSha = writeJsonArtifact(dir, '.agent/hard-gates/promotion/candidate.json', {
+    id: 'candidate-001',
+    review_finding_sha256: reviewFindingSha,
+    target_type: 'agent_instruction',
+  });
+  const approvalSha = writeJsonArtifact(dir, '.agent/hard-gates/promotion/approval.json', {
+    id: 'approval-001',
+    status: 'approved',
+    promotion_candidate_sha256: candidateSha,
+  });
+  const applySha = writeJsonArtifact(dir, '.agent/hard-gates/promotion/apply.json', {
+    status: 'applied',
+    promotion_approval_sha256: approvalSha,
+  });
+  const effectSha = writeJsonArtifact(dir, '.agent/hard-gates/promotion/effect.json', {
+    promotion_apply_sha256: applySha,
+    changed_field: 'recommendation',
+    before: 'old-guard',
+    after: 'new-guard',
+  });
+  writeJsonArtifact(dir, '.agent/hard-gates/promotion-learning.json', {
+    status: 'PASS',
+    before_run_path: '.agent/runs/promo-before/promotion-state.json',
+    after_run_path: '.agent/runs/promo-after/promotion-state.json',
+    review_finding_path: '.agent/hard-gates/promotion/review-finding.json',
+    review_finding_sha256: reviewFindingSha,
+    promotion_candidate_path: '.agent/hard-gates/promotion/candidate.json',
+    promotion_candidate_sha256: candidateSha,
+    promotion_approval_path: '.agent/hard-gates/promotion/approval.json',
+    promotion_approval_sha256: approvalSha,
+    promotion_apply_path: '.agent/hard-gates/promotion/apply.json',
+    promotion_apply_sha256: applySha,
+    promotion_effect_path: '.agent/hard-gates/promotion/effect.json',
+    promotion_effect_sha256: effectSha,
+    loaded_promotion_artifact_path: '.agent/promotions/applied/agent_instruction/fixture.md',
+    loaded_promotion_artifact_sha256: loadedPromotionSha,
+    changed_field: 'recommendation',
+  });
+
+  const traceSha = writeJsonArtifact(dir, '.agent/hard-gates/browser-trace.json', {
+    trace: ['GET /', 'POST /tasks', 'POST /runs'],
+  });
+  const screenshotSha = writeJsonArtifact(dir, '.agent/hard-gates/browser-screenshot.json', { screenshot: 'fixture' });
+  const browserArtifactSha = writeJsonArtifact(dir, '.agent/hard-gates/browser-e2e-artifact.json', {
+    browser: 'playwright',
+    server_url: 'http://127.0.0.1:4317/',
+    steps: ['open_home', 'create_task', 'create_run', 'start_run', 'collect_run', 'run_detail', 'approval_boundary'],
+    network_assertions: ['GET / 200', 'POST /tasks 303', 'POST /runs 303'],
+    result: 'PASS',
+  });
+  writeJsonArtifact(dir, '.agent/hard-gates/operator-browser-e2e.json', {
+    status: 'PASS',
+    browser: 'playwright',
+    steps: ['open_home', 'create_task', 'create_run', 'start_run', 'collect_run', 'run_detail', 'approval_boundary'],
+    artifact_path: '.agent/hard-gates/browser-e2e-artifact.json',
+    artifact_sha256: browserArtifactSha,
+    trace_path: '.agent/hard-gates/browser-trace.json',
+    trace_sha256: traceSha,
+    screenshot_path: '.agent/hard-gates/browser-screenshot.json',
+    screenshot_sha256: screenshotSha,
+  });
+}
+
 function writePassingReviewGate(dir = process.cwd()): void {
   process.env.AGENT_REVIEW_HMAC_KEY ||= 'test-review-hmac-key';
+  process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY ||= 'test-review-custody-hmac-key';
+  process.env.AGENT_TRUSTED_REVIEW_CUSTODY_ISSUERS ||= 'test-reviewer-ci';
+  process.env.AGENT_ALLOW_TEST_REVIEW_CUSTODY ||= '1';
+  process.env.CI ||= 'true';
   const reviewDir = join(dir, '.agent', 'review-gates');
   const notificationDir = join(reviewDir, 'subagent-notifications');
   mkdirSync(notificationDir, { recursive: true });
@@ -80,13 +258,45 @@ function writePassingReviewGate(dir = process.cwd()): void {
   const provenanceSignature = createHmac('sha256', process.env.AGENT_REVIEW_HMAC_KEY as string)
     .update(`${inputHash}:${reviewerSha}:${architectSha}`)
     .digest('hex');
+  const custody = 'reviewer-ci';
+  const custodyMetadata = {
+    custody_issuer: 'test-reviewer-ci',
+    review_session_id: 'test-session-001',
+    reviewer_agent_id: reviewerId,
+    reviewer_artifact_path: '.agent/review-gates/code-reviewer.md',
+    architect_artifact_path: '.agent/review-gates/architect.md',
+    reviewer_artifact_sha256: reviewerSha,
+    architect_artifact_sha256: architectSha,
+  };
+  const custodySignature = createHmac('sha256', process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY as string)
+    .update(
+      [
+        custody,
+        inputHash,
+        provenanceSignature,
+        custodyMetadata.custody_issuer,
+        custodyMetadata.review_session_id,
+        custodyMetadata.reviewer_agent_id,
+        custodyMetadata.reviewer_artifact_path,
+        custodyMetadata.architect_artifact_path,
+        custodyMetadata.reviewer_artifact_sha256,
+        custodyMetadata.architect_artifact_sha256,
+      ].join(':'),
+    )
+    .digest('hex');
   writeFileSync(
     join(dir, '.agent', 'independent-review-gate.json'),
     JSON.stringify(
       {
         status: 'PASS',
         input_sha256: inputHash,
-        provenance: { algorithm: 'HMAC-SHA256', signature: provenanceSignature },
+        provenance: {
+          algorithm: 'HMAC-SHA256',
+          signature: provenanceSignature,
+          custody,
+          ...custodyMetadata,
+          custody_signature: custodySignature,
+        },
         codeReview: {
           recommendation: 'APPROVE',
           architectStatus: 'CLEAR',
@@ -147,8 +357,11 @@ function buildGateRepo(): string {
     'package.json',
     'src/core.ts',
     'src/cli.ts',
+    'src/product-gate.ts',
+    'src/util.ts',
     'src/core.test.ts',
     'scripts/live-integration-smoke.mjs',
+    'docs/milestones/REVIEW_PROVENANCE.md',
   ];
   for (const rel of files) {
     const src = join(gateRepoRoot, rel);
@@ -156,11 +369,59 @@ function buildGateRepo(): string {
     mkdirSync(dirname(dest), { recursive: true });
     cpSync(src, dest);
   }
+  const packagePath = join(dir, 'package.json');
+  const packageJson = JSON.parse(readFileSync(packagePath, 'utf8'));
+  packageJson.scripts = { ...(packageJson.scripts || {}), e2e: 'node scripts/operator-browser-e2e.mjs' };
+  writeFileSync(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  writeFileSync(
+    join(dir, 'scripts/operator-browser-e2e.mjs'),
+    "#!/usr/bin/env node\nconsole.log('OPERATOR_BROWSER_E2E_PASS')\n",
+  );
+
+  const hardGatePath = join(dir, 'docs/milestones/HARD_COMPLETION_GATES.md');
+  writeFileSync(
+    hardGatePath,
+    readFileSync(hardGatePath, 'utf8')
+      .replace('CURRENT_COMPLETION_CEILING: 60', 'CURRENT_COMPLETION_CEILING: 95')
+      .replace(
+        '| Completion Ceiling Gate | Product gate computes `completion_ceiling`, fails on hard-gate failures, and lifts the ceiling only when this table is PASS plus live smoke, artifact reconciliation, and custody-attested signed independent-review provenance pass. | FAIL |',
+        '| Completion Ceiling Gate | Product gate computes `completion_ceiling`, fails on hard-gate failures, and lifts the ceiling only when this table is PASS plus live smoke, artifact reconciliation, and custody-attested signed independent-review provenance pass. | PASS |',
+      ),
+  );
+  writeFileSync(
+    join(dir, 'docs/milestones/FULL_PRODUCT_ROADMAP.md'),
+    `# Dominic Orchestration Completion-Ready Roadmap Fixture
+
+Latest product gate evidence records FAIL unless executable gates pass.
+UI shows worker lanes. Run detail UI showing all required evidence.
+
+| Area | 95% Product Pass Definition | Current Baseline | Status |
+| --- | --- | --- | --- |
+| Installable CLI | x | x | PASS |
+| Web UI | x | x | PASS |
+| Project registry | x | x | PASS |
+| Durable index | x | x | PASS |
+| v0 run lifecycle | x | x | PASS |
+| v1 role execution | x | x | PASS |
+| Executor adapter | x | x | PASS |
+| Policy/approval | x | x | PASS |
+| Promotion proposals | x | x | PASS |
+| v2 scheduler | x | x | PASS |
+| v2 worktrees | x | x | PASS |
+| Conflict detection | x | x | PASS |
+| Apply/merge proposal | x | x | PASS |
+| Dogfood | x | x | PASS |
+| Scope integrity | x | x | PASS |
+| Anti-self-deception critic | x | x | PASS |
+`,
+  );
   // The gate runs dist/cli.js --help/--version and the live-smoke script runs the
   // built CLI, so the whole compiled output is required.
   cpSync(join(gateRepoRoot, 'dist'), join(dir, 'dist'), { recursive: true });
   // Signed, internally consistent independent-review gate (sets the test HMAC key).
   writePassingReviewGate(dir);
+  writeMachineHardGateFixtures(dir);
   // Live integration smoke artifact dogfoodEvidence/liveOk reads before the gate
   // re-runs the smoke script itself.
   writeFileSync(
@@ -185,6 +446,20 @@ function buildGateRepo(): string {
   return dir;
 }
 
+function forceFailingHardGate(dir: string, ceiling = '60'): void {
+  const hardGatePath = join(dir, 'docs/milestones/HARD_COMPLETION_GATES.md');
+  writeFileSync(
+    hardGatePath,
+    readFileSync(hardGatePath, 'utf8')
+      .replace(/CURRENT_COMPLETION_CEILING:\s*\d+/, `CURRENT_COMPLETION_CEILING: ${ceiling}`)
+      .replace(
+        '| Completion Ceiling Gate | Product gate computes `completion_ceiling`, fails on hard-gate failures, and lifts the ceiling only when this table is PASS plus live smoke, artifact reconciliation, and custody-attested signed independent-review provenance pass. | PASS |',
+        '| Completion Ceiling Gate | Product gate computes `completion_ceiling`, fails on hard-gate failures, and lifts the ceiling only when this table is PASS plus live smoke, artifact reconciliation, and custody-attested signed independent-review provenance pass. | FAIL |',
+      ),
+  );
+  rmSync(join(dir, '.agent', 'independent-review-gate.json'), { force: true });
+}
+
 function cleanupGateRepos(): void {
   for (const dir of gateRepoTempDirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 }
@@ -200,7 +475,7 @@ function gitInit(dir: string): void {
 }
 
 async function startForEvidence(run: { id: string }, dir: string): Promise<void> {
-  const command = 'node -e "console.log(process.env.WORKER_ID || process.env.ROLE || "ok")"';
+  const command = 'node -e "console.log(process.env.WORKER_ID || process.env.ROLE || \'ok\')"';
   const started = await startRun(run.id, { command, timeoutMs: 5000 }, dir);
   if (started.status === 'awaiting_approval') {
     const approval = listApprovals(dir).find(
@@ -227,7 +502,7 @@ test('init, task, basic run lifecycle creates v0 artifacts', async () => {
   const task = addTask('smoke task', dir);
   assert.equal(listTasks(dir).length, 1);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, {}, dir);
+  await startForEvidence(run, dir);
   const collected = collectRun(run.id, dir);
   assert.equal(collected.status, 'completed');
   for (const artifact of [
@@ -253,7 +528,7 @@ test('promotion engine classifies a passing run into a memory candidate', async 
   gitInit(dir);
   const task = addTask('passing task', dir);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, {}, dir);
+  await startForEvidence(run, dir);
   const collected = collectRun(run.id, dir);
   assert.equal(collected.decision, 'pass');
   const promotions = listPromotions(dir).filter((p) => p.run_id === run.id);
@@ -320,7 +595,7 @@ test('applyApprovedPromotion writes the target artifact and sets status applied'
   gitInit(dir);
   const task = addTask('apply memory task', dir);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, {}, dir);
+  await startForEvidence(run, dir);
   collectRun(run.id, dir);
   const memory = listPromotions(dir).find((p) => p.run_id === run.id && p.target_type === 'memory');
   assert.ok(memory);
@@ -336,6 +611,14 @@ test('applyApprovedPromotion writes the target artifact and sets status applied'
   const again = applyApprovedPromotion(memory!.id, dir);
   assert.equal(again.status, 'applied');
   assert.equal(readFileSync(factsPath, 'utf8'), before);
+  const afterTask = addTask('after promotion task', dir);
+  const afterRun = createRun(afterTask.id, {}, dir);
+  await startForEvidence(afterRun, dir);
+  const promotionGate = JSON.parse(readFileSync(join(dir, '.agent', 'hard-gates', 'promotion-learning.json'), 'utf8'));
+  assert.equal(promotionGate.status, 'PASS');
+  assert.equal(promotionGate.source_promotion_id, memory!.id);
+  assert.equal(existsSync(join(dir, '.agent', 'runs', afterRun.id, 'promotion-state.json')), true);
+  assert.match(readFileSync(join(dir, '.agent', 'runs', afterRun.id, 'events.jsonl'), 'utf8'), /promotion\.loaded/);
 });
 
 test('applyApprovedPromotion throws when the promotion is only proposed', async () => {
@@ -343,7 +626,7 @@ test('applyApprovedPromotion throws when the promotion is only proposed', async 
   gitInit(dir);
   const task = addTask('proposed only task', dir);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, {}, dir);
+  await startForEvidence(run, dir);
   collectRun(run.id, dir);
   const memory = listPromotions(dir).find((p) => p.run_id === run.id && p.target_type === 'memory');
   assert.ok(memory);
@@ -356,7 +639,7 @@ test('a rejected promotion cannot be applied', async () => {
   gitInit(dir);
   const task = addTask('rejected task', dir);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, {}, dir);
+  await startForEvidence(run, dir);
   collectRun(run.id, dir);
   const memory = listPromotions(dir).find((p) => p.run_id === run.id && p.target_type === 'memory');
   assert.ok(memory);
@@ -368,16 +651,54 @@ test('a rejected promotion cannot be applied', async () => {
 
 test('roles mode creates and preserves v1 artifacts during collect', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
   const task = addTask('roles task', dir);
   const run = createRun(task.id, { mode: 'roles' }, dir);
   const outputPath = join(dir, '.agent', 'runs', run.id, 'worker-outputs', 'worker-001.md');
   writeFileSync(outputPath, '# Worker Output\n\n## Files Changed\n- README.md\n');
-  await approveShellMutation(run, dir, 'node -e "console.log(2)"');
-  await startRun(run.id, { command: 'node -e "console.log(2)"' }, dir);
+  const command = 'node -e "require(\'fs\').appendFileSync(\'README.md\', \'roles output\\\\n\')"';
+  await approveShellMutation(run, dir, command);
+  await startRun(run.id, { command }, dir);
   collectRun(run.id, dir);
   assert.match(readFileSync(outputPath, 'utf8'), /README\.md/);
   assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, 'manager-plan.md')), true);
   assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, 'work-orders', 'worker-001.yaml')), true);
+  const roleGate = JSON.parse(readFileSync(join(dir, '.agent', 'hard-gates', 'v1-role-contract.json'), 'utf8'));
+  assert.equal(roleGate.status, 'PASS');
+  assert.equal(roleGate.source_run_id, run.id);
+  const roleDir = join(dir, '.agent', 'runs', run.id, 'role-contract');
+  assert.equal(existsSync(join(roleDir, 'manager-plan.json')), true);
+  assert.equal(existsSync(join(roleDir, 'worker-output.json')), true);
+  assert.equal(existsSync(join(roleDir, 'review.json')), true);
+  const manager = JSON.parse(readFileSync(join(roleDir, 'manager-plan.json'), 'utf8'));
+  const worker = JSON.parse(readFileSync(join(roleDir, 'worker-output.json'), 'utf8'));
+  const reviewer = JSON.parse(readFileSync(join(roleDir, 'review.json'), 'utf8'));
+  assert.equal(manager.role, 'manager');
+  assert.equal(worker.role, 'worker');
+  assert.equal(reviewer.role, 'reviewer');
+  assert.equal(reviewer.decision, 'APPROVE');
+  assert.equal(reviewer.manager_plan_sha256, roleGate.manager_plan_sha256);
+  assert.equal(reviewer.worker_output_sha256, roleGate.worker_output_sha256);
+});
+
+test('roles mode rejects no-op worker with failed role-contract gate', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('roles no-op task', dir);
+  const run = createRun(task.id, { mode: 'roles' }, dir);
+  const command = 'node -e "console.log(2)"';
+  await approveShellMutation(run, dir, command);
+  await startRun(run.id, { command }, dir);
+  collectRun(run.id, dir);
+  const roleDir = join(dir, '.agent', 'runs', run.id, 'role-contract');
+  const reviewer = JSON.parse(readFileSync(join(roleDir, 'review.json'), 'utf8'));
+  const roleGate = JSON.parse(readFileSync(join(dir, '.agent', 'hard-gates', 'v1-role-contract.json'), 'utf8'));
+  assert.notEqual(reviewer.decision, 'APPROVE');
+  assert.equal(roleGate.status, 'FAIL');
+  assert.equal(
+    reviewer.findings.some((finding: { id: string }) => finding.id === 'worker-produced-no-diff'),
+    true,
+  );
 });
 
 test('multi mode creates physical worktrees, bounds workers, and reports conflicts', async () => {
@@ -499,13 +820,113 @@ test('project registry, durable index, approvals, and web controls are product-v
   );
   const task = addTask('product visible task', dir);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, {}, dir);
+  await startForEvidence(run, dir);
   collectRun(run.id, dir);
   const index = loadIndex(dir);
   assert.equal(index.tasks.length >= 1, true);
   assert.equal(index.runs.length >= 1, true);
   assert.match(renderHtml(dir), /Create Task/);
-  assert.match(renderRun(run.id, dir), /executor.process.json/);
+  assert.match(renderHtml(dir), /Review Gate 사용법/);
+  assert.match(renderHtml(dir), /href="\/review-gate"/);
+  assert.match(renderRun(run.id, dir), /Execution evidence/);
+});
+
+test('collect writes operator closed-loop report with execution, blocker, output, and next action', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('closed loop output task', dir);
+  const command =
+    'node -e "const fs=require(\'fs\'); fs.writeFileSync(\'loop-output.txt\',\'ok\'); fs.mkdirSync(\'reports/demo\',{recursive:true}); fs.writeFileSync(\'reports/demo/out.pptx\',\'ppt\'); console.log(\'pptx=reports/demo/out.pptx\')"';
+  const run = createRun(task.id, { command }, dir);
+  await approveShellMutation(run, dir, command);
+  await startRun(run.id, { command, timeoutMs: 5000 }, dir);
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'pass');
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const report = readFileSync(join(runDir, 'closed-loop-report.md'), 'utf8');
+  assert.match(report, /## 실행됐나\?\nyes/);
+  assert.match(report, /loop-output\.txt/);
+  assert.match(report, /reports\/demo\/out\.pptx/);
+  assert.match(report, /## 어떤 개선이 필요한가\?/);
+  assert.match(report, /## Next Loop Action/);
+  const json = JSON.parse(readFileSync(join(runDir, 'closed-loop-report.json'), 'utf8'));
+  assert.equal(json.executed, true);
+  assert.equal(
+    json.outputs.some((o: { path: string }) => o.path === 'loop-output.txt'),
+    true,
+  );
+  assert.equal(
+    json.outputs.some((o: { path: string; kind: string }) => o.path === 'reports/demo/out.pptx' && o.kind === 'reported_output'),
+    true,
+  );
+  const runHtml = renderRun(run.id, dir);
+  assert.match(runHtml, /Operator-visible outputs/);
+  assert.match(runHtml, /reports\/demo\/out\.pptx/);
+  assert.match(runHtml, /Closed loop: 실행 \/ 막힘 \/ 산출물 \/ 개선/);
+});
+
+test('collect without execution writes blocked closed-loop report instead of completing', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('closed loop blocked task', dir);
+  const run = createRun(task.id, {}, dir);
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.status, 'failed');
+  assert.equal(collected.decision, 'blocked');
+  const report = readFileSync(join(dir, '.agent', 'runs', run.id, 'closed-loop-report.md'), 'utf8');
+  assert.match(report, /## 실행됐나\?\nno/);
+  assert.match(report, /start\/executor/);
+  assert.match(report, /Run has no real execution evidence/);
+  assert.match(renderRun(run.id, dir), /Closed loop: 실행 \/ 막힘 \/ 산출물 \/ 개선/);
+});
+
+test('collect surfaces PPTX verifier failures as review and closed-loop blockers', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  writeFileSync(
+    join(dir, 'scripts', 'verify-pptx-openable.mjs'),
+    "console.error('PPTX_OPENABLE_FAIL forced verifier regression'); process.exit(1);\\n",
+  );
+  const command =
+    'node -e "const fs=require(\'fs\'); fs.mkdirSync(\'reports/github-projects/fail\',{recursive:true}); fs.writeFileSync(\'reports/github-projects/fail/github-projects-report.pptx\',\'bad\'); console.log(\'pptx=reports/github-projects/fail/github-projects-report.pptx\')"';
+  const task = addTask('PPTX hard verifier task', dir);
+  const run = createRun(task.id, { command }, dir);
+  await approveShellMutation(run, dir, command);
+  await startRun(run.id, { command, timeoutMs: 5000 }, dir);
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.status, 'failed');
+  assert.equal(collected.decision, 'blocked');
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const review = readFileSync(join(runDir, 'review.md'), 'utf8');
+  assert.match(review, /## Blocking Issues\n- PPTX verifier failed/);
+  assert.match(review, /PPTX_OPENABLE_FAIL forced verifier regression/);
+  assert.match(review, /## Decision\nblocked/);
+  const closedLoop = readFileSync(join(runDir, 'closed-loop-report.md'), 'utf8');
+  assert.match(closedLoop, /## 어디서 막혔나\?\ncollect\/review/);
+  assert.match(closedLoop, /PPTX verifier failed/);
+  assert.match(renderRun(run.id, dir), /PPTX verifier failed/);
+});
+
+test('review gate guide renders copy-paste commands without shell-hostile angle placeholders', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  const notificationDir = join(dir, '.agent', 'review-gates', 'subagent-notifications');
+  mkdirSync(notificationDir, { recursive: true });
+  writeFileSync(join(dir, '.agent', 'review-gates', 'code-reviewer.md'), 'Recommendation: APPROVE\n');
+  writeFileSync(join(dir, '.agent', 'review-gates', 'architect.md'), 'Architectural Status: CLEAR\n');
+  writeFileSync(
+    join(notificationDir, 'code-reviewer.json'),
+    JSON.stringify({ agent_path: '019e0000-0000-7000-8000-000000000001', status: { completed: 'ok' } }, null, 2),
+  );
+  writeFileSync(
+    join(notificationDir, 'architect.json'),
+    JSON.stringify({ agent_path: '019e0000-0000-7000-8000-000000000002', status: { completed: 'ok' } }, null, 2),
+  );
+  const html = renderReviewGate(dir);
+  assert.match(html, /node dist\/cli\.js runtime prepare-review-gate \\/);
+  assert.match(html, /--code-reviewer-agent 019e0000-0000-7000-8000-000000000001/);
+  assert.match(html, /--architect-agent 019e0000-0000-7000-8000-000000000002/);
+  assert.doesNotMatch(html, /<id>|&lt;id&gt;/);
 });
 
 test('failed executor creates approval-visible changes_requested state', async () => {
@@ -591,7 +1012,7 @@ test('approved apply proposal applies patch and records applied approval', async
   assert.equal(readFileSync(join(dir, 'apply-output.txt'), 'utf8'), 'from worker');
 });
 
-test('task update ignores undefined fields and default run command is not persisted as undefined', async () => {
+test('task update ignores undefined fields and default start does not execute a fake adapter', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
   gitInit(dir);
   const task = addTask('metadata integrity task', dir);
@@ -600,17 +1021,12 @@ test('task update ignores undefined fields and default run command is not persis
   const run = createRun(task.id, {}, dir);
   const runYaml = readFileSync(join(dir, '.agent', 'runs', run.id, 'run.yaml'), 'utf8');
   assert.doesNotMatch(runYaml, /undefined/);
-  await startRun(run.id, {}, dir);
-  const commandText = readFileSync(join(dir, '.agent', 'runs', run.id, 'executor-command.txt'), 'utf8');
-  assert.match(commandText, new RegExp(process.execPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.doesNotMatch(commandText, /^node\s/);
-  collectRun(run.id, dir);
-  assert.equal(
-    readFileSync(join(dir, '.agent', 'runs', run.id, 'executor.process.json'), 'utf8').includes(
-      'Dominic Orchestration task adapter executed',
-    ),
-    true,
-  );
+  const started = await startRun(run.id, {}, dir);
+  assert.equal(started.status, 'failed');
+  assert.equal(started.decision, 'blocked');
+  assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, 'executor-command.txt')), false);
+  assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, 'executor.process.json')), false);
+  assert.match(readFileSync(join(dir, '.agent', 'runs', run.id, 'no-executor-attached.md'), 'utf8'), /No Executor Attached/);
 });
 
 test('run UI distinguishes approval waits from completed results', async () => {
@@ -628,15 +1044,16 @@ test('run UI distinguishes approval waits from completed results', async () => {
   assert.match(detail, /No process evidence yet/);
 });
 
-test('web start ignores unconfirmed natural-language command text', async () => {
+test('web start without confirmed command records no executor instead of running natural language', async () => {
   const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
   gitInit(dir);
   const task = addTask('ignore natural language command task', dir);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, { command: undefined }, dir);
-  const commandText = readFileSync(join(dir, '.agent', 'runs', run.id, 'executor-command.txt'), 'utf8');
-  assert.doesNotMatch(commandText, /^진행해$/);
-  assert.match(commandText, /Dominic Orchestration task adapter executed/);
+  const started = await startRun(run.id, { command: undefined }, dir);
+  assert.equal(started.status, 'failed');
+  assert.equal(started.decision, 'blocked');
+  assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, 'executor-command.txt')), false);
+  assert.match(readFileSync(join(dir, '.agent', 'runs', run.id, 'no-executor-attached.md'), 'utf8'), /no explicit command/i);
 });
 
 test('blocked multi-worker run cannot create apply proposal', async () => {
@@ -1216,9 +1633,9 @@ test('basic and roles runs are not eligible for apply proposal because they muta
   gitInit(dir);
   const task = addTask('basic apply not eligible', dir);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, {}, dir);
+  await startForEvidence(run, dir);
   collectRun(run.id, dir);
-  assert.throws(() => proposeApply(run.id, dir), /isolated multi-worker/);
+  assert.throws(() => proposeApply(run.id, dir), /isolated multi-worker|not eligible for apply proposal/);
 });
 
 test('collectRun blocks unstarted runs instead of passing placeholder artifacts', () => {
@@ -1231,7 +1648,7 @@ test('collectRun blocks unstarted runs instead of passing placeholder artifacts'
   assert.equal(collected.decision, 'blocked');
   assert.match(
     readFileSync(join(dir, '.agent', 'runs', run.id, 'review.md'), 'utf8'),
-    /before start\/execution evidence/,
+    /no real execution evidence/,
   );
 });
 
@@ -1454,7 +1871,7 @@ test('redact masks multi-vendor secret formats, not just OpenAI/GitHub', () => {
   assert.ok(!redact(pem).includes('MIIEowIBAAKCAQEA'));
   assert.equal(redact('postgres://admin:hunter2@db.internal:5432/app'), 'postgres://[REDACTED]@db.internal:5432/app');
   // non-secret text must pass through unchanged
-  assert.equal(redact('Dominic Orchestration task adapter executed'), 'Dominic Orchestration task adapter executed');
+  assert.equal(redact('explicit command executed'), 'explicit command executed');
 });
 
 test('hard completion ceiling requires independent review and reconciliation artifacts', async () => {
@@ -1489,9 +1906,15 @@ test('hand-authored review gate without a valid provenance signature cannot lift
   const unsigned = (await import('./product-gate.js')).runProductGate(dir);
   assert.notEqual(unsigned.completion_ceiling, 95);
   assert.equal(
-    unsigned.result_reality_delta.some(
-      (row) => /Hard completion ceiling/.test(row.target) && row.status === 'FAIL',
-    ),
+    unsigned.checks.some((check) => check.name === 'PRD Scope Integrity Gate' && check.status === 'PASS'),
+    true,
+  );
+  assert.equal(
+    unsigned.checks.some((check) => check.name === 'Anti-Self-Deception Critic Gate' && check.status === 'PASS'),
+    true,
+  );
+  assert.equal(
+    unsigned.result_reality_delta.some((row) => /Hard completion ceiling/.test(row.target) && row.status === 'FAIL'),
     true,
   );
   // Now plant a wrong signature: still rejected.
@@ -1501,6 +1924,344 @@ test('hand-authored review gate without a valid provenance signature cannot lift
   assert.notEqual(forged.completion_ceiling, 95);
   assert.equal(
     forged.checks.some((check) => check.name === 'Hard Completion Ceiling Gate' && check.status === 'FAIL'),
+    true,
+  );
+});
+
+test('mechanically signed review without custody metadata cannot lift the ceiling', async () => {
+  const dir = buildGateRepo();
+  const gatePath = join(dir, '.agent', 'independent-review-gate.json');
+  const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+  delete gate.provenance.custody;
+  writeFileSync(gatePath, JSON.stringify(gate, null, 2));
+  const report = (await import('./product-gate.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.notEqual(report.completion_ceiling, 95);
+  assert.equal(
+    report.checks.some(
+      (check) =>
+        check.name === 'Hard Completion Ceiling Gate' &&
+        check.status === 'FAIL' &&
+        /custody-unverified/.test(check.evidence),
+    ),
+    true,
+  );
+});
+
+test('prepare-review-gate CLI writes unsigned gate from matching external review artifacts', () => {
+  const dir = buildGateRepo();
+  rmSync(join(dir, '.agent', 'independent-review-gate.json'), { force: true });
+  execFileSync(
+    process.execPath,
+    [
+      join(gateRepoRoot, 'dist', 'cli.js'),
+      'runtime',
+      'prepare-review-gate',
+      '--code-reviewer-artifact',
+      '.agent/review-gates/code-reviewer.md',
+      '--architect-artifact',
+      '.agent/review-gates/architect.md',
+      '--code-reviewer-notification',
+      '.agent/review-gates/subagent-notifications/019e0000-0000-7000-8000-000000000001.json',
+      '--architect-notification',
+      '.agent/review-gates/subagent-notifications/019e0000-0000-7000-8000-000000000002.json',
+      '--code-reviewer-agent',
+      '019e0000-0000-7000-8000-000000000001',
+      '--architect-agent',
+      '019e0000-0000-7000-8000-000000000002',
+    ],
+    { cwd: dir, encoding: 'utf8' },
+  );
+  const gate = JSON.parse(readFileSync(join(dir, '.agent', 'independent-review-gate.json'), 'utf8'));
+  assert.equal(gate.status, 'PASS');
+  assert.equal(gate.input_sha256, currentReviewInputHashForTest(dir));
+  assert.equal(gate.provenance, undefined);
+  assert.equal(gate.codeReview.independentReview.codeReviewer.artifact_sha256.length, 64);
+});
+
+test('prepare-review-gate CLI rejects mismatched reviewer notification envelope', () => {
+  const dir = buildGateRepo();
+  rmSync(join(dir, '.agent', 'independent-review-gate.json'), { force: true });
+  writeFileSync(
+    join(dir, '.agent/review-gates/subagent-notifications/019e0000-0000-7000-8000-000000000001.json'),
+    JSON.stringify({ agent_path: '019e0000-0000-7000-8000-000000000001', status: { completed: 'tampered' } }, null, 2),
+  );
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [
+          join(gateRepoRoot, 'dist', 'cli.js'),
+          'runtime',
+          'prepare-review-gate',
+          '--code-reviewer-artifact',
+          '.agent/review-gates/code-reviewer.md',
+          '--architect-artifact',
+          '.agent/review-gates/architect.md',
+          '--code-reviewer-notification',
+          '.agent/review-gates/subagent-notifications/019e0000-0000-7000-8000-000000000001.json',
+          '--architect-notification',
+          '.agent/review-gates/subagent-notifications/019e0000-0000-7000-8000-000000000002.json',
+          '--code-reviewer-agent',
+          '019e0000-0000-7000-8000-000000000001',
+          '--architect-agent',
+          '019e0000-0000-7000-8000-000000000002',
+        ],
+        { cwd: dir, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+      ),
+    /completed text does not match artifact/,
+  );
+});
+
+test('sign-review CLI fails closed without custody attestation key', () => {
+  const dir = buildGateRepo();
+  const home = mkdtempSync(join(tmpdir(), 'dominic-orch-review-home-'));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    AGENT_REVIEW_HMAC_KEY: 'cli-review-hmac-key',
+    AGENT_REVIEW_CUSTODY: 'reviewer-ci',
+  };
+  delete env.AGENT_REVIEW_CUSTODY_HMAC_KEY;
+  assert.throws(
+    () =>
+      execFileSync(process.execPath, [join(gateRepoRoot, 'dist', 'cli.js'), 'runtime', 'sign-review'], {
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    /review custody key/,
+  );
+});
+
+test('sign-review CLI fails closed without custody issuer and review session metadata', () => {
+  const dir = buildGateRepo();
+  const home = mkdtempSync(join(tmpdir(), 'dominic-orch-review-home-'));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    HOME: home,
+    AGENT_REVIEW_HMAC_KEY: 'cli-review-hmac-key',
+    AGENT_REVIEW_CUSTODY_HMAC_KEY: 'cli-custody-hmac-key',
+    AGENT_REVIEW_CUSTODY: 'reviewer-ci',
+  };
+  delete env.AGENT_REVIEW_CUSTODY_ISSUER;
+  delete env.AGENT_REVIEW_SESSION_ID;
+  delete env.GITHUB_RUN_ID;
+  delete env.CI_PIPELINE_ID;
+  assert.throws(
+    () =>
+      execFileSync(process.execPath, [join(gateRepoRoot, 'dist', 'cli.js'), 'runtime', 'sign-review'], {
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    /custody metadata/,
+  );
+});
+
+test('sign-review CLI rejects unsafe review artifact paths before hashing', () => {
+  const dir = buildGateRepo();
+  const gatePath = join(dir, '.agent', 'independent-review-gate.json');
+  const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+  gate.codeReview.independentReview.codeReviewer.artifact_path = '../outside.md';
+  writeFileSync(gatePath, JSON.stringify(gate, null, 2));
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    AGENT_REVIEW_HMAC_KEY: 'cli-review-hmac-key',
+    AGENT_REVIEW_CUSTODY_HMAC_KEY: 'cli-custody-hmac-key',
+    AGENT_REVIEW_CUSTODY: 'reviewer-ci',
+    AGENT_REVIEW_CUSTODY_ISSUER: 'test-reviewer-ci',
+    AGENT_REVIEW_SESSION_ID: 'test-session-unsafe-path',
+  };
+  assert.throws(
+    () =>
+      execFileSync(process.execPath, [join(gateRepoRoot, 'dist', 'cli.js'), 'runtime', 'sign-review'], {
+        cwd: dir,
+        env,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      }),
+    /safe repo-relative path/,
+  );
+});
+
+test('sign-review CLI writes custody-attested provenance that can lift the ceiling', async () => {
+  const dir = buildGateRepo();
+  const gatePath = join(dir, '.agent', 'independent-review-gate.json');
+  const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+  delete gate.provenance;
+  writeFileSync(gatePath, JSON.stringify(gate, null, 2));
+  const home = mkdtempSync(join(tmpdir(), 'dominic-orch-review-home-'));
+  const oldReviewKey = process.env.AGENT_REVIEW_HMAC_KEY;
+  const oldCustodyKey = process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY;
+  const oldCustody = process.env.AGENT_REVIEW_CUSTODY;
+  const oldCustodyIssuer = process.env.AGENT_REVIEW_CUSTODY_ISSUER;
+  const oldReviewSession = process.env.AGENT_REVIEW_SESSION_ID;
+  const env = {
+    ...process.env,
+    HOME: home,
+    AGENT_REVIEW_HMAC_KEY: 'cli-review-hmac-key',
+    AGENT_REVIEW_CUSTODY_HMAC_KEY: 'cli-custody-hmac-key',
+    AGENT_REVIEW_CUSTODY: 'reviewer-ci',
+    AGENT_REVIEW_CUSTODY_ISSUER: 'test-reviewer-ci',
+    AGENT_REVIEW_SESSION_ID: 'test-session-sign-review',
+  };
+  execFileSync(process.execPath, [join(gateRepoRoot, 'dist', 'cli.js'), 'runtime', 'sign-review'], {
+    cwd: dir,
+    env,
+    encoding: 'utf8',
+  });
+  const signed = JSON.parse(readFileSync(gatePath, 'utf8'));
+  assert.match(signed.provenance.signature, /^[a-f0-9]{64}$/);
+  assert.equal(signed.provenance.custody, 'reviewer-ci');
+  assert.equal(signed.provenance.custody_issuer, 'test-reviewer-ci');
+  assert.equal(signed.provenance.review_session_id, 'test-session-sign-review');
+  assert.equal(signed.provenance.reviewer_agent_id, gate.codeReview.independentReview.codeReviewer.agent_id);
+  assert.equal(signed.provenance.reviewer_artifact_path, '.agent/review-gates/code-reviewer.md');
+  assert.match(signed.provenance.custody_signature, /^[a-f0-9]{64}$/);
+  try {
+    process.env.AGENT_REVIEW_HMAC_KEY = env.AGENT_REVIEW_HMAC_KEY;
+    process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY = env.AGENT_REVIEW_CUSTODY_HMAC_KEY;
+    process.env.AGENT_REVIEW_CUSTODY = env.AGENT_REVIEW_CUSTODY;
+    process.env.AGENT_REVIEW_CUSTODY_ISSUER = env.AGENT_REVIEW_CUSTODY_ISSUER;
+    process.env.AGENT_REVIEW_SESSION_ID = env.AGENT_REVIEW_SESSION_ID;
+    const report = (await import('./product-gate.js')).runProductGate(dir);
+    assert.equal(report.decision, 'PASS');
+    assert.equal(report.completion_ceiling, 95);
+  } finally {
+    if (oldReviewKey === undefined) delete process.env.AGENT_REVIEW_HMAC_KEY;
+    else process.env.AGENT_REVIEW_HMAC_KEY = oldReviewKey;
+    if (oldCustodyKey === undefined) delete process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY;
+    else process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY = oldCustodyKey;
+    if (oldCustody === undefined) delete process.env.AGENT_REVIEW_CUSTODY;
+    else process.env.AGENT_REVIEW_CUSTODY = oldCustody;
+    if (oldCustodyIssuer === undefined) delete process.env.AGENT_REVIEW_CUSTODY_ISSUER;
+    else process.env.AGENT_REVIEW_CUSTODY_ISSUER = oldCustodyIssuer;
+    if (oldReviewSession === undefined) delete process.env.AGENT_REVIEW_SESSION_ID;
+    else process.env.AGENT_REVIEW_SESSION_ID = oldReviewSession;
+  }
+});
+
+test('machine hard gates for role, promotion, and browser evidence are required before ceiling lift', async () => {
+  for (const [artifact, expectedGate] of [
+    ['.agent/hard-gates/v1-role-contract.json', 'V1 Role Contract Gate'],
+    ['.agent/hard-gates/promotion-learning.json', 'Promotion Learning Gate'],
+    ['.agent/hard-gates/operator-browser-e2e.json', 'Operator Browser E2E Gate'],
+  ] as const) {
+    const dir = buildGateRepo();
+    rmSync(join(dir, artifact));
+    const report = (await import('./product-gate.js')).runProductGate(dir);
+    assert.equal(report.decision, 'FAIL');
+    assert.notEqual(report.completion_ceiling, 95);
+    assert.equal(
+      report.checks.some((check) => check.name === expectedGate && check.status === 'FAIL'),
+      true,
+    );
+  }
+});
+
+test('roadmap current blockers prevent ceiling lift even with signed provenance', async () => {
+  const dir = buildGateRepo();
+  writeFileSync(
+    join(dir, 'docs/milestones/FULL_PRODUCT_ROADMAP.md'),
+    `# Roadmap With Current Blockers
+
+**Status:** DISPUTED
+
+| Area | 95% Product Pass Definition | Current Baseline | Status |
+| --- | --- | --- | --- |
+| Installable CLI | x | x | PASS |
+| Web UI | x | x | PASS |
+| Project registry | x | x | PASS |
+| Durable index | x | x | PASS |
+| v0 run lifecycle | x | x | PASS |
+| v1 role execution | x | differentiated behavior not proven | PARTIAL |
+| Executor adapter | x | x | PASS |
+| Policy/approval | x | x | PASS |
+| Promotion proposals | x | learning loop not proven | PARTIAL |
+| v2 scheduler | x | x | PASS |
+| v2 worktrees | x | x | PASS |
+| Conflict detection | x | x | PASS |
+| Apply/merge proposal | x | x | PASS |
+| Dogfood | x | x | PASS |
+| Scope integrity | x | x | PASS |
+| Anti-self-deception critic | x | current hard ceiling blocks | FAIL-CLOSED |
+
+UI shows worker lanes. Run detail UI showing all required evidence.
+`,
+  );
+  writePassingReviewGate(dir);
+  const report = (await import('./product-gate.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.notEqual(report.completion_ceiling, 95);
+  assert.equal(
+    report.checks.some(
+      (check) =>
+        check.name === 'Product Completeness Gate' &&
+        check.status === 'FAIL' &&
+        /FULL_PRODUCT_ROADMAP/.test(check.evidence),
+    ),
+    true,
+  );
+});
+
+test('failing hard gate uses declared current completion ceiling', async () => {
+  const dir = buildGateRepo();
+  forceFailingHardGate(dir, '45');
+  const report = (await import('./product-gate.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.completion_ceiling, 45);
+  assert.equal(
+    report.checks.some(
+      (check) =>
+        check.name === 'Hard Completion Ceiling Gate' &&
+        check.status === 'FAIL' &&
+        /declared_ceiling=45/.test(check.evidence),
+    ),
+    true,
+  );
+});
+
+test('hard gate scans user-facing docs for stale high-completion claims', async () => {
+  const dir = buildGateRepo();
+  forceFailingHardGate(dir, '60');
+  const architecturePath = join(dir, 'docs/architecture/PHYSICAL_RUNTIME_ARCHITECTURE.md');
+  mkdirSync(dirname(architecturePath), { recursive: true });
+  writeFileSync(architecturePath, 'Current operator claim: product gate PASS with completion_ceiling: 95\n');
+  const report = (await import('./product-gate.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(
+    report.checks.some(
+      (check) =>
+        check.name === 'Hard Completion Ceiling Gate' &&
+        check.status === 'FAIL' &&
+        /forbidden_claims=true/.test(check.evidence) &&
+        /PHYSICAL_RUNTIME_ARCHITECTURE/.test(check.evidence),
+    ),
+    true,
+  );
+});
+
+test('hard gate scans stale claims when table rows pass but provenance blocks lift', async () => {
+  const dir = buildGateRepo();
+  rmSync(join(dir, '.agent', 'independent-review-gate.json'), { force: true });
+  writeFileSync(
+    join(dir, 'docs/milestones/DOGFOOD_REPORT.md'),
+    'Current dogfood claim: npm test: 95 tests, 95 pass and full-target gate PASS\n',
+  );
+  const report = (await import('./product-gate.js')).runProductGate(dir);
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.completion_ceiling, 60);
+  assert.equal(
+    report.checks.some(
+      (check) =>
+        check.name === 'Hard Completion Ceiling Gate' &&
+        check.status === 'FAIL' &&
+        /forbidden_claims=true/.test(check.evidence) &&
+        /DOGFOOD_REPORT/.test(check.evidence),
+    ),
     true,
   );
 });
@@ -1554,6 +2315,20 @@ test('product gate durable report contains report_path after hard gates pass', a
   const written = JSON.parse(readFileSync(join(dir, report.report_path), 'utf8'));
   assert.equal(written.report_path, report.report_path);
   assert.ok(Array.isArray(written.result_reality_delta));
+});
+
+test('product gate resolves live smoke evidence on the first clean run', async () => {
+  const dir = buildGateRepo();
+  rmSync(join(dir, '.agent', 'live-integration-smoke.json'), { force: true });
+  const report = (await import('./product-gate.js')).runProductGate(dir, { write: true });
+  assert.equal(report.decision, 'PASS');
+  assert.equal(
+    report.result_reality_delta.some(
+      (row) =>
+        /Real execution/.test(row.target) && row.status === 'PASS' && /live-integration-smoke/.test(row.evidence),
+    ),
+    true,
+  );
 });
 
 test('shaped scaffold with fake CLI and dogfood strings still fails without dogfood artifacts', async () => {
@@ -1721,7 +2496,7 @@ test('forged dogfood proposal digest fails product gate', async () => {
   );
   writeFileSync(
     join(basicDir, 'executor.process.json'),
-    JSON.stringify({ label: 'executor', exit_code: 0, stdout: 'Dominic Orchestration task adapter executed' }),
+    JSON.stringify({ label: 'executor', command: 'pwd', exit_code: 0, stdout: '/tmp/dogfood' }),
   );
   writeFileSync(join(basicDir, 'review.md'), '## Decision\npass');
   writeFileSync(

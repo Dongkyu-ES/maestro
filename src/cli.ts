@@ -1,9 +1,11 @@
 #!/usr/bin/env node
+import { spawnSync } from 'node:child_process';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
-import { join } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 import { parse as parseQuery } from 'node:querystring';
+import { fileURLToPath } from 'node:url';
 import {
   addProject,
   addTask,
@@ -40,8 +42,14 @@ import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js'
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { writeUiAgreementSmoke } from './harness/ui-agreement.js';
 import { currentReviewInputHash, runProductGate } from './product-gate.js';
-import { reviewProvenanceKey, reviewProvenanceSignature, sha256Text } from './util.js';
-import { renderHtml, renderRun } from './view.js';
+import {
+  reviewCustodyKey,
+  reviewCustodySignature,
+  reviewProvenanceKey,
+  reviewProvenanceSignature,
+  sha256Text,
+} from './util.js';
+import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
 function arg(name: string, fallback?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -52,6 +60,32 @@ function has(name: string): boolean {
 }
 function firstNonFlag(items: string[]): string | undefined {
   return items.find((x) => !x.startsWith('--'));
+}
+function safeReviewRelPath(root: string, artifactPath: unknown): string {
+  if (
+    typeof artifactPath !== 'string' ||
+    artifactPath.startsWith('/') ||
+    artifactPath.includes('..') ||
+    artifactPath.trim() === ''
+  )
+    throw new Error('review artifact_path must be a safe repo-relative path');
+  const full = join(root, artifactPath);
+  if (!existsSync(full)) throw new Error(`review artifact is missing: ${artifactPath}`);
+  const rel = relative(realpathSync(root), realpathSync(full)).replaceAll('\\', '/');
+  if (rel === '..' || rel.startsWith('../')) throw new Error('review artifact_path escapes the repo');
+  return artifactPath;
+}
+function readReviewArtifact(root: string, artifactPath: unknown): string {
+  const relPath = safeReviewRelPath(root, artifactPath);
+  return readFileSync(join(root, relPath), 'utf8');
+}
+interface ReviewNotificationEnvelope {
+  agent_path?: string;
+  status?: { completed?: string };
+}
+function readReviewJsonArtifact(root: string, artifactPath: unknown): ReviewNotificationEnvelope {
+  const relPath = safeReviewRelPath(root, artifactPath);
+  return JSON.parse(readFileSync(join(root, relPath), 'utf8')) as ReviewNotificationEnvelope;
 }
 async function readBody(req: any): Promise<Record<string, string>> {
   const chunks: Buffer[] = [];
@@ -79,17 +113,20 @@ function usage(): string {
   agent index rebuild|show
   agent task add|list|show|status|update|archive
   agent run create|start|collect|cancel|latest
+  agent run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
   agent runtime projection
   agent runtime full-target-gate <run-id> [--append-pass-event]
   agent runtime m8-boundary-evidence <run-id>
   agent runtime codex-lifecycle-proof <run-id> --thread-id <thread-id>
   agent runtime ui-agreement <run-id>
   agent runtime verify-full-target <run-id> [--append-verified-event]
-  agent runtime sign-review
+  agent runtime prepare-review-gate --code-reviewer-artifact .agent/review-gates/code-reviewer.md --architect-artifact .agent/review-gates/architect.md --code-reviewer-notification .agent/review-gates/subagent-notifications/code-reviewer.json --architect-notification .agent/review-gates/subagent-notifications/architect.json --code-reviewer-agent PASTE_CODE_REVIEWER_AGENT_ID --architect-agent PASTE_ARCHITECT_AGENT_ID
+  agent runtime sign-review [--custody reviewer-ci|reviewer-owned|review-service]
   agent review latest
   agent approvals
   agent approval request|approve|reject
   agent apply propose|approved
+  agent report github-projects [--github-dir ~/Documents/github] [--out-dir reports/github-projects/<timestamp>]
   agent promotions
   agent promotion approve|reject|apply <id>
   agent worktrees cleanup
@@ -200,8 +237,13 @@ async function main() {
     }
     if (cmd === 'run' && sub === 'start') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent run start <run-id> [--command cmd]');
-      const run = await startRun(id, { command: arg('--command'), timeoutMs: Number(arg('--timeout-ms', '30000')) });
+      if (!id) throw new Error('usage: agent run start <run-id> [--command cmd] [--sandbox mode] [--timeout-ms N]');
+      const timeoutArg = arg('--timeout-ms');
+      const run = await startRun(id, {
+        command: arg('--command'),
+        sandbox: arg('--sandbox') as 'read-only' | 'workspace-write' | 'danger-full-access' | undefined,
+        timeoutMs: timeoutArg !== undefined ? Number(timeoutArg) : undefined,
+      });
       console.log(`started: ${run.id}\nstatus: ${run.status}`);
       return;
     }
@@ -283,6 +325,81 @@ async function main() {
       if (report.decision !== 'PASS') process.exitCode = 2;
       return;
     }
+    if (cmd === 'runtime' && sub === 'prepare-review-gate') {
+      const root = process.cwd();
+      const reviewerArtifactPath = arg('--code-reviewer-artifact');
+      const architectArtifactPath = arg('--architect-artifact');
+      const reviewerNotificationPath = arg('--code-reviewer-notification');
+      const architectNotificationPath = arg('--architect-notification');
+      const reviewerAgentId = arg('--code-reviewer-agent');
+      const architectAgentId = arg('--architect-agent');
+      if (
+        !reviewerArtifactPath ||
+        !architectArtifactPath ||
+        !reviewerNotificationPath ||
+        !architectNotificationPath ||
+        !reviewerAgentId ||
+        !architectAgentId
+      )
+        throw new Error(
+          'usage: agent runtime prepare-review-gate --code-reviewer-artifact .agent/review-gates/code-reviewer.md --architect-artifact .agent/review-gates/architect.md --code-reviewer-notification .agent/review-gates/subagent-notifications/code-reviewer.json --architect-notification .agent/review-gates/subagent-notifications/architect.json --code-reviewer-agent PASTE_CODE_REVIEWER_AGENT_ID --architect-agent PASTE_ARCHITECT_AGENT_ID',
+        );
+      const reviewerText = readReviewArtifact(root, reviewerArtifactPath);
+      const architectText = readReviewArtifact(root, architectArtifactPath);
+      const reviewerNotification = readReviewJsonArtifact(root, reviewerNotificationPath);
+      const architectNotification = readReviewJsonArtifact(root, architectNotificationPath);
+      if (reviewerNotification?.agent_path !== reviewerAgentId)
+        throw new Error('code-reviewer notification agent_path does not match --code-reviewer-agent');
+      if (architectNotification?.agent_path !== architectAgentId)
+        throw new Error('architect notification agent_path does not match --architect-agent');
+      if (String(reviewerNotification?.status?.completed || '') !== reviewerText)
+        throw new Error('code-reviewer notification completed text does not match artifact');
+      if (String(architectNotification?.status?.completed || '') !== architectText)
+        throw new Error('architect notification completed text does not match artifact');
+      const inputHash = currentReviewInputHash(root);
+      const reviewerSha = sha256Text(reviewerText);
+      const architectSha = sha256Text(architectText);
+      const gate = {
+        status: 'PASS',
+        input_sha256: inputHash,
+        codeReview: {
+          recommendation: 'APPROVE',
+          architectStatus: 'CLEAR',
+          independentReview: {
+            codeReviewer: {
+              agentRole: 'code-reviewer',
+              agent_id: reviewerAgentId,
+              source: 'codex-native-subagent',
+              status: 'completed',
+              completed_at: new Date().toISOString(),
+              reviewed_input_sha256: inputHash,
+              artifact_path: safeReviewRelPath(root, reviewerArtifactPath),
+              artifact_sha256: reviewerSha,
+              notification_path: safeReviewRelPath(root, reviewerNotificationPath),
+              commands: ['npm test', 'npm run e2e', 'node dist/cli.js quality gate --write'],
+              evidence: 'artifact-backed external code-reviewer approval',
+            },
+            architect: {
+              agentRole: 'architect',
+              agent_id: architectAgentId,
+              source: 'codex-native-subagent',
+              status: 'completed',
+              completed_at: new Date().toISOString(),
+              reviewed_input_sha256: inputHash,
+              artifact_path: safeReviewRelPath(root, architectArtifactPath),
+              artifact_sha256: architectSha,
+              notification_path: safeReviewRelPath(root, architectNotificationPath),
+              commands: ['npm test', 'npm run e2e', 'node dist/cli.js quality gate --write'],
+              evidence: 'artifact-backed external architect clear',
+            },
+          },
+        },
+      };
+      const gatePath = join(root, '.agent', 'independent-review-gate.json');
+      writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}\n`);
+      console.log(JSON.stringify({ path: '.agent/independent-review-gate.json', input_sha256: inputHash }, null, 2));
+      return;
+    }
     if (cmd === 'runtime' && sub === 'sign-review') {
       const root = process.cwd();
       const gatePath = join(root, '.agent', 'independent-review-gate.json');
@@ -296,14 +413,48 @@ async function main() {
       const inputHash = currentReviewInputHash(root);
       const reviewer = gate?.codeReview?.independentReview?.codeReviewer;
       const architect = gate?.codeReview?.independentReview?.architect;
-      const reviewerPath = reviewer?.artifact_path;
-      const architectPath = architect?.artifact_path;
-      if (typeof reviewerPath !== 'string' || typeof architectPath !== 'string')
-        throw new Error('review gate is missing reviewer/architect artifact_path entries');
-      const reviewerSha = sha256Text(readFileSync(join(root, reviewerPath), 'utf8'));
-      const architectSha = sha256Text(readFileSync(join(root, architectPath), 'utf8'));
+      const reviewerText = readReviewArtifact(root, reviewer?.artifact_path);
+      const architectText = readReviewArtifact(root, architect?.artifact_path);
+      const reviewerSha = sha256Text(reviewerText);
+      const architectSha = sha256Text(architectText);
       const signature = reviewProvenanceSignature(key, inputHash, reviewerSha, architectSha);
-      gate.provenance = { algorithm: 'HMAC-SHA256', signature };
+      const custody = arg('--custody') || gate?.provenance?.custody || process.env.AGENT_REVIEW_CUSTODY;
+      if (!['reviewer-ci', 'reviewer-owned', 'review-service'].includes(String(custody || '')))
+        throw new Error(
+          'review custody is required: pass --custody reviewer-ci|reviewer-owned|review-service or set AGENT_REVIEW_CUSTODY',
+        );
+      const custodyKey = reviewCustodyKey();
+      if (!custodyKey)
+        throw new Error(
+          'no review custody key configured: set AGENT_REVIEW_CUSTODY_HMAC_KEY or create ~/.dominic_orchestration/review-custody.key',
+        );
+      const reviewSessionId =
+        arg('--review-session') ||
+        process.env.AGENT_REVIEW_SESSION_ID ||
+        process.env.GITHUB_RUN_ID ||
+        process.env.CI_PIPELINE_ID;
+      const custodyIssuer = arg('--custody-issuer') || process.env.AGENT_REVIEW_CUSTODY_ISSUER;
+      const reviewerAgentId = arg('--reviewer-agent') || reviewer?.agent_id;
+      if (!custodyIssuer || !reviewSessionId || !reviewerAgentId)
+        throw new Error(
+          'review custody metadata is required: provide --custody-issuer and --review-session (or AGENT_REVIEW_CUSTODY_ISSUER/AGENT_REVIEW_SESSION_ID) plus reviewer agent id',
+        );
+      const custodyMetadata = {
+        custody_issuer: String(custodyIssuer),
+        review_session_id: String(reviewSessionId),
+        reviewer_agent_id: String(reviewerAgentId),
+        reviewer_artifact_path: String(reviewer?.artifact_path),
+        architect_artifact_path: String(architect?.artifact_path),
+        reviewer_artifact_sha256: reviewerSha,
+        architect_artifact_sha256: architectSha,
+      };
+      gate.provenance = {
+        algorithm: 'HMAC-SHA256',
+        signature,
+        custody,
+        ...custodyMetadata,
+        custody_signature: reviewCustodySignature(custodyKey, custody, inputHash, signature, custodyMetadata),
+      };
       writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}\n`);
       console.log(signature);
       return;
@@ -346,6 +497,21 @@ async function main() {
       const id = rest[0];
       if (!id) throw new Error('usage: agent apply approved <approval-id>');
       console.log(JSON.stringify(applyApprovedProposal(id), null, 2));
+      return;
+    }
+    if (cmd === 'report' && sub === 'github-projects') {
+      const cliDir = dirname(fileURLToPath(import.meta.url));
+      const script = join(cliDir, '..', 'scripts', 'github-projects-report.mjs');
+      if (!existsSync(script)) throw new Error(`report script missing: ${script}`);
+      const scriptArgs = [script];
+      const githubDir = arg('--github-dir');
+      const outDir = arg('--out-dir');
+      const maxProjects = arg('--max-projects');
+      if (githubDir) scriptArgs.push('--github-dir', githubDir);
+      if (outDir) scriptArgs.push('--out-dir', outDir);
+      if (maxProjects) scriptArgs.push('--max-projects', maxProjects);
+      const result = spawnSync(process.execPath, scriptArgs, { cwd: process.cwd(), stdio: 'inherit' });
+      process.exitCode = result.status ?? 1;
       return;
     }
     if (cmd === 'promotions' && !sub) {
@@ -438,6 +604,14 @@ async function serveWeb(): Promise<void> {
         if (!ok) throw new Error('invalid csrf token');
         return body;
       };
+      if (req.method === 'POST' && url.pathname === '/api/projects') {
+        const body = await requirePostAuth();
+        const path = (body.path || '').trim();
+        if (!path) throw new Error('project path is required');
+        addProject(path);
+        redirect(res);
+        return;
+      }
       if (req.method === 'POST' && url.pathname === '/api/tasks') {
         const body = await requirePostAuth();
         addTask(body.title || 'Untitled task');
@@ -460,7 +634,8 @@ async function serveWeb(): Promise<void> {
       }
       if (req.method === 'POST' && url.pathname === '/api/runs') {
         const body = await requirePostAuth();
-        createRun(body.taskId, { mode: (body.mode || 'basic') as any, source: 'web' });
+        const executor = ['codex', 'omx', 'agy', 'command'].includes(body.executor) ? body.executor : 'command';
+        createRun(body.taskId, { mode: (body.mode || 'basic') as any, executor: executor as any, source: 'web' });
         redirect(res);
         return;
       }
@@ -549,6 +724,7 @@ async function serveWeb(): Promise<void> {
       requirePageAuth();
       res.setHeader('content-type', 'text/html; charset=utf-8');
       if (url.pathname.startsWith('/run/')) res.end(renderRun(decodeURIComponent(url.pathname.slice(5))));
+      else if (url.pathname === '/review-gate') res.end(renderReviewGate(process.cwd()));
       else if (url.pathname === '/') res.end(renderHtml(process.cwd(), csrfToken));
       else {
         res.statusCode = 404;

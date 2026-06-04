@@ -21,7 +21,7 @@ Implement bounded multi-worker orchestration with worker limits, isolated worksp
 - `run collect` produces generated synthesis and conflict report evidence without overwriting human notes.
 - Tests cover max-worker bounding.
 
-## Goal vs Result Comparison
+## Historical Goal vs Result Comparison
 
 | Requirement | Expected | Actual | Status | Evidence |
 | --- | --- | --- | --- | --- |
@@ -46,7 +46,7 @@ ls .agent/runs/<run-id>/work-orders | wc -l # 3
 
 ## Quality Gate Result
 
-PASS.
+Historical PASS under the old scaffold-level standard; not a current product completion gate result.
 
 ## Failures / Rework Items
 
@@ -56,4 +56,4 @@ PASS.
 
 ## Decision
 
-PASS
+Historical PASS under the old scaffold-level milestone definition; not a current completion claim.

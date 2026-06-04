@@ -18,7 +18,7 @@ Implement the CLI-first run record loop with semi-auto OMX handoff artifacts and
 - Verified with generated smoke run under `.agent/runs/`.
 - Web smoke served and rendered local task/run pages.
 
-## Goal vs Result Comparison
+## Historical Goal vs Result Comparison
 
 | Requirement | Expected | Actual | Status | Evidence |
 | --- | --- | --- | --- | --- |
@@ -42,7 +42,7 @@ curl -fsS http://127.0.0.1:4317/
 
 ## Quality Gate Result
 
-PASS.
+Historical PASS under the old scaffold-level standard; not a current product completion gate result.
 
 ## Failures / Rework Items
 
@@ -52,4 +52,4 @@ PASS.
 
 ## Decision
 
-PASS
+Historical PASS under the old scaffold-level milestone definition; not a current completion claim.

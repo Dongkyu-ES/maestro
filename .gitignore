@@ -4,6 +4,11 @@
 .agent/
 .agent/logs/
 .agent/cache/
+.claude/
+
+# Generated artifacts (presentations, reports)
+outputs/
+reports/
 
 # OS/editor
 .DS_Store

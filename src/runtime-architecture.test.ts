@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { buildCompositionPlan } from './composition/composition.js';
-import { addTask, createRun, listApprovals, rebuildRuntimeProjectionStore, resolveApproval, startRun } from './core.js';
+import { addTask, collectRun, createRun, listApprovals, rebuildRuntimeProjectionStore, resolveApproval, startRun } from './core.js';
 import { appendRuntimeEvent, payloadHash, readRuntimeEvents, validateRuntimeLedger } from './events/ledger.js';
 import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
@@ -28,6 +29,29 @@ import { renderHtml, renderRun } from './view.js';
 function tempDir(): string {
   return mkdtempSync(join(tmpdir(), 'dominic-runtime-'));
 }
+
+// Hermetic codex seam: a fake `codex` binary that emits the real JSONL event
+// shape, writes the -o last-message file, and makes a real file change so the
+// collect/review pipeline sees an actual diff — with no network or model calls.
+const FAKE_CODEX_SCRIPT = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const out = args.includes('-o') ? args[args.indexOf('-o') + 1] : null;
+const cwd = args.includes('-C') ? args[args.indexOf('-C') + 1] : process.cwd();
+const msg = 'fake codex executed the task and edited codex-change.txt';
+process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'fake-thread-0001' }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'turn.started' }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'item.completed', item: { id: 'item_0', type: 'agent_message', text: msg } }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }) + '\\n');
+if (out) fs.writeFileSync(out, msg + '\\n');
+try { fs.writeFileSync(path.join(cwd, 'codex-change.txt'), 'changed by fake codex\\n'); } catch {}
+process.exit(0);
+`;
+const fakeCodexDir = mkdtempSync(join(tmpdir(), 'fake-codex-'));
+const fakeCodexPath = join(fakeCodexDir, 'codex');
+writeFileSync(fakeCodexPath, FAKE_CODEX_SCRIPT, { mode: 0o755 });
+process.env.AGENT_CODEX_BIN = fakeCodexPath;
 
 test('Story 1: runtime contracts expose lifecycle verbs and shell is primitive only', () => {
   const shell = new ShellPrimitiveAdapter();
@@ -226,23 +250,99 @@ test('startRun writes runtime events and approval decisions as linked evidence',
   assert.equal(findProjectedRun(projection, run.id)?.approvals[0].status, 'approved');
 });
 
-test('review blocker: codex executor request cannot emit fake first-class session while running shell', async () => {
+test('codex executor really runs codex and emits real session evidence, not a shell fallback', async () => {
   const dir = tempDir();
   const task = addTask('codex requested task', dir);
-  const run = createRun(task.id, { executor: 'codex', command: 'node -e "console.log(1)"' }, dir);
+  const run = createRun(task.id, { executor: 'codex' }, dir);
   await startRun(run.id, {}, dir);
-  const approval = listApprovals(dir).find((a) => a.run_id === run.id && a.status === 'requested');
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  assert.match(readFileSync(join(runDir, 'executor-command.txt'), 'utf8'), /--sandbox workspace-write/);
+  const events = readRuntimeEvents(runDir);
+  // The codex executor must not fall back to a primitive shell adapter.
+  assert.equal(
+    events.some((event) => event.source === 'shell-adapter'),
+    false,
+  );
+  // Real codex session evidence: started, executed, with the real session id.
+  const session = [...events]
+    .reverse()
+    .find((event) => event.source === 'codex-adapter' && event.type === 'runtime.session.started')!;
+  assert.ok(session);
+  assert.equal(session.payload.adapter_kind, 'codex');
+  assert.equal(session.payload.evidence_status, 'executed');
+  assert.equal(session.payload.first_class, true);
+  assert.equal(session.session_id, 'fake-thread-0001');
+  assert.equal(session.artifact_refs.includes('executor.process.json'), true);
+  // Real process evidence with a real exit code, plus a real file change.
+  const proc = JSON.parse(readFileSync(join(runDir, 'executor.process.json'), 'utf8'));
+  assert.equal(proc.exit_code, 0);
+  assert.equal(existsSync(join(dir, 'codex-change.txt')), true);
+});
+
+test('GitHub-folder PPT codex runs use GUI-capable sandbox by default', async () => {
+  const dir = tempDir();
+  const task = addTask(
+    '깃헙폴더를 읽고 어떤 프로젝트가 있는지, 최근에 진행하던 프로젝트가 뭔지 두괄식으로 요약하고 제일 활성화된 프로젝트를 ppt로 만들어서 보고해',
+    dir,
+  );
+  const run = createRun(task.id, { executor: 'codex' }, dir);
+  await startRun(run.id, {}, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  assert.match(readFileSync(join(runDir, 'executor-command.txt'), 'utf8'), /--sandbox danger-full-access/);
+  assert.match(readFileSync(join(runDir, 'codex-prompt.md'), 'utf8'), /PPTX_OPENABLE_PASS/);
+});
+
+test('codex prompt routes through local skill registry and collect blocks missing skill evidence', async () => {
+  const dir = tempDir();
+  const analyzeDir = join(dir, '.codex', 'skills', 'analyze');
+  const presentationsDir = join(
+    dir,
+    '.codex',
+    'plugins',
+    'cache',
+    'openai-primary-runtime',
+    'presentations',
+    'test-version',
+    'skills',
+    'presentations',
+  );
+  mkdirSync(analyzeDir, { recursive: true });
+  mkdirSync(presentationsDir, { recursive: true });
+  writeFileSync(
+    join(analyzeDir, 'SKILL.md'),
+    '# Analyze\nUse for ranked repository analysis with explicit local evidence and confidence boundaries.\n',
+  );
+  writeFileSync(
+    join(presentationsDir, 'SKILL.md'),
+    '# Presentations\nBuild PowerPoint PPTX decks; verify rendered slides and proof objects.\n',
+  );
+  const task = addTask('프로젝트를 분석해서 ranked synthesis 보고서를 만들어줘', dir);
+  const run = createRun(task.id, { executor: 'codex' }, dir);
+  await startRun(run.id, {}, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const prompt = readFileSync(join(runDir, 'codex-prompt.md'), 'utf8');
+  assert.match(prompt, /Skill Routing Candidates/);
+  assert.match(prompt, /analyze/i);
+  assert.match(prompt, /skill-usage-response\.md/);
+  assert.match(readFileSync(join(runDir, 'skill-routing-candidates.md'), 'utf8'), /SKILL\.md/);
+
+  const commandTask = addTask('skill evidence collect gate', dir);
+  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+  const commandRun = createRun(commandTask.id, { command: "node -e \"require('fs').writeFileSync('ok.txt','ok')\"" }, dir);
+  await startRun(commandRun.id, {}, dir);
+  const approval = listApprovals(dir).find((a) => a.run_id === commandRun.id && a.status === 'requested');
   assert.ok(approval);
   resolveApproval(approval.id, 'approved', dir);
-  await startRun(run.id, {}, dir);
-  const events = readRuntimeEvents(join(dir, '.agent', 'runs', run.id));
-  const last = [...events].reverse().find((event) => event.source === 'shell-adapter')!;
-  assert.equal(last.source, 'shell-adapter');
-  assert.equal(last.type, 'runtime.lifecycle.unproven');
-  assert.equal(last.payload.requested_adapter_kind, 'codex');
-  assert.equal(last.payload.adapter_kind, 'shell');
-  assert.equal(last.payload.first_class, false);
-  assert.equal(last.artifact_refs.includes('executor.process.json'), true);
+  await startRun(commandRun.id, {}, dir);
+  const commandRunDir = join(dir, '.agent', 'runs', commandRun.id);
+  writeFileSync(
+    join(commandRunDir, 'skill-routing-candidates.md'),
+    '# Skill Routing Candidates\n\n## Candidates\n1. analyze\n   - path: .codex/skills/analyze/SKILL.md\n   - why: test candidate\n',
+  );
+  const collected = collectRun(commandRun.id, dir);
+  assert.equal(collected.decision, 'changes_requested');
+  assert.match(readFileSync(join(commandRunDir, 'review.md'), 'utf8'), /Skill usage/);
+  assert.match(readFileSync(join(commandRunDir, 'skill-usage-critique.md'), 'utf8'), /skill-usage-response\.md/);
 });
 
 test('review blocker: mode-specific runtime evidence points to actual process artifacts', async () => {
@@ -291,8 +391,8 @@ test('review blocker: hard gate rejects forged supported Codex and missing full-
   assert.ok(forged.checks.some((c) => c.name === 'Milestone Claim Language Gate' && c.status === 'FAIL'));
 });
 
-test('review blocker: launch request for codex or omx does not project fake first-class session', async () => {
-  for (const executor of ['codex', 'omx'] as const) {
+test('review blocker: launch request for unproven omx/agy does not project fake first-class session', async () => {
+  for (const executor of ['omx', 'agy'] as const) {
     const dir = tempDir();
     const task = addTask(`${executor} projection task`, dir);
     const run = createRun(task.id, { executor, command: 'node -e "console.log(1)"' }, dir);
@@ -363,15 +463,18 @@ test('Priority 2: projection replay records completed lifecycle from event ledge
   assert.ok(run.labels.includes('codex_cli'));
 });
 
-test('Priority 1: codex executor without explicit command does not fall back to primitive shell', async () => {
+test('Priority 1: codex executor runs codex for real and never falls back to primitive shell', async () => {
   const dir = tempDir();
   const task = addTask('codex no shell fallback task', dir);
   const run = createRun(task.id, { executor: 'codex' }, dir);
   await startRun(run.id, {}, dir);
   const runDir = join(dir, '.agent', 'runs', run.id);
   const events = readRuntimeEvents(runDir);
-  assert.equal(existsSync(join(runDir, 'executor.process.json')), false);
-  assert.ok(events.some((event) => event.source === 'codex-adapter'));
+  // Real execution produces real process evidence, not just a binary-detection proof.
+  assert.equal(existsSync(join(runDir, 'executor.process.json')), true);
+  assert.ok(
+    events.some((event) => event.source === 'codex-adapter' && event.type === 'runtime.session.started'),
+  );
   assert.equal(
     events.some((event) => event.source === 'shell-adapter'),
     false,
@@ -421,7 +524,7 @@ test('Phase 2: runtime projection persists JSON and SQLite projection', async ()
   const dir = tempDir();
   const task = addTask('sqlite projection task', dir);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, {}, dir);
+  await startRun(run.id, { command: 'pwd' }, dir);
   const projection = rebuildRuntimeProjectionStore(dir);
   assert.equal(findProjectedRun(projection, run.id)?.labels.includes('primitive_shell'), true);
   assert.equal(existsSync(join(dir, '.agent', 'projection', 'runtime-projection.json')), true);
@@ -467,7 +570,7 @@ test('Phase 5: createRun and startRun append composition and permission chain ev
   const dir = tempDir();
   const task = addTask('permission chain task', dir);
   const run = createRun(task.id, {}, dir);
-  await startRun(run.id, {}, dir);
+  await startRun(run.id, { command: 'pwd' }, dir);
   const runDir = join(dir, '.agent', 'runs', run.id);
   const events = readRuntimeEvents(runDir);
   assert.ok(

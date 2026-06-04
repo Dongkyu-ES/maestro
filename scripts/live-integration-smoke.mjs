@@ -52,21 +52,21 @@ try {
     cwd: tmp,
     encoding: 'utf8',
   }).trim();
-  res = await post(`/api/runs/${latest}/start`, { command: '진행해' });
+  res = await post(`/api/runs/${latest}/start`, { command: 'pwd', confirmCommand: 'yes' });
   if (res.status !== 303) throw new Error(`run start status ${res.status}`);
   const commandText = readFileSync(join(tmp, '.agent', 'runs', latest, 'executor-command.txt'), 'utf8');
-  if (commandText.includes('진행해')) throw new Error('natural-language reply was captured as shell command');
+  if (commandText.trim() !== 'pwd') throw new Error('explicit command was not captured');
   const processJson = JSON.parse(readFileSync(join(tmp, '.agent', 'runs', latest, 'executor.process.json'), 'utf8'));
   if (processJson.exit_code !== 0) throw new Error(`executor exit ${processJson.exit_code}`);
-  if (!String(processJson.stdout || '').includes('Dominic Orchestration task adapter executed'))
-    throw new Error('missing task adapter stdout');
+  if (!String(processJson.stdout || '').trim())
+    throw new Error('missing explicit command stdout');
   res = await post(`/api/runs/${latest}/collect`, {});
   if (res.status !== 303) throw new Error(`run collect status ${res.status}`);
   const runYaml = readFileSync(join(tmp, '.agent', 'runs', latest, 'run.yaml'), 'utf8');
   if (!runYaml.includes('status: "completed"') || !runYaml.includes('decision: "pass"'))
     throw new Error('run was not collected to pass');
   const detail = await (await fetch(`http://127.0.0.1:${port}/run/${latest}`)).text();
-  if (!detail.includes('Run status summary') || !detail.includes('executor.process.json'))
+  if (!detail.includes('Run result') || !detail.includes('executor.process.json'))
     throw new Error('run detail lacks evidence summary');
   const artifact = {
     status: 'PASS',
