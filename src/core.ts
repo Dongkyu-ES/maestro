@@ -1674,6 +1674,15 @@ export function runtimeTruthForRun(root: string, run: RunMeta): { label: string;
         css: 'primitive_shell',
         evidence: 'explicit command execution, not first-class Codex/OMX/agy runtime',
       };
+    const nativeAssistedEvent = readRuntimeEvents(runDir).find(
+      (event) => event.payload?.native_status === 'native-harness-assisted' || event.payload?.runtime_label === 'native-harness-assisted',
+    );
+    if (nativeAssistedEvent)
+      return {
+        label: 'native-harness-assisted',
+        css: 'native_assisted',
+        evidence: `native executor evidence present; unowned surfaces: ${JSON.stringify(nativeAssistedEvent.payload?.unowned_surfaces || [])}`,
+      };
     const firstClassSession = projected?.sessions.find(
       (session) => ['codex', 'omx', 'agy'].includes(String(session.adapter_kind)) && session.status === 'started',
     );

@@ -545,6 +545,27 @@ test('review blocker: mode-specific runtime evidence points to actual process ar
   );
 });
 
+test('G010 run detail refuses green trust when verifier evidence is red', async () => {
+  const dir = tempDir();
+  execFileSync('git', ['init'], { cwd: dir, stdio: 'ignore' });
+  const task = addTask('red gate ui task', dir);
+  const run = createRun(task.id, { command: "node -e \"require('fs').writeFileSync('ok.txt','ok')\"" }, dir);
+  await startRun(run.id, {}, dir);
+  const approval = listApprovals(dir).find((a) => a.run_id === run.id && a.status === 'requested');
+  assert.ok(approval);
+  resolveApproval(approval.id, 'approved', dir);
+  await startRun(run.id, {}, dir);
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'pass');
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  writeFileSync(join(runDir, 'full-target-verification.json'), JSON.stringify({ decision: 'FAIL', checks: { forged: false } }, null, 2));
+
+  const detail = renderRun(run.id, dir);
+  assert.match(detail, /NOT TRUSTED — evidence contradiction/);
+  assert.match(detail, /full-target-verification\.json: FAIL/);
+  assert.doesNotMatch(detail, /trusted by current evidence/);
+});
+
 test('review blocker: hard gate rejects forged supported Codex and missing full-gate artifact', () => {
   const dir = tempDir();
   appendRuntimeEvent(dir, {
@@ -684,6 +705,10 @@ test('G005 native evidence smoke verifies raw diff artifacts and exposes unowned
   assert.equal(event?.payload.runtime_label, 'native-harness-assisted');
   assert.equal(event?.payload.native_status, 'native-harness-assisted');
   assert.equal(event?.artifact_refs.includes('native-evidence.json'), true);
+  const detail = renderRun(run.id, dir);
+  assert.match(detail, /Evidence-derived trust/);
+  assert.match(detail, /native-harness-assisted/);
+  assert.match(detail, /in-loop shell\/file mediation/);
 });
 
 test('G005 native evidence verifier rejects native completion text without matching diff artifacts', () => {

@@ -148,6 +148,60 @@ export function renderReviewGate(cwd = process.cwd()): string {
     `<header class="topbar"><div><h1>Review Gate 사용법</h1><p>깨지는 멀티라인/꺾쇠 괄호 없이, 사람이 그대로 복붙하는 화면.</p></div><nav class="top-actions"><a class="ghost" href="/">대시보드</a><a class="ghost" href="/review-gate">새로고침</a></nav></header><main class="guide"><section class="panel hero"><h2>현재 상태: ${prepared ? '<span class="ok">로컬 준비됨</span>' : readyForPrepare ? '<span class="warn">준비 명령 실행 가능</span>' : '<span class="missing">재료 부족</span>'}</h2><p>${esc(nextAction)}</p><p><strong>중요:</strong> 로컬에서 만든 gate만으로는 hard completion이 PASS가 아니다. 외부 reviewer-ci/reviewer-owned/review-service custody 서명이 들어간 <code>runtime sign-review</code>까지 필요하다.</p></section><section class="panel"><h2>1. 필요한 파일</h2><table><thead><tr><th>상태</th><th>파일</th><th>역할</th><th>설명</th></tr></thead><tbody>${statuses.map(statusRow).join('')}</tbody></table></section><section class="panel"><h2>2. 감지된 Agent ID</h2><div class="cards"><div><strong>code-reviewer</strong><pre>${esc(reviewerAgentId || '아직 못 찾음: PASTE_CODE_REVIEWER_AGENT_ID 로 교체')}</pre></div><div><strong>architect</strong><pre>${esc(architectAgentId || '아직 못 찾음: PASTE_ARCHITECT_AGENT_ID 로 교체')}</pre></div></div></section><section class="panel"><h2>3. 복붙 명령</h2><p>zsh에서 줄바꿈하려면 각 중간 줄 끝의 백슬래시를 그대로 둔다. 꺾쇠 괄호는 쓰지 않는다.</p><pre>${esc(commandBlock(reviewerAgentId, architectAgentId))}</pre><details><summary>한 줄 버전</summary><pre>${esc(oneLineCommand(reviewerAgentId, architectAgentId))}</pre></details></section><section class="panel"><h2>4. 진짜 full PASS까지</h2><ol><li>위 명령으로 <code>.agent/independent-review-gate.json</code> 생성</li><li>외부 CI 또는 reviewer-owned 환경에서 <code>AGENT_REVIEW_HMAC_KEY</code>, <code>AGENT_REVIEW_CUSTODY_HMAC_KEY</code>, <code>AGENT_TRUSTED_REVIEW_CUSTODY_ISSUERS</code> 설정</li><li><code>node dist/cli.js runtime sign-review --custody reviewer-ci</code></li><li><code>node dist/cli.js quality gate --write</code> 재실행</li></ol><p>즉, 이 화면은 “어떻게 쓰는지”와 “뭐가 빠졌는지”를 보여준다. hard gate 자체는 로컬 셀프서명으로 속이지 않는다.</p></section></main>`,
   );
 }
+function readJsonArtifact(runDir: string, file: string): Record<string, unknown> | undefined {
+  const path = join(runDir, file);
+  if (!existsSync(path)) return undefined;
+  try {
+    return JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>;
+  } catch {
+    return { parse_error: file };
+  }
+}
+function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[]; refs: string[] } {
+  const red: string[] = [];
+  const yellow: string[] = [];
+  const refs: string[] = [];
+  for (const file of [
+    'full-target-gate.json',
+    'full-target-verification.json',
+    'native-evidence-verification.json',
+    'context-provenance-verification.json',
+    'skill-contracts-verification.json',
+    'promotion-differential-verification.json',
+  ]) {
+    const artifact = readJsonArtifact(runDir, file);
+    if (!artifact) continue;
+    refs.push(file);
+    const value = String(artifact.status || artifact.decision || artifact.overall || '');
+    if (/FAIL|BLOCKED|failed|blocked/i.test(value)) red.push(`${file}: ${value}`);
+    if (file === 'full-target-gate.json' && value && !/PASS/i.test(value)) red.push(`${file}: ${value}`);
+    if (artifact.parse_error) red.push(`${file}: parse_error`);
+  }
+  const native = readJsonArtifact(runDir, 'native-evidence.json');
+  if (native) {
+    refs.push('native-evidence.json');
+    if (native.status === 'native-harness-assisted') {
+      const surfaces = Array.isArray(native.unowned_surfaces) ? native.unowned_surfaces.map(String).join('; ') : 'unowned surfaces not listed';
+      yellow.push(`native-harness-assisted: ${surfaces}`);
+    }
+  }
+  return { red, yellow, refs: [...new Set(refs)] };
+}
+function renderEvidenceTrustPanel(runDir: string, meta: RunMeta): string {
+  const findings = evidenceTrustFindings(runDir);
+  const claimsComplete = meta.status === 'completed' || meta.decision === 'pass';
+  const trusted = claimsComplete && findings.red.length === 0;
+  const css = findings.red.length ? 'trust-red' : findings.yellow.length ? 'trust-yellow' : 'hero';
+  const verdict = findings.red.length ? 'NOT TRUSTED — evidence contradiction' : trusted ? 'trusted by current evidence' : 'not yet trusted';
+  const redBlock = findings.red.length
+    ? `<h3>Red evidence</h3><ul>${findings.red.map((item) => `<li class="missing">${esc(item)}</li>`).join('')}</ul>`
+    : '';
+  const yellowBlock = findings.yellow.length
+    ? `<h3>Native-assisted / unowned surfaces</h3><ul>${findings.yellow.map((item) => `<li class="warn">${esc(item)}</li>`).join('')}</ul>`
+    : '';
+  const refs = findings.refs.length ? findings.refs.join(', ') : 'no verifier artifacts found';
+  return `<section class="panel ${css}"><h2>Evidence-derived trust</h2><p><strong>${esc(verdict)}</strong></p><p>Status/decision alone cannot make this green. Red verifier artifacts override completed/pass labels.</p>${redBlock}${yellowBlock}<small>Evidence refs: ${esc(refs)}</small></section>`;
+}
 export function renderRun(runId: string, cwd = process.cwd()): string {
   if (!/^run-[A-Za-z0-9가-힣-]+$/.test(runId)) throw new Error(`invalid run id: ${runId}`);
   const root = projectRoot(cwd);
@@ -191,13 +245,14 @@ export function renderRun(runId: string, cwd = process.cwd()): string {
       : '';
   const rawArtifacts = names.map((n) => `<details><summary>${esc(n)}</summary><pre>${esc(redact(readFileSync(join(runDir, n), 'utf8')))}</pre></details>`).join('');
   const closedLoopPath = join(runDir, 'closed-loop-report.md');
+  const evidenceTrust = renderEvidenceTrustPanel(runDir, meta);
   const operatorOutputs = renderOperatorOutputs(runDir);
   const closedLoop = existsSync(closedLoopPath)
     ? `<section class="panel hero"><h2>Closed loop: 실행 / 막힘 / 산출물 / 개선</h2><pre>${esc(redact(readFileSync(closedLoopPath, 'utf8')))}</pre></section>`
     : `<section class="panel"><h2>Closed loop</h2><p>아직 Collect가 돌지 않았다. Start가 실제 실행을 만든 뒤 Collect하면 여기에 실행 여부, 막힌 지점, 산출물, 다음 개선 액션이 표시된다.</p></section>`;
   return page(
     runId,
-    `<a href="/">← back</a><h1>${esc(runId)}</h1><section class="panel"><h2>Run result</h2><p>Status: <strong>${esc(String(meta.status))}</strong> · Decision: <strong>${esc(String(meta.decision || 'not collected'))}</strong> · Mode: ${esc(String(meta.mode))} · Task: ${esc(String(meta.task_id))}</p><p><a href="/api/runs/${attr(runId)}/events">Event stream (SSE)</a></p><h3>Execution evidence</h3><pre>${esc(processSummary)}</pre></section>${staleActiveNotice}${approvalNotice}${operatorOutputs}${closedLoop}<section class="panel"><h2>Raw artifacts</h2><p>내부 파일은 접어 둔다. 먼저 위의 실행 결과를 본다.</p>${rawArtifacts}</section>`,
+    `<a href="/">← back</a><h1>${esc(runId)}</h1><section class="panel"><h2>Run result</h2><p>Status: <strong>${esc(String(meta.status))}</strong> · Decision: <strong>${esc(String(meta.decision || 'not collected'))}</strong> · Mode: ${esc(String(meta.mode))} · Task: ${esc(String(meta.task_id))}</p><p><a href="/api/runs/${attr(runId)}/events">Event stream (SSE)</a></p><h3>Execution evidence</h3><pre>${esc(processSummary)}</pre></section>${staleActiveNotice}${approvalNotice}${evidenceTrust}${operatorOutputs}${closedLoop}<section class="panel"><h2>Raw artifacts</h2><p>내부 파일은 접어 둔다. 먼저 위의 실행 결과를 본다.</p>${rawArtifacts}</section>`,
   );
 }
 function readClosedLoopJson(runDir: string): ClosedLoopJson | undefined {
@@ -237,7 +292,7 @@ function renderOperatorOutputs(runDir: string): string {
   return `<section class="panel hero"><h2>Operator-visible outputs</h2><p>사용자가 실제로 열어볼 산출물 경로와 하드 검증 결과.</p>${outputList}${verificationBlock}</section>`;
 }
 function page(title: string, body: string): string {
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>:root{color-scheme:light;--bg:#f6f4ef;--ink:#171511;--muted:#6f6a60;--line:#ded8cc;--panel:#fffdf8;--accent:#1f5eff;--danger:#b42318;--ok:#027a48;--warn:#b54708}*{box-sizing:border-box}body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:var(--bg);color:var(--ink)}a{color:inherit}.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:28px 34px;border-bottom:1px solid var(--line);background:#fffdf8cc;position:sticky;top:0;z-index:2;backdrop-filter:blur(12px)}.top-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}h1{font-size:28px;margin:0 0 4px}h2,h3{margin:0}p{color:var(--muted);margin:.35rem 0}.ghost{border:1px solid var(--line);border-radius:999px;padding:9px 14px;text-decoration:none;background:white}main{display:grid;grid-template-columns:minmax(360px,42%) 1fr;min-height:calc(100vh - 92px)}main.guide{display:block;max-width:1100px;margin:0 auto;padding:28px 30px}.operator-zone{padding:28px 30px;border-right:1px solid var(--line);background:#fffaf0}.agent-zone{padding:28px 30px}.section-title{display:flex;gap:14px;align-items:flex-start;margin-bottom:20px}.section-title span{font-size:12px;font-weight:800;letter-spacing:.08em;color:white;background:var(--ink);border-radius:999px;padding:6px 8px}.operator-grid{display:grid;grid-template-columns:1fr;gap:14px}.panel,.lane{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px;margin-bottom:16px;box-shadow:0 1px 0 rgba(0,0,0,.03)}.hero{border-color:#bcd0ff}.urgent{border-color:#f1b8b1}.stack{display:grid;gap:10px}.decision-item,.task-line,.run-card{display:grid;gap:12px;border-top:1px solid var(--line);padding:14px 0}.decision-item:first-of-type,.task-line:first-of-type,.run-card:first-of-type{border-top:0}.task-line{grid-template-columns:1fr auto auto;align-items:center}.run-card header{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.run-card p{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.check{display:block;color:var(--muted);font-size:12px;margin-top:8px}input,select,button{font:inherit;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:white}button{cursor:pointer}button.primary{background:var(--accent);border-color:var(--accent);color:white;font-weight:700}.pill{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 8px;color:var(--muted);background:white}.pill.failed,.pill.blocked,.pill.awaiting_approval,.pill.primitive_shell,.pill.stale,.pill.unproven{color:var(--danger);border-color:#f1b8b1;background:#fff1ef}.warning,.missing{color:var(--danger);font-weight:700}.ok{color:var(--ok);font-weight:800}.warn{color:var(--warn);font-weight:800}.notice{border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0;background:white}.notice.danger{border-color:#f1b8b1;background:#fff1ef}small{display:block;color:var(--muted);font-size:12px;margin-top:3px}.empty{padding:18px;border:1px dashed var(--line);border-radius:14px;text-align:center}details summary{cursor:pointer;color:var(--muted)}pre{background:#111;color:#eee;padding:1rem;overflow:auto;white-space:pre-wrap;border-radius:14px}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{text-align:left;border-bottom:1px solid var(--line);padding:10px;vertical-align:top}th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cards pre{margin:.5rem 0 0}@media(max-width:900px){main{grid-template-columns:1fr}.operator-zone{border-right:0;border-bottom:1px solid var(--line)}.task-line,.cards{grid-template-columns:1fr}.topbar{position:static}}</style></head><body>${body}</body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>:root{color-scheme:light;--bg:#f6f4ef;--ink:#171511;--muted:#6f6a60;--line:#ded8cc;--panel:#fffdf8;--accent:#1f5eff;--danger:#b42318;--ok:#027a48;--warn:#b54708}*{box-sizing:border-box}body{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;margin:0;background:var(--bg);color:var(--ink)}a{color:inherit}.topbar{display:flex;justify-content:space-between;align-items:flex-start;gap:16px;padding:28px 34px;border-bottom:1px solid var(--line);background:#fffdf8cc;position:sticky;top:0;z-index:2;backdrop-filter:blur(12px)}.top-actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}h1{font-size:28px;margin:0 0 4px}h2,h3{margin:0}p{color:var(--muted);margin:.35rem 0}.ghost{border:1px solid var(--line);border-radius:999px;padding:9px 14px;text-decoration:none;background:white}main{display:grid;grid-template-columns:minmax(360px,42%) 1fr;min-height:calc(100vh - 92px)}main.guide{display:block;max-width:1100px;margin:0 auto;padding:28px 30px}.operator-zone{padding:28px 30px;border-right:1px solid var(--line);background:#fffaf0}.agent-zone{padding:28px 30px}.section-title{display:flex;gap:14px;align-items:flex-start;margin-bottom:20px}.section-title span{font-size:12px;font-weight:800;letter-spacing:.08em;color:white;background:var(--ink);border-radius:999px;padding:6px 8px}.operator-grid{display:grid;grid-template-columns:1fr;gap:14px}.panel,.lane{background:var(--panel);border:1px solid var(--line);border-radius:18px;padding:18px;margin-bottom:16px;box-shadow:0 1px 0 rgba(0,0,0,.03)}.hero{border-color:#bcd0ff}.urgent{border-color:#f1b8b1}.trust-red{border-color:#f1b8b1;background:#fff1ef}.trust-yellow{border-color:#f79009;background:#fff7ed}.stack{display:grid;gap:10px}.decision-item,.task-line,.run-card{display:grid;gap:12px;border-top:1px solid var(--line);padding:14px 0}.decision-item:first-of-type,.task-line:first-of-type,.run-card:first-of-type{border-top:0}.task-line{grid-template-columns:1fr auto auto;align-items:center}.run-card header{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.run-card p{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}.actions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.check{display:block;color:var(--muted);font-size:12px;margin-top:8px}input,select,button{font:inherit;border:1px solid var(--line);border-radius:10px;padding:9px 10px;background:white}button{cursor:pointer}button.primary{background:var(--accent);border-color:var(--accent);color:white;font-weight:700}.pill{font-size:12px;border:1px solid var(--line);border-radius:999px;padding:3px 8px;color:var(--muted);background:white}.pill.failed,.pill.blocked,.pill.awaiting_approval,.pill.primitive_shell,.pill.stale,.pill.unproven,.pill.native_assisted{color:var(--danger);border-color:#f1b8b1;background:#fff1ef}.warning,.missing{color:var(--danger);font-weight:700}.ok{color:var(--ok);font-weight:800}.warn{color:var(--warn);font-weight:800}.notice{border:1px solid var(--line);border-radius:14px;padding:14px;margin:12px 0;background:white}.notice.danger{border-color:#f1b8b1;background:#fff1ef}small{display:block;color:var(--muted);font-size:12px;margin-top:3px}.empty{padding:18px;border:1px dashed var(--line);border-radius:14px;text-align:center}details summary{cursor:pointer;color:var(--muted)}pre{background:#111;color:#eee;padding:1rem;overflow:auto;white-space:pre-wrap;border-radius:14px}code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{text-align:left;border-bottom:1px solid var(--line);padding:10px;vertical-align:top}th{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}.cards pre{margin:.5rem 0 0}@media(max-width:900px){main{grid-template-columns:1fr}.operator-zone{border-right:0;border-bottom:1px solid var(--line)}.task-line,.cards{grid-template-columns:1fr}.topbar{position:static}}</style></head><body>${body}</body></html>`;
 }
 function esc(s: string): string {
   return s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]!);
