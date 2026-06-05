@@ -1,6 +1,6 @@
 name: Trusted Independent Reviewer Bundle
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       code_reviewer_agent:

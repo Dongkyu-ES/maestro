@@ -1,6 +1,6 @@
 name: Independent Review Gate
 
-on:
+"on":
   workflow_dispatch:
     inputs:
       review_run_id:
