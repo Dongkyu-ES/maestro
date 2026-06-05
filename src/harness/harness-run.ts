@@ -13,6 +13,7 @@ import {
 } from '../events/ledger.js';
 import { runCodexExec, type CodexExecResult } from '../runtime/codex-exec-runner.js';
 import { writeContextProvenanceBundle, type ContextProvenanceBundle } from './context-provenance.js';
+import { runHooks, type HookHandler, type HookOutcome, type LifecycleEvent } from './hooks.js';
 import type { NativeArtifactHash } from './native-evidence.js';
 import { runVerifier, type VerifierResult } from './verifier.js';
 
@@ -24,6 +25,7 @@ export interface HarnessRunOptions {
   executorBin?: string;
   runId?: string;
   timeoutMs?: number;
+  hooks?: HookHandler[];
 }
 
 export interface ContextBundle {
@@ -169,9 +171,98 @@ function captureToolEvidence(options: { root: string; runDir: string; runId: str
   return evidence;
 }
 
+function hookBlockVerifier(event: LifecycleEvent, outcome: HookOutcome): VerifierResult {
+  return {
+    type: 'ledger',
+    status: 'blocked',
+    evidenceInputs: ['events'],
+    reason: `${event} hook ${outcome.hookId} ${outcome.decision}${outcome.reason ? `: ${outcome.reason}` : ''}`,
+  };
+}
+
+function appendHookBlockedTransition(options: {
+  runDir: string;
+  runId: string;
+  event: LifecycleEvent;
+  outcome: HookOutcome;
+}): HarnessSliceState {
+  const state: HarnessSliceState = 'blocked';
+  appendRuntimeEvent(options.runDir, {
+    runId: options.runId,
+    source: 'harness',
+    type: 'hook.completed',
+    payload: {
+      event: options.event,
+      decision: options.outcome.decision,
+      hook_id: options.outcome.hookId,
+      reason: options.outcome.reason,
+    },
+  });
+  appendRuntimeEvent(options.runDir, {
+    runId: options.runId,
+    source: 'harness',
+    type: 'state.transitioned',
+    payload: {
+      state,
+      authority: `hook:${options.outcome.hookId}`,
+      hook_event: options.event,
+      hook_decision: options.outcome.decision,
+      reason: options.outcome.reason,
+    },
+  });
+  appendRuntimeEvent(options.runDir, {
+    runId: options.runId,
+    source: 'harness',
+    type: 'run.blocked',
+    payload: {
+      state,
+      authority: `hook:${options.outcome.hookId}`,
+      hook_event: options.event,
+      hook_decision: options.outcome.decision,
+      reason: options.outcome.reason,
+      native_harness_assisted: true,
+      unowned_surfaces: UNOWNED_SURFACES,
+    },
+  });
+  return state;
+}
+
+function finalizeReport(options: {
+  root: string;
+  runDir: string;
+  runId: string;
+  state: HarnessSliceState;
+  contextSha256: string;
+  verifier: VerifierResult;
+}): HarnessRunReport {
+  const events = readRuntimeEvents(options.runDir);
+  validateRuntimeLedger(events);
+  const report: HarnessRunReport = {
+    schema_version: 1,
+    runId: options.runId,
+    runDir: relative(options.root, options.runDir).replaceAll('\\', '/'),
+    state: options.state,
+    contextSha256: options.contextSha256,
+    verifier: options.verifier,
+    ledgerHead: createRuntimeLedgerHeadBinding(events),
+    nativeHarnessAssisted: true,
+    unownedSurfaces: UNOWNED_SURFACES,
+  };
+  writeFileSync(join(options.runDir, 'harness-run-report.json'), `${JSON.stringify(report, null, 2)}\n`);
+  const finalEvents = readRuntimeEvents(options.runDir);
+  report.ledgerHead = {
+    run_id: options.runId,
+    event_count: finalEvents.length,
+    ledger_head_sha256: runtimeLedgerHeadHash(finalEvents),
+  };
+  writeFileSync(join(options.runDir, 'harness-run-report.json'), `${JSON.stringify(report, null, 2)}\n`);
+  return report;
+}
+
 export async function runHarnessSlice(options: HarnessRunOptions): Promise<HarnessRunReport> {
   const root = options.root;
   const runId = options.runId || `harness-${randomUUID()}`;
+  const hooks = options.hooks || [];
   const runDir = runDirFor(root, runId);
   mkdirSync(runDir, { recursive: true });
   writeFileSync(join(runDir, 'task.md'), `${options.goal}\n`);
@@ -220,6 +311,25 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     artifactRefs: ['executor.process.json', 'executor.stdout.log', 'executor.stderr.log', 'codex-events.jsonl'],
   });
 
+  const beforeTool = runHooks('BeforeToolExecution', hooks, {
+    runId,
+    runDir: relative(root, runDir).replaceAll('\\', '/'),
+    root,
+    goal: options.goal,
+    contextSha256: context.sha256,
+    executor: {
+      exit_code: executor.exit_code,
+      event_count: executor.event_count,
+      session_id: executor.session_id,
+      last_message_present: executor.last_message.length > 0,
+    },
+  });
+  if (beforeTool.decision !== 'continue') {
+    const verifier = hookBlockVerifier('BeforeToolExecution', beforeTool);
+    const state = appendHookBlockedTransition({ runDir, runId, event: 'BeforeToolExecution', outcome: beforeTool });
+    return finalizeReport({ root, runDir, runId, state, contextSha256: context.sha256, verifier });
+  }
+
   const evidence = captureToolEvidence({ root, runDir, runId, executor });
   appendRuntimeEvent(runDir, {
     runId,
@@ -256,7 +366,22 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     artifactRefs: ['tool-execution-evidence.json', 'tool-git-status.txt'],
   });
 
-  const state: HarnessSliceState = verifier.status === 'supported' ? 'completed' : 'blocked';
+  let state: HarnessSliceState = verifier.status === 'supported' ? 'completed' : 'blocked';
+  const beforeState = runHooks('BeforeStateTransition', hooks, {
+    runId,
+    runDir: relative(root, runDir).replaceAll('\\', '/'),
+    root,
+    goal: options.goal,
+    contextSha256: context.sha256,
+    verifier,
+    proposedState: state,
+    authority: 'verifier.completed',
+  });
+  if (beforeState.decision !== 'continue') {
+    state = appendHookBlockedTransition({ runDir, runId, event: 'BeforeStateTransition', outcome: beforeState });
+    return finalizeReport({ root, runDir, runId, state, contextSha256: context.sha256, verifier });
+  }
+
   appendRuntimeEvent(runDir, {
     runId,
     source: 'harness',
@@ -274,26 +399,5 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     payload: { state, native_harness_assisted: true, unowned_surfaces: UNOWNED_SURFACES },
   });
 
-  const events = readRuntimeEvents(runDir);
-  validateRuntimeLedger(events);
-  const report: HarnessRunReport = {
-    schema_version: 1,
-    runId,
-    runDir: relative(root, runDir).replaceAll('\\', '/'),
-    state,
-    contextSha256: context.sha256,
-    verifier,
-    ledgerHead: createRuntimeLedgerHeadBinding(events),
-    nativeHarnessAssisted: true,
-    unownedSurfaces: UNOWNED_SURFACES,
-  };
-  writeFileSync(join(runDir, 'harness-run-report.json'), `${JSON.stringify(report, null, 2)}\n`);
-  const finalEvents = readRuntimeEvents(runDir);
-  report.ledgerHead = {
-    run_id: runId,
-    event_count: finalEvents.length,
-    ledger_head_sha256: runtimeLedgerHeadHash(finalEvents),
-  };
-  writeFileSync(join(runDir, 'harness-run-report.json'), `${JSON.stringify(report, null, 2)}\n`);
-  return report;
+  return finalizeReport({ root, runDir, runId, state, contextSha256: context.sha256, verifier });
 }
