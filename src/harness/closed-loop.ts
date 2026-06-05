@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { appendRuntimeEvent, createRuntimeLedgerHeadBinding, readRuntimeEvents } from '../events/ledger.js';
 import { runCodexExec } from '../runtime/codex-exec-runner.js';
@@ -60,6 +60,18 @@ function resolveEvidenceDir(root: string, evidenceDir: string): string {
   return evidenceDir.startsWith('/') ? evidenceDir : join(root, evidenceDir);
 }
 
+function seedCodexAuth(codexHome: string): void {
+  // Isolate session/history/memory (a fresh CODEX_HOME) but KEEP authentication:
+  // copy only auth/config from the real codex home so the isolated critic can
+  // authenticate without inheriting sessions/history/memory that would contaminate
+  // its judgment. A fully empty CODEX_HOME would make codex fail with 401.
+  const sourceHome = process.env.CODEX_HOME || join(homedir(), '.codex');
+  for (const file of ['auth.json', 'config.toml']) {
+    const src = join(sourceHome, file);
+    if (existsSync(src)) copyFileSync(src, join(codexHome, file));
+  }
+}
+
 function writeIsolatedInputs(options: {
   prefix: string;
   goal: string;
@@ -69,6 +81,7 @@ function writeIsolatedInputs(options: {
 }): { cwd: string; codexHome: string } {
   const cwd = mkdtempSync(join(tmpdir(), options.prefix));
   const codexHome = mkdtempSync(join(tmpdir(), `${options.prefix}codex-home-`));
+  seedCodexAuth(codexHome);
   writeFileSync(join(cwd, 'goal.md'), `${options.goal}\n`);
   if (options.acceptanceContract !== undefined) writeFileSync(join(cwd, 'acceptance-contract.md'), `${options.acceptanceContract}\n`);
   if (options.history) writeFileSync(join(cwd, 'failure-history.json'), `${JSON.stringify(options.history, null, 2)}\n`);
