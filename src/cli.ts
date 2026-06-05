@@ -36,6 +36,7 @@ import {
   updateTask,
 } from './core.js';
 import { readRuntimeEvents } from './events/ledger.js';
+import { readClosedLoopAcceptanceFile, runClosedLoop } from './harness/closed-loop.js';
 import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
 import { verifyContextProvenance } from './harness/context-provenance.js';
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
@@ -122,6 +123,7 @@ function usage(): string {
   agent run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
   agent run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
   agent harness run <goal> [--executor-bin <path>]
+  agent loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]
   agent runtime projection
   agent context verify --run <run-id>
   agent runtime verify-ledger <run-id>
@@ -299,6 +301,26 @@ async function main() {
       const report = await runHarnessSlice({ root: process.cwd(), goal, executorBin: arg('--executor-bin') });
       console.log(JSON.stringify(report, null, 2));
       if (report.state !== 'completed') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'loop' && sub === 'run') {
+      const acceptanceFile = arg('--acceptance-file');
+      const goal = rest
+        .filter((item, index) => !['--acceptance-file', '--max-iters', '--stall', '--executor-bin'].includes(item) && !['--acceptance-file', '--max-iters', '--stall', '--executor-bin'].includes(rest[index - 1]))
+        .join(' ')
+        .trim();
+      if (!goal || !acceptanceFile)
+        throw new Error('usage: agent loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]');
+      const report = await runClosedLoop({
+        root: process.cwd(),
+        goal,
+        acceptanceContract: readClosedLoopAcceptanceFile(acceptanceFile),
+        maxIters: arg('--max-iters') !== undefined ? Number(arg('--max-iters')) : undefined,
+        stall: arg('--stall') !== undefined ? Number(arg('--stall')) : undefined,
+        executorBin: arg('--executor-bin'),
+      });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.status !== 'done') process.exitCode = 2;
       return;
     }
     if (cmd === 'context' && sub === 'verify') {
