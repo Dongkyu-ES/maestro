@@ -110,8 +110,8 @@ Current completion-lifting path is singular and non-negotiable:
 
 Explicitly non-lifting under the current Product Gate:
 
-- reviewer-owned local signer paths;
-- dedicated review service paths;
+- local signer paths outside GitHub Actions reviewer-ci custody;
+- external service paths outside the current GitHub Actions reviewer-ci custody implementation;
 - any local `runtime sign-review` output, even if HMAC-valid;
 - any custody label other than `reviewer-ci`.
 
