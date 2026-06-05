@@ -266,11 +266,11 @@ function writeMachineHardGateFixtures(dir: string): void {
 }
 
 function writePassingReviewGate(dir = process.cwd()): void {
-  process.env.AGENT_REVIEW_HMAC_KEY ||= 'test-review-hmac-key';
-  process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY ||= 'test-review-custody-hmac-key';
-  process.env.AGENT_TRUSTED_REVIEW_CUSTODY_ISSUERS ||= 'test-reviewer-ci';
-  process.env.AGENT_ALLOW_TEST_REVIEW_CUSTODY ||= '1';
-  process.env.CI ||= 'true';
+  process.env.AGENT_REVIEW_HMAC_KEY = 'test-review-hmac-key';
+  process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY = 'test-review-custody-hmac-key';
+  process.env.AGENT_TRUSTED_REVIEW_CUSTODY_ISSUERS = 'test-reviewer-ci';
+  process.env.AGENT_ALLOW_TEST_REVIEW_CUSTODY = '1';
+  process.env.CI = 'true';
   const reviewDir = join(dir, '.agent', 'review-gates');
   const notificationDir = join(reviewDir, 'subagent-notifications');
   mkdirSync(notificationDir, { recursive: true });
