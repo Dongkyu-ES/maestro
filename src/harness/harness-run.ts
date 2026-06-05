@@ -246,6 +246,14 @@ function captureToolEvidence(options: {
 }): ToolExecutionEvidence {
   const runDirRef = relative(options.root, options.runDir).replaceAll('\\', '/');
   const excludeRunDir = `:(exclude)${runDirRef}`;
+  // Make untracked NEW files visible to `git diff`: a run that creates files (the
+  // common case) otherwise produces an empty diff, so the critic sees no evidence of
+  // real work. --intent-to-add stages new paths for diff without committing them.
+  try {
+    git(options.root, ['add', '--intent-to-add', '--', '.', excludeRunDir]);
+  } catch {
+    /* nothing to stage */
+  }
   const diffText = git(options.root, ['diff', '--binary', '--', '.', excludeRunDir]);
   const statusText = git(options.root, ['status', '--porcelain', '--', '.', excludeRunDir]);
   writeFileSync(join(options.runDir, 'tool-git-diff.patch'), diffText);

@@ -306,7 +306,7 @@ async function main() {
     if (cmd === 'loop' && sub === 'run') {
       const acceptanceFile = arg('--acceptance-file');
       const goal = rest
-        .filter((item, index) => !['--acceptance-file', '--max-iters', '--stall', '--executor-bin'].includes(item) && !['--acceptance-file', '--max-iters', '--stall', '--executor-bin'].includes(rest[index - 1]))
+        .filter((item, index) => !['--acceptance-file', '--max-iters', '--stall', '--executor-bin', '--verify-cmd'].includes(item) && !['--acceptance-file', '--max-iters', '--stall', '--executor-bin', '--verify-cmd'].includes(rest[index - 1]))
         .join(' ')
         .trim();
       if (!goal || !acceptanceFile)
@@ -318,6 +318,7 @@ async function main() {
         maxIters: arg('--max-iters') !== undefined ? Number(arg('--max-iters')) : undefined,
         stall: arg('--stall') !== undefined ? Number(arg('--stall')) : undefined,
         executorBin: arg('--executor-bin'),
+        verifyCmd: arg('--verify-cmd'),
       });
       console.log(JSON.stringify(report, null, 2));
       if (report.status !== 'done') process.exitCode = 2;

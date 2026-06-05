@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -46,7 +47,19 @@ const EVIDENCE_FILES = [
   'tool-git-status.txt',
   'tool-execution-evidence.json',
   'harness-run-report.json',
+  'tool-verify-output.txt',
 ];
+
+function runVerifyCmd(root: string, cmd: string, outPath: string): void {
+  // Run the operator-supplied verification command and capture its REAL output as
+  // objective behavioral evidence for the isolated critic (so completion rests on
+  // observed runtime behavior, not on code that merely looks correct).
+  const r = spawnSync('/bin/sh', ['-c', cmd], { cwd: root, encoding: 'utf8', timeout: 120000 });
+  writeFileSync(
+    outPath,
+    `$ ${cmd}\nexit: ${r.status ?? 'null'}\n--- stdout ---\n${r.stdout || ''}\n--- stderr ---\n${r.stderr || ''}\n`,
+  );
+}
 
 function loopRunDir(root: string, runId: string): string {
   return join(root, '.agent', 'runs', runId);
@@ -248,6 +261,7 @@ export async function runClosedLoop(options: {
   maxIters?: number;
   stall?: number;
   executorBin?: string;
+  verifyCmd?: string;
 }): Promise<LoopReport> {
   const root = resolve(options.root);
   const runId = `loop-${randomUUID()}`;
@@ -283,6 +297,7 @@ export async function runClosedLoop(options: {
         runId: `${runId}-iter-${index}`,
       }),
     );
+    if (options.verifyCmd) runVerifyCmd(root, options.verifyCmd, join(slice.runDir, 'tool-verify-output.txt'));
     const critic = await withOptionalCodexBin(options.executorBin, () =>
       isolatedCritic({
         root,
