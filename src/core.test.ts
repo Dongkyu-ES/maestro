@@ -1184,6 +1184,8 @@ test('review gate guide renders copy-paste commands without shell-hostile angle 
   assert.match(html, /--code-reviewer-agent 019e0000-0000-7000-8000-000000000001/);
   assert.match(html, /--architect-agent 019e0000-0000-7000-8000-000000000002/);
   assert.doesNotMatch(html, /<id>|&lt;id&gt;/);
+  assert.match(html, /trusted GitHub Actions reviewer-ci custody/);
+  assert.doesNotMatch(html, /reviewer-owned\/review-service/);
 });
 
 test('failed executor creates approval-visible changes_requested state', async () => {
@@ -2398,6 +2400,32 @@ test('sign-review CLI fails closed without custody attestation key', () => {
         stdio: ['ignore', 'pipe', 'pipe'],
       }),
     /review custody key/,
+  );
+});
+
+test('sign-review CLI rejects non reviewer-ci custody labels as non-lifting', () => {
+  const dir = buildGateRepo();
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    AGENT_REVIEW_HMAC_KEY: 'cli-review-hmac-key',
+    AGENT_REVIEW_CUSTODY_HMAC_KEY: 'cli-custody-hmac-key',
+    AGENT_REVIEW_CUSTODY: 'reviewer-owned',
+    AGENT_REVIEW_CUSTODY_ISSUER: 'test-reviewer-ci',
+    AGENT_REVIEW_SESSION_ID: 'test-session-non-ci-custody',
+  };
+  assert.throws(
+    () =>
+      execFileSync(
+        process.execPath,
+        [join(gateRepoRoot, 'dist', 'cli.js'), 'runtime', 'sign-review', '--custody', 'reviewer-owned'],
+        {
+          cwd: dir,
+          env,
+          encoding: 'utf8',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+    /custody is required: pass --custody reviewer-ci/,
   );
 });
 

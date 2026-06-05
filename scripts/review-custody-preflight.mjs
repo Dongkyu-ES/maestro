@@ -166,10 +166,10 @@ function setupCommandsTemplate(branch) {
     `git push -u origin ${branch}`,
     `gh api -X PUT repos/:owner/:repo/environments/${requiredEnvironment}`,
     "gh variable set AGENT_TRUSTED_REVIEW_ACTORS --body '<trusted-code-reviewer-login>,<trusted-architect-login>'",
-    "printf '%s' '<bundle-hmac-key>' | gh secret set AGENT_REVIEW_BUNDLE_HMAC_KEY --app actions --body-file -",
-    `printf '%s' '<bundle-hmac-key>' | gh secret set AGENT_REVIEW_BUNDLE_HMAC_KEY --env ${requiredEnvironment} --body-file -`,
-    "printf '%s' '<review-hmac-key>' | gh secret set AGENT_REVIEW_HMAC_KEY --app actions --body-file -",
-    "printf '%s' '<review-custody-hmac-key>' | gh secret set AGENT_REVIEW_CUSTODY_HMAC_KEY --app actions --body-file -",
+    "printf '%s' '<bundle-hmac-key>' | gh secret set AGENT_REVIEW_BUNDLE_HMAC_KEY --app actions",
+    `printf '%s' '<bundle-hmac-key>' | gh secret set AGENT_REVIEW_BUNDLE_HMAC_KEY --env ${requiredEnvironment}`,
+    "printf '%s' '<review-hmac-key>' | gh secret set AGENT_REVIEW_HMAC_KEY --app actions",
+    "printf '%s' '<review-custody-hmac-key>' | gh secret set AGENT_REVIEW_CUSTODY_HMAC_KEY --app actions",
     'npm run harness:review-custody-preflight',
   ];
 }
@@ -457,6 +457,7 @@ function selfTest() {
   assert(report.reviewed_head_sha && report.reviewed_head_sha !== '<current sha unavailable>', 'report must include concrete reviewed_head_sha');
   assert(report.setup_commands_template.some((command) => command.includes(`git push -u origin ${report.git_state.branch}`)), 'setup commands must include exact branch push command');
   assert(report.setup_commands_template.some((command) => command.includes(`environments/${requiredEnvironment}`)), 'setup commands must include environment creation command');
+  assert(!report.setup_commands_template.some((command) => command.includes('--body-file')), 'setup commands must not use unsupported gh secret --body-file flag');
   assert(existsSync(reviewerCommentTemplateJson), 'code-reviewer notification template must be written');
   assert(existsSync(architectCommentTemplateJson), 'architect notification template must be written');
   assert(existsSync(commentsTemplateMd), 'markdown comment template must be written');

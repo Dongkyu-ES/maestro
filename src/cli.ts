@@ -130,7 +130,7 @@ function usage(): string {
   agent runtime verify-full-target <run-id> [--append-verified-event]
   agent verifier run --run <run-id>
   agent runtime prepare-review-gate --code-reviewer-artifact .agent/review-gates/code-reviewer.md --architect-artifact .agent/review-gates/architect.md --code-reviewer-notification .agent/review-gates/subagent-notifications/code-reviewer.json --architect-notification .agent/review-gates/subagent-notifications/architect.json --code-reviewer-agent PASTE_CODE_REVIEWER_AGENT_ID --architect-agent PASTE_ARCHITECT_AGENT_ID
-  agent runtime sign-review [--custody reviewer-ci|reviewer-owned|review-service]
+  agent runtime sign-review --custody reviewer-ci [--custody-issuer ISSUER --review-session RUN_ID]
   agent review latest
   agent approvals
   agent approval request|approve|reject
@@ -471,9 +471,9 @@ async function main() {
       const architectSha = sha256Text(architectText);
       const signature = reviewProvenanceSignature(key, inputHash, reviewerSha, architectSha);
       const custody = arg('--custody') || gate?.provenance?.custody || process.env.AGENT_REVIEW_CUSTODY;
-      if (!['reviewer-ci', 'reviewer-owned', 'review-service'].includes(String(custody || '')))
+      if (String(custody || '') !== 'reviewer-ci')
         throw new Error(
-          'review custody is required: pass --custody reviewer-ci|reviewer-owned|review-service or set AGENT_REVIEW_CUSTODY',
+          'review custody is required: pass --custody reviewer-ci or set AGENT_REVIEW_CUSTODY=reviewer-ci; local/non-CI signatures are diagnostic only',
         );
       const custodyKey = reviewCustodyKey();
       if (!custodyKey)
