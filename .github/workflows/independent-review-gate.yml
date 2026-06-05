@@ -345,6 +345,9 @@ jobs:
         run: npm run e2e
 
       - name: Product quality gate
+        env:
+          AGENT_REVIEW_HMAC_KEY: ${{ secrets.AGENT_REVIEW_HMAC_KEY }}
+          AGENT_REVIEW_CUSTODY_HMAC_KEY: ${{ secrets.AGENT_REVIEW_CUSTODY_HMAC_KEY }}
         run: node dist/cli.js quality gate --write
 
       - uses: actions/upload-artifact@v4
