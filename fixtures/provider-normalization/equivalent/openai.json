@@ -1,0 +1,21 @@
+{
+  "provider": "openai",
+  "raw": {
+    "choices": [
+      {
+        "message": {
+          "tool_calls": [
+            {
+              "id": "call_openai_equivalent_1",
+              "type": "function",
+              "function": {
+                "name": "write_file",
+                "arguments": "{\"path\":\"notes/a.txt\",\"content\":\"hello\"}"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

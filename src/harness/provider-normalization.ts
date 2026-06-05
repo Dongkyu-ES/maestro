@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 
 export type DirectProvider = 'openai' | 'anthropic' | 'gemini' | 'local';
 
@@ -130,6 +131,28 @@ export function normalizeProviderFixture(fixture: unknown): ProviderNormalizatio
     };
   }
   return { provider, status: 'unsupported', tool_intents: [], reason: 'local fixture has no schema-valid tool call or refusal' };
+}
+
+function comparableToolIntent(result: ProviderNormalizationResult): { tool: string; args: unknown } {
+  const intent = result.tool_intents[0];
+  return { tool: intent?.tool_name || '', args: intent?.args ?? {} };
+}
+
+export function assertProviderEquivalence(results: ProviderNormalizationResult[]): void {
+  let expected: { tool: string; args: unknown } | undefined;
+  for (const result of results) {
+    if (result.status !== 'tool_intent') {
+      throw new Error(`Provider equivalence failed for ${result.provider}: status ${result.status}`);
+    }
+    if (!result.tool_intents[0]) {
+      throw new Error(`Provider equivalence failed for ${result.provider}: missing first tool_intent`);
+    }
+    const actual = comparableToolIntent(result);
+    expected ??= actual;
+    if (!isDeepStrictEqual(actual, expected)) {
+      throw new Error(`Provider equivalence failed for ${result.provider}: expected ${JSON.stringify(expected)} but got ${JSON.stringify(actual)}`);
+    }
+  }
 }
 
 export function runProviderConformance(options: { root: string; fixtureDir?: string; reportPath?: string }): ProviderConformanceReport {

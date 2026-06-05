@@ -1,0 +1,16 @@
+{
+  "provider": "anthropic",
+  "raw": {
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_equivalent_1",
+        "name": "write_file",
+        "input": {
+          "path": "notes/a.txt",
+          "content": "hello"
+        }
+      }
+    ]
+  }
+}

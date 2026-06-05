@@ -1,0 +1,22 @@
+{
+  "provider": "gemini",
+  "raw": {
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "functionCall": {
+                "name": "write_file",
+                "args": {
+                  "path": "notes/a.txt",
+                  "content": "hello"
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
