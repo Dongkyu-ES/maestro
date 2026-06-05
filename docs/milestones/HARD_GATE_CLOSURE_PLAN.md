@@ -102,24 +102,31 @@ Why this closes R2: it proves the PRD learning loop, not only proposal/apply mec
 
 ### P3. Move independent review signing outside implementer custody
 
-Implement one of these paths:
+Current completion-lifting path is singular and non-negotiable:
 
-- CI job with reviewer-owned secrets `AGENT_REVIEW_HMAC_KEY` and `AGENT_REVIEW_CUSTODY_HMAC_KEY`;
-- reviewer-owned local signer run outside the implementer workspace;
-- dedicated review service emitting `.agent/independent-review-gate.json`;
-- `.github/workflows/independent-review-gate.yml` with reviewer-owned HMAC secrets and workflow-dispatch inputs for reviewer/architect artifacts.
+- `.github/workflows/trusted-independent-review-bundle.yml` must collect trusted GitHub notification comments from allowlisted reviewer actors for the exact commit and review-input hash.
+- `.github/workflows/independent-review-gate.yml` must consume that successful trusted-bundle run, verify its immutable workflow/run/head/actor/agent attestation, and sign with GitHub Actions `reviewer-ci` custody.
+- The protected `trusted-reviewer-custody` environment and Actions secrets (`AGENT_REVIEW_BUNDLE_HMAC_KEY`, `AGENT_REVIEW_HMAC_KEY`, `AGENT_REVIEW_CUSTODY_HMAC_KEY`) are the only current custody mechanism that may lift Product Gate.
+
+Explicitly non-lifting under the current Product Gate:
+
+- reviewer-owned local signer paths;
+- dedicated review service paths;
+- any local `runtime sign-review` output, even if HMAC-valid;
+- any custody label other than `reviewer-ci`.
 
 Required signer behavior:
 
 1. signer recomputes current review-input hash;
-2. signer validates referenced reviewer and architect artifacts;
-3. signer writes artifact signature and custody signature;
-4. signer records custody label such as `reviewer-ci`;
-5. signer records non-self custody evidence, for example `custody_issuer`, `ci_run_id`/`review_session_id`, `reviewer_agent_id`, and signed artifact paths;
-6. product gate accepts only configured trusted custody labels plus required issuer/session metadata;
-7. product gate rejects test fixture labels, missing issuer/session metadata, committed key material, project-tree key paths, and implementer-owned local custody for completion claims.
+2. signer validates trusted-bundle reviewer and architect artifacts plus notification envelopes;
+3. signer verifies the trusted-bundle attestation over workflow id/path, run id, actor, commit SHA, comment ids, agent ids, and artifact/notification digests;
+4. signer writes artifact signature and custody signature;
+5. signer records custody label `reviewer-ci`;
+6. signer records non-self custody evidence: `custody_issuer`, GitHub Actions `review_session_id`, `reviewer_agent_id`, and signed artifact paths/digests;
+7. product gate accepts only allowlisted `reviewer-ci` custody with required issuer/session metadata, CI=true, and GitHub Actions-shaped session evidence;
+8. product gate rejects test fixture labels, missing issuer/session metadata, committed key material, project-tree key paths, non-CI/local custody, and implementer-owned custody for completion claims.
 
-Why this closes R3: it separates mechanical artifact integrity from reviewer custody and makes self-review unable to lift the ceiling. The gate must not pretend to mechanically know human independence; it must require a trusted custody boundary and fail closed when that boundary is absent.
+Why this closes R3: it separates mechanical artifact integrity from reviewer custody and makes self-review unable to lift the ceiling. The gate does not pretend to mechanically know human independence; it requires the single trusted GitHub Actions custody boundary and fails closed when that boundary is absent.
 
 ### P4. Add mandatory browser/operator E2E for any 95/v0-v2 completion claim
 
