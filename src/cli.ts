@@ -39,6 +39,7 @@ import { readRuntimeEvents } from './events/ledger.js';
 import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
 import { verifyContextProvenance } from './harness/context-provenance.js';
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
+import { runHarnessSlice } from './harness/harness-run.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/native-evidence.js';
@@ -120,6 +121,7 @@ function usage(): string {
   agent run create|start|collect|cancel|latest
   agent run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
   agent run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
+  agent harness run <goal> [--executor-bin <path>]
   agent runtime projection
   agent context verify --run <run-id>
   agent runtime verify-ledger <run-id>
@@ -289,6 +291,14 @@ async function main() {
       });
       console.log(JSON.stringify(report, null, 2));
       if (report.verification.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'harness' && sub === 'run') {
+      const goal = rest.filter((item, index) => item !== '--executor-bin' && rest[index - 1] !== '--executor-bin').join(' ').trim();
+      if (!goal) throw new Error('usage: agent harness run <goal> [--executor-bin <path>]');
+      const report = await runHarnessSlice({ root: process.cwd(), goal, executorBin: arg('--executor-bin') });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.state !== 'completed') process.exitCode = 2;
       return;
     }
     if (cmd === 'context' && sub === 'verify') {
