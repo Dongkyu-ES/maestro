@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import {
   appendRuntimeEvent,
@@ -22,6 +22,7 @@ export type HarnessSliceState = 'completed' | 'blocked';
 export interface HarnessRunOptions {
   root: string;
   goal: string;
+  contextExtras?: string;
   executorBin?: string;
   runId?: string;
   timeoutMs?: number;
@@ -32,7 +33,9 @@ export interface ContextBundle {
   schema_version: 1;
   run_id: string;
   goal: string;
+  context_extras?: string;
   included_goal_sha256: string;
+  included_context_extras_sha256?: string;
   included_context_refs: string[];
   included_provenance: ContextProvenanceBundle;
   native_harness_assisted: true;
@@ -105,6 +108,7 @@ function changedFilesFromStatus(statusText: string): string[] {
 function fileHashes(root: string, changedFiles: string[]): NativeArtifactHash[] {
   return changedFiles
     .filter((ref) => existsSync(join(root, ref)))
+    .filter((ref) => statSync(join(root, ref)).isFile())
     .map((ref) => ({ ref, sha256: sha256(readFileSync(join(root, ref))) }));
 }
 
@@ -113,19 +117,30 @@ function buildContextBundle(options: {
   root: string;
   runId: string;
   goal: string;
+  contextExtras?: string;
   provenance: ContextProvenanceBundle;
 }): { bundle: ContextBundle; sha256: string } {
   const bundle: ContextBundle = {
     schema_version: 1,
     run_id: options.runId,
     goal: options.goal,
+    context_extras: options.contextExtras,
     included_goal_sha256: sha256(options.goal),
+    included_context_extras_sha256: options.contextExtras === undefined ? undefined : sha256(options.contextExtras),
     included_context_refs: options.provenance.context_files.map((item) => item.ref),
     included_provenance: options.provenance,
     native_harness_assisted: true,
     unowned_surfaces: UNOWNED_SURFACES,
   };
-  const bundleSha256 = sha256(stableJson(bundle));
+  const bundleSha256 = sha256(
+    stableJson({
+      schema_version: 1,
+      goal: options.goal,
+      context_extras: options.contextExtras,
+      included_goal_sha256: bundle.included_goal_sha256,
+      included_context_extras_sha256: bundle.included_context_extras_sha256,
+    }),
+  );
   writeFileSync(join(options.runDir, 'context-bundle.json'), `${JSON.stringify({ ...bundle, sha256: bundleSha256 }, null, 2)}\n`);
   return { bundle, sha256: bundleSha256 };
 }
@@ -264,9 +279,16 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
   const runId = options.runId || `harness-${randomUUID()}`;
   const hooks = options.hooks || [];
   const runDir = runDirFor(root, runId);
+  const executorPrompt =
+    options.contextExtras === undefined
+      ? options.goal
+      : `${options.goal}\n\nContext extras:\n${options.contextExtras}\n`;
   mkdirSync(runDir, { recursive: true });
   writeFileSync(join(runDir, 'task.md'), `${options.goal}\n`);
-  writeFileSync(join(runDir, 'context.md'), `Goal:\n${options.goal}\n`);
+  writeFileSync(
+    join(runDir, 'context.md'),
+    options.contextExtras === undefined ? `Goal:\n${options.goal}\n` : `Goal:\n${options.goal}\n\nContext extras:\n${options.contextExtras}\n`,
+  );
 
   appendRuntimeEvent(runDir, {
     runId,
@@ -276,7 +298,7 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     artifactRefs: ['task.md'],
   });
   const provenance = writeContextProvenanceBundle({ root, agentDir: '.agent', runId });
-  const context = buildContextBundle({ runDir, root, runId, goal: options.goal, provenance });
+  const context = buildContextBundle({ runDir, root, runId, goal: options.goal, contextExtras: options.contextExtras, provenance });
   appendRuntimeEvent(runDir, {
     runId,
     source: 'harness',
@@ -293,7 +315,7 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     runCodexExec({
       runDir,
       cwd: root,
-      prompt: options.goal,
+      prompt: executorPrompt,
       timeoutMs: options.timeoutMs,
       label: 'executor',
     }),
