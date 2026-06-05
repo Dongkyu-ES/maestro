@@ -21,6 +21,7 @@ import {
 import { writeContextProvenanceBundle, type ContextProvenanceBundle } from './context-provenance.js';
 import { runHooks, type HookHandler, type HookOutcome, type LifecycleEvent } from './hooks.js';
 import { buildMemoryContextSections, type MemoryEntry } from './memory-gating.js';
+import { assertLabelMatchesObservation, deriveNativeHarnessAssisted, type RunObservation } from './native-surface-detector.js';
 import type { NativeArtifactHash } from './native-evidence.js';
 import { runVerifier, type VerifierResult } from './verifier.js';
 
@@ -78,7 +79,7 @@ export interface HarnessRunReport {
   contextSha256: string;
   verifier: VerifierResult;
   ledgerHead: RuntimeLedgerHeadBinding;
-  nativeHarnessAssisted: true;
+  nativeHarnessAssisted: boolean;
   unownedSurfaces: string[];
   includedRuleIds?: string[];
   includedMemoryIds?: string[];
@@ -236,7 +237,13 @@ async function withExecutorBin<T>(executorBin: string | undefined, fn: () => Pro
   }
 }
 
-function captureToolEvidence(options: { root: string; runDir: string; runId: string; executor: CodexExecResult }): ToolExecutionEvidence {
+function captureToolEvidence(options: {
+  root: string;
+  runDir: string;
+  runId: string;
+  executor: CodexExecResult;
+  unownedSurfaces: string[];
+}): ToolExecutionEvidence {
   const runDirRef = relative(options.root, options.runDir).replaceAll('\\', '/');
   const excludeRunDir = `:(exclude)${runDirRef}`;
   const diffText = git(options.root, ['diff', '--binary', '--', '.', excludeRunDir]);
@@ -258,10 +265,29 @@ function captureToolEvidence(options: { root: string; runDir: string; runId: str
     file_hashes: fileHashes(options.root, changedFiles),
     changed_files: changedFiles,
     executor_exit_code: options.executor.exit_code,
-    unowned_surfaces: UNOWNED_SURFACES,
+    unowned_surfaces: options.unownedSurfaces,
   };
   writeJson(join(options.runDir, 'tool-execution-evidence.json'), evidence);
   return evidence;
+}
+
+function existingInstructionPaths(root: string, runDir: string): string[] {
+  return [join(root, 'AGENTS.md'), join(root, 'CLAUDE.md'), join(runDir, 'AGENTS.md'), join(runDir, 'CLAUDE.md')].filter((path) => existsSync(path));
+}
+
+function buildRunObservation(options: { root: string; runDir: string; executorBin?: string; executor: CodexExecResult }): RunObservation {
+  return {
+    adapter: 'codex_cli',
+    readPaths: [
+      options.executorBin ?? 'codex',
+      options.executor.cwd,
+      join(options.runDir, 'context.md'),
+      join(options.runDir, 'executor.process.json'),
+      ...existingInstructionPaths(options.root, options.runDir),
+    ],
+    transcript: [options.executor.stdout, options.executor.stderr, options.executor.last_message].filter((text) => text.length > 0).join('\n'),
+    sessionIds: options.executor.session_id ? [options.executor.session_id] : [],
+  };
 }
 
 function hookBlockVerifier(event: LifecycleEvent, outcome: HookOutcome): VerifierResult {
@@ -278,6 +304,8 @@ function appendHookBlockedTransition(options: {
   runId: string;
   event: LifecycleEvent;
   outcome: HookOutcome;
+  nativeHarnessAssisted: boolean;
+  unownedSurfaces: string[];
 }): HarnessSliceState {
   const state: HarnessSliceState = 'blocked';
   appendRuntimeEvent(options.runDir, {
@@ -313,8 +341,8 @@ function appendHookBlockedTransition(options: {
       hook_event: options.event,
       hook_decision: options.outcome.decision,
       reason: options.outcome.reason,
-      native_harness_assisted: true,
-      unowned_surfaces: UNOWNED_SURFACES,
+      native_harness_assisted: options.nativeHarnessAssisted,
+      unowned_surfaces: options.unownedSurfaces,
     },
   });
   return state;
@@ -330,6 +358,8 @@ function finalizeReport(options: {
   includedRuleIds?: string[];
   includedMemoryIds?: string[];
   excludedStaleMemoryIds?: string[];
+  nativeHarnessAssisted: boolean;
+  unownedSurfaces: string[];
 }): HarnessRunReport {
   const events = readRuntimeEvents(options.runDir);
   validateRuntimeLedger(events);
@@ -341,8 +371,8 @@ function finalizeReport(options: {
     contextSha256: options.contextSha256,
     verifier: options.verifier,
     ledgerHead: createRuntimeLedgerHeadBinding(events),
-    nativeHarnessAssisted: true,
-    unownedSurfaces: UNOWNED_SURFACES,
+    nativeHarnessAssisted: options.nativeHarnessAssisted,
+    unownedSurfaces: options.unownedSurfaces,
     includedRuleIds: options.includedRuleIds,
     includedMemoryIds: options.includedMemoryIds,
     excludedStaleMemoryIds: options.excludedStaleMemoryIds,
@@ -434,6 +464,9 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     },
     artifactRefs: ['executor.process.json', 'executor.stdout.log', 'executor.stderr.log', 'codex-events.jsonl'],
   });
+  const observation = buildRunObservation({ root, runDir, executorBin: options.executorBin, executor });
+  const nativeLabel = deriveNativeHarnessAssisted(observation);
+  assertLabelMatchesObservation(nativeLabel.nativeHarnessAssisted, observation);
 
   const beforeTool = runHooks('BeforeToolExecution', hooks, {
     runId,
@@ -450,7 +483,14 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
   });
   if (beforeTool.decision !== 'continue') {
     const verifier = hookBlockVerifier('BeforeToolExecution', beforeTool);
-    const state = appendHookBlockedTransition({ runDir, runId, event: 'BeforeToolExecution', outcome: beforeTool });
+    const state = appendHookBlockedTransition({
+      runDir,
+      runId,
+      event: 'BeforeToolExecution',
+      outcome: beforeTool,
+      nativeHarnessAssisted: nativeLabel.nativeHarnessAssisted,
+      unownedSurfaces: nativeLabel.surfaces,
+    });
     return finalizeReport({
       root,
       runDir,
@@ -458,13 +498,15 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
       state,
       contextSha256,
       verifier,
+      nativeHarnessAssisted: nativeLabel.nativeHarnessAssisted,
+      unownedSurfaces: nativeLabel.surfaces,
       includedRuleIds: composedContext?.bundle.includedRuleIds,
       includedMemoryIds: composedContext?.bundle.includedMemoryIds,
       excludedStaleMemoryIds: composedContext?.excludedStaleMemoryIds,
     });
   }
 
-  const evidence = captureToolEvidence({ root, runDir, runId, executor });
+  const evidence = captureToolEvidence({ root, runDir, runId, executor, unownedSurfaces: nativeLabel.surfaces });
   appendRuntimeEvent(runDir, {
     runId,
     source: 'harness',
@@ -512,7 +554,14 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     authority: 'verifier.completed',
   });
   if (beforeState.decision !== 'continue') {
-    state = appendHookBlockedTransition({ runDir, runId, event: 'BeforeStateTransition', outcome: beforeState });
+    state = appendHookBlockedTransition({
+      runDir,
+      runId,
+      event: 'BeforeStateTransition',
+      outcome: beforeState,
+      nativeHarnessAssisted: nativeLabel.nativeHarnessAssisted,
+      unownedSurfaces: nativeLabel.surfaces,
+    });
     return finalizeReport({
       root,
       runDir,
@@ -520,6 +569,8 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
       state,
       contextSha256,
       verifier,
+      nativeHarnessAssisted: nativeLabel.nativeHarnessAssisted,
+      unownedSurfaces: nativeLabel.surfaces,
       includedRuleIds: composedContext?.bundle.includedRuleIds,
       includedMemoryIds: composedContext?.bundle.includedMemoryIds,
       excludedStaleMemoryIds: composedContext?.excludedStaleMemoryIds,
@@ -540,7 +591,7 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     runId,
     source: 'harness',
     type: state === 'completed' ? 'run.completed' : 'run.blocked',
-    payload: { state, native_harness_assisted: true, unowned_surfaces: UNOWNED_SURFACES },
+    payload: { state, native_harness_assisted: nativeLabel.nativeHarnessAssisted, unowned_surfaces: nativeLabel.surfaces },
   });
 
   return finalizeReport({
@@ -550,6 +601,8 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     state,
     contextSha256,
     verifier,
+    nativeHarnessAssisted: nativeLabel.nativeHarnessAssisted,
+    unownedSurfaces: nativeLabel.surfaces,
     includedRuleIds: composedContext?.bundle.includedRuleIds,
     includedMemoryIds: composedContext?.bundle.includedMemoryIds,
     excludedStaleMemoryIds: composedContext?.excludedStaleMemoryIds,
