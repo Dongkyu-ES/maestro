@@ -37,6 +37,10 @@ export interface ProductGateReport {
   scope: string;
   completion_ceiling: number;
   completion_label: string;
+  independence_locally_reachable: boolean;
+  independence_blocker_class: 'external_principal_required' | 'none';
+  solo_ceiling: number;
+  independence_note: string;
   result_reality_delta: ProductGateDelta[];
   checks: ProductGateCheck[];
   report_path?: string;
@@ -916,6 +920,15 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
   const completionLabel = hardGatesAllPass
     ? 'PRD-scoped completion candidate'
     : 'Prototype / control-plane scaffold with hard blockers; 90/95 claims forbidden';
+  const externalCustodyAvailable = Boolean(reviewProvenanceKey() && reviewCustodyKey());
+  const independenceLocallyReachable = externalCustodyAvailable;
+  const independenceBlockerClass =
+    !independentReviewOk && !independenceLocallyReachable ? 'external_principal_required' : 'none';
+  const soloCeiling =
+    !independentReviewOk &&
+    checks.every((check) => check.name === 'Hard Completion Ceiling Gate' || check.status === 'PASS')
+      ? 75
+      : completionCeiling;
   const report: ProductGateReport = {
     schema_version: 1,
     generated_at: nowIso(),
@@ -923,6 +936,11 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     scope: 'PRD-scoped local v0-v2 product; no 90/95 claim allowed unless Hard Completion Ceiling Gate passes.',
     completion_ceiling: completionCeiling,
     completion_label: completionLabel,
+    independence_locally_reachable: independenceLocallyReachable,
+    independence_blocker_class: independenceBlockerClass,
+    solo_ceiling: soloCeiling,
+    independence_note:
+      'Solo-operator completion is capped at 75 by construction; the 75->95 band requires an external reviewer/CI principal not controlled by the implementer.',
     result_reality_delta: resultRealityDelta,
     checks,
   };

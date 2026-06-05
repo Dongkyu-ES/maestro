@@ -2242,16 +2242,40 @@ test('G012 review input hash changes when trust-boundary implementation files ch
   }
 });
 
-test('hard completion ceiling requires independent review and reconciliation artifacts', async () => {
+test('hard completion ceiling requires independent review and reconciliation artifacts and reports solo independence cap without inflating decision or ceiling', async () => {
   const dir = buildGateRepo();
   const reviewPath = join(dir, '.agent', 'independent-review-gate.json');
   rmSync(reviewPath, { force: true });
-  const withoutReview = (await import('./product-gate.js')).runProductGate(dir);
-  assert.equal(withoutReview.decision, 'FAIL');
+  const oldReviewKey = process.env.AGENT_REVIEW_HMAC_KEY;
+  const oldCustodyKey = process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY;
+  const oldHome = process.env.HOME;
+  try {
+    delete process.env.AGENT_REVIEW_HMAC_KEY;
+    delete process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY;
+    process.env.HOME = mkdtempSync(join(tmpdir(), 'dominic-orch-solo-home-'));
+
+    const withoutReview = (await import('./product-gate.js')).runProductGate(dir);
+    assert.equal(withoutReview.decision, 'FAIL');
+    assert.equal(withoutReview.completion_ceiling, 60);
+    assert.equal(withoutReview.independence_locally_reachable, false);
+    assert.equal(withoutReview.independence_blocker_class, 'external_principal_required');
+    assert.equal(withoutReview.solo_ceiling, 75);
+    assert.match(withoutReview.independence_note, /Solo-operator completion is capped at 75 by construction/);
+  } finally {
+    if (oldReviewKey === undefined) delete process.env.AGENT_REVIEW_HMAC_KEY;
+    else process.env.AGENT_REVIEW_HMAC_KEY = oldReviewKey;
+    if (oldCustodyKey === undefined) delete process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY;
+    else process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY = oldCustodyKey;
+    if (oldHome === undefined) delete process.env.HOME;
+    else process.env.HOME = oldHome;
+  }
+
   writePassingReviewGate(dir);
   const report = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(report.decision, 'PASS');
   assert.equal(report.completion_ceiling, 95);
+  assert.equal(report.independence_locally_reachable, true);
+  assert.equal(report.independence_blocker_class, 'none');
   assert.match(report.completion_label, /completion candidate/);
   assert.equal(
     report.checks.some((check) => check.name === 'Hard Completion Ceiling Gate' && check.status === 'PASS'),
