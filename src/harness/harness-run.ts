@@ -12,8 +12,15 @@ import {
   type RuntimeLedgerHeadBinding,
 } from '../events/ledger.js';
 import { runCodexExec, type CodexExecResult } from '../runtime/codex-exec-runner.js';
+import { compileBaseRules, type BaseRuleSet } from './base-rules.js';
+import {
+  buildContextBundle as buildCanonicalContextBundle,
+  type ContextBundle as CanonicalContextBundle,
+  type ContextSection,
+} from './context-bundle.js';
 import { writeContextProvenanceBundle, type ContextProvenanceBundle } from './context-provenance.js';
 import { runHooks, type HookHandler, type HookOutcome, type LifecycleEvent } from './hooks.js';
+import { buildMemoryContextSections, type MemoryEntry } from './memory-gating.js';
 import type { NativeArtifactHash } from './native-evidence.js';
 import { runVerifier, type VerifierResult } from './verifier.js';
 
@@ -27,6 +34,10 @@ export interface HarnessRunOptions {
   runId?: string;
   timeoutMs?: number;
   hooks?: HookHandler[];
+  baseRules?: BaseRuleSet;
+  memory?: MemoryEntry[];
+  providerProfile?: string;
+  freshnessWindowMs?: number;
 }
 
 export interface ContextBundle {
@@ -69,6 +80,9 @@ export interface HarnessRunReport {
   ledgerHead: RuntimeLedgerHeadBinding;
   nativeHarnessAssisted: true;
   unownedSurfaces: string[];
+  includedRuleIds?: string[];
+  includedMemoryIds?: string[];
+  excludedStaleMemoryIds?: string[];
 }
 
 const UNOWNED_SURFACES = [
@@ -143,6 +157,70 @@ function buildContextBundle(options: {
   );
   writeFileSync(join(options.runDir, 'context-bundle.json'), `${JSON.stringify({ ...bundle, sha256: bundleSha256 }, null, 2)}\n`);
   return { bundle, sha256: bundleSha256 };
+}
+
+function canonicalContextText(bundle: CanonicalContextBundle): string {
+  return bundle.sections.map((section) => `${section.kind.toUpperCase()} ${section.id}\n${section.text}`).join('\n\n');
+}
+
+function buildComposedContextBundle(options: {
+  root: string;
+  runDir: string;
+  goal: string;
+  baseRules?: BaseRuleSet;
+  memory?: MemoryEntry[];
+  providerProfile?: string;
+  freshnessWindowMs?: number;
+}): { bundle: CanonicalContextBundle; text: string; excludedStaleMemoryIds: string[] } {
+  const providerProfile = options.providerProfile ?? 'codex-native';
+  const sections: ContextSection[] = [
+    {
+      id: 'goal.primary',
+      kind: 'goal',
+      text: options.goal,
+      sourceRef: 'harness-run:goal',
+    },
+  ];
+  const compiledRules = options.baseRules ? compileBaseRules(options.baseRules, providerProfile) : undefined;
+  if (compiledRules && compiledRules.promptSegment.length > 0) {
+    sections.push({
+      id: `rules.${options.baseRules?.id ?? 'base'}`,
+      kind: 'rule',
+      text: compiledRules.promptSegment,
+      sourceRef: `base-rules:${options.baseRules?.id ?? 'base'}`,
+    });
+  }
+
+  const memoryContext = buildMemoryContextSections(options.memory ?? [], {
+    now: new Date().toISOString(),
+    freshnessWindowMs: options.freshnessWindowMs ?? 7 * 24 * 60 * 60 * 1000,
+  });
+  for (const section of memoryContext.sections) {
+    if (section.label === 'excluded') continue;
+    sections.push({
+      id: `memory.${section.id}`,
+      kind: 'memory',
+      text: section.text,
+      sourceRef: `memory:${section.id}`,
+    });
+  }
+
+  const bundle = buildCanonicalContextBundle({
+    role: 'worker',
+    providerProfile,
+    sections,
+    includedRuleIds: compiledRules?.includedRuleIds ?? [],
+    includedMemoryIds: memoryContext.injectedFactIds,
+    toolPolicyId: 'tool-policy.harness-run.default',
+    acceptanceContractId: 'acceptance.harness-run.context-bundle',
+  });
+  const excludedStaleMemoryIds = memoryContext.sections
+    .filter((section) => section.label === 'stale')
+    .map((section) => section.id)
+    .sort();
+
+  writeFileSync(join(options.runDir, 'context-bundle.json'), `${JSON.stringify(bundle, null, 2)}\n`);
+  return { bundle, text: canonicalContextText(bundle), excludedStaleMemoryIds };
 }
 
 async function withExecutorBin<T>(executorBin: string | undefined, fn: () => Promise<T>): Promise<T> {
@@ -249,6 +327,9 @@ function finalizeReport(options: {
   state: HarnessSliceState;
   contextSha256: string;
   verifier: VerifierResult;
+  includedRuleIds?: string[];
+  includedMemoryIds?: string[];
+  excludedStaleMemoryIds?: string[];
 }): HarnessRunReport {
   const events = readRuntimeEvents(options.runDir);
   validateRuntimeLedger(events);
@@ -262,6 +343,9 @@ function finalizeReport(options: {
     ledgerHead: createRuntimeLedgerHeadBinding(events),
     nativeHarnessAssisted: true,
     unownedSurfaces: UNOWNED_SURFACES,
+    includedRuleIds: options.includedRuleIds,
+    includedMemoryIds: options.includedMemoryIds,
+    excludedStaleMemoryIds: options.excludedStaleMemoryIds,
   };
   writeFileSync(join(options.runDir, 'harness-run-report.json'), `${JSON.stringify(report, null, 2)}\n`);
   const finalEvents = readRuntimeEvents(options.runDir);
@@ -279,16 +363,9 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
   const runId = options.runId || `harness-${randomUUID()}`;
   const hooks = options.hooks || [];
   const runDir = runDirFor(root, runId);
-  const executorPrompt =
-    options.contextExtras === undefined
-      ? options.goal
-      : `${options.goal}\n\nContext extras:\n${options.contextExtras}\n`;
+  const useComposedContext = options.baseRules !== undefined || options.memory !== undefined;
   mkdirSync(runDir, { recursive: true });
   writeFileSync(join(runDir, 'task.md'), `${options.goal}\n`);
-  writeFileSync(
-    join(runDir, 'context.md'),
-    options.contextExtras === undefined ? `Goal:\n${options.goal}\n` : `Goal:\n${options.goal}\n\nContext extras:\n${options.contextExtras}\n`,
-  );
 
   appendRuntimeEvent(runDir, {
     runId,
@@ -297,16 +374,41 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     payload: { goal: options.goal },
     artifactRefs: ['task.md'],
   });
+  const composedContext = useComposedContext
+    ? buildComposedContextBundle({
+        root,
+        runDir,
+        goal: options.goal,
+        baseRules: options.baseRules,
+        memory: options.memory,
+        providerProfile: options.providerProfile,
+        freshnessWindowMs: options.freshnessWindowMs,
+      })
+    : undefined;
+  writeFileSync(
+    join(runDir, 'context.md'),
+    composedContext?.text ??
+      (options.contextExtras === undefined ? `Goal:\n${options.goal}\n` : `Goal:\n${options.goal}\n\nContext extras:\n${options.contextExtras}\n`),
+  );
   const provenance = writeContextProvenanceBundle({ root, agentDir: '.agent', runId });
-  const context = buildContextBundle({ runDir, root, runId, goal: options.goal, contextExtras: options.contextExtras, provenance });
+  const legacyContext =
+    useComposedContext ? undefined : buildContextBundle({ runDir, root, runId, goal: options.goal, contextExtras: options.contextExtras, provenance });
+  const contextSha256 = composedContext?.bundle.sha256 ?? legacyContext?.sha256;
+  if (!contextSha256) throw new Error('context bundle was not built');
+  const executorPrompt =
+    composedContext?.text ??
+    (options.contextExtras === undefined ? options.goal : `${options.goal}\n\nContext extras:\n${options.contextExtras}\n`);
   appendRuntimeEvent(runDir, {
     runId,
     source: 'harness',
     type: 'context.built',
     payload: {
-      context_sha256: context.sha256,
-      included_context_refs: context.bundle.included_context_refs,
+      context_sha256: contextSha256,
+      included_context_refs: legacyContext?.bundle.included_context_refs ?? [],
       provenance_ref: 'context-provenance.json',
+      included_rule_ids: composedContext?.bundle.includedRuleIds,
+      included_memory_ids: composedContext?.bundle.includedMemoryIds,
+      excluded_stale_memory_ids: composedContext?.excludedStaleMemoryIds,
     },
     artifactRefs: ['context-bundle.json', 'context-provenance.json'],
   });
@@ -338,7 +440,7 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     runDir: relative(root, runDir).replaceAll('\\', '/'),
     root,
     goal: options.goal,
-    contextSha256: context.sha256,
+    contextSha256,
     executor: {
       exit_code: executor.exit_code,
       event_count: executor.event_count,
@@ -349,7 +451,17 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
   if (beforeTool.decision !== 'continue') {
     const verifier = hookBlockVerifier('BeforeToolExecution', beforeTool);
     const state = appendHookBlockedTransition({ runDir, runId, event: 'BeforeToolExecution', outcome: beforeTool });
-    return finalizeReport({ root, runDir, runId, state, contextSha256: context.sha256, verifier });
+    return finalizeReport({
+      root,
+      runDir,
+      runId,
+      state,
+      contextSha256,
+      verifier,
+      includedRuleIds: composedContext?.bundle.includedRuleIds,
+      includedMemoryIds: composedContext?.bundle.includedMemoryIds,
+      excludedStaleMemoryIds: composedContext?.excludedStaleMemoryIds,
+    });
   }
 
   const evidence = captureToolEvidence({ root, runDir, runId, executor });
@@ -394,14 +506,24 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     runDir: relative(root, runDir).replaceAll('\\', '/'),
     root,
     goal: options.goal,
-    contextSha256: context.sha256,
+    contextSha256,
     verifier,
     proposedState: state,
     authority: 'verifier.completed',
   });
   if (beforeState.decision !== 'continue') {
     state = appendHookBlockedTransition({ runDir, runId, event: 'BeforeStateTransition', outcome: beforeState });
-    return finalizeReport({ root, runDir, runId, state, contextSha256: context.sha256, verifier });
+    return finalizeReport({
+      root,
+      runDir,
+      runId,
+      state,
+      contextSha256,
+      verifier,
+      includedRuleIds: composedContext?.bundle.includedRuleIds,
+      includedMemoryIds: composedContext?.bundle.includedMemoryIds,
+      excludedStaleMemoryIds: composedContext?.excludedStaleMemoryIds,
+    });
   }
 
   appendRuntimeEvent(runDir, {
@@ -421,5 +543,15 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     payload: { state, native_harness_assisted: true, unowned_surfaces: UNOWNED_SURFACES },
   });
 
-  return finalizeReport({ root, runDir, runId, state, contextSha256: context.sha256, verifier });
+  return finalizeReport({
+    root,
+    runDir,
+    runId,
+    state,
+    contextSha256,
+    verifier,
+    includedRuleIds: composedContext?.bundle.includedRuleIds,
+    includedMemoryIds: composedContext?.bundle.includedMemoryIds,
+    excludedStaleMemoryIds: composedContext?.excludedStaleMemoryIds,
+  });
 }
