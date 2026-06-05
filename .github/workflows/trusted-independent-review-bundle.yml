@@ -89,8 +89,7 @@ jobs:
             }
             return digest.digest('hex');
           };
-          appendFileSync(process.env.GITHUB_ENV, `REVIEW_INPUT_SHA256=${reviewInputHash()}
-`);
+          appendFileSync(process.env.GITHUB_ENV, `REVIEW_INPUT_SHA256=${reviewInputHash()}\n`);
           NODE
 
       - name: Validate dispatch selectors before secret use

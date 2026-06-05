@@ -124,8 +124,7 @@ jobs:
             digest.update(rel);
             digest.update(existsSync(rel) ? readFileSync(rel) : 'missing');
           }
-          appendFileSync(process.env.GITHUB_ENV, `CURRENT_REVIEW_INPUT_HASH=${digest.digest('hex')}
-`);
+          appendFileSync(process.env.GITHUB_ENV, `CURRENT_REVIEW_INPUT_HASH=${digest.digest('hex')}\n`);
           NODE
 
       - name: Verify reviewer bundle attestation
@@ -324,8 +323,7 @@ jobs:
             ...metadata,
             custody_signature: custodySignature(required(process.env.AGENT_REVIEW_CUSTODY_HMAC_KEY, 'AGENT_REVIEW_CUSTODY_HMAC_KEY'), custody, inputHash, signature, metadata),
           };
-          writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}
-`);
+          writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}\n`);
           NODE
 
 
