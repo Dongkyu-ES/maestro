@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "role": "reviewer",
+  "manager_plan_sha256": "6cf17e28742ac7384e6114f400b11f6ba3358c5dd6d6121aecaeb69e998156a1",
+  "worker_output_sha256": "895252aeb74a71985e0e6026c98c3d8a7c5503aa4d3229451d8842456fbfb11c",
+  "process_refs": [
+    ".agent/runs/run-20260602020150147-v9avcu-task-20260602020149969-q/reviewer.process.json"
+  ],
+  "diff_refs": [
+    ".agent/runs/run-20260602020150147-v9avcu-task-20260602020149969-q/role-contract/roles-diff.patch"
+  ],
+  "decision": "APPROVE",
+  "findings": [
+    {
+      "id": "role-contract-runtime-evidence",
+      "severity": "info"
+    }
+  ]
+}

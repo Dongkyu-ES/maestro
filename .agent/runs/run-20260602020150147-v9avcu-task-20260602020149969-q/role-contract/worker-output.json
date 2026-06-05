@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "role": "worker",
+  "worker_id": "worker-001",
+  "consumed_work_order_sha256": "3d01ff8aec8d129692e531eecba8b6b860292e3078791f06ceda04561814639a",
+  "process_refs": [
+    ".agent/runs/run-20260602020150147-v9avcu-task-20260602020149969-q/worker-001.process.json"
+  ],
+  "touched_files": [
+    "role-contract-output.txt"
+  ],
+  "diff_refs": [
+    ".agent/runs/run-20260602020150147-v9avcu-task-20260602020149969-q/role-contract/roles-diff.patch"
+  ],
+  "diff_sha256": "32d05824c4f272632e619c515e4f37ed395f3766986c441f1db2d65288450286",
+  "result_summary": "worker process completed and role contract evidence was generated from runtime artifacts"
+}

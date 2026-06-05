@@ -1,0 +1,16 @@
+{
+  "run_id": "run-20260602070950982-udbnv7-task-20260602070019131-6",
+  "task_context_sha256": "394d1b2449ec588a92021673bc7a5f74c2360d4be9907fc93572d276d5e29e29",
+  "loaded_promotion_artifact_sha256": "4db8f6cdd4a412dcb8ca2a8f9a8a5999c584c64eb13a14a6a9699702ee795940",
+  "runtime_events_path": ".agent/runs/run-20260602070950982-udbnv7-task-20260602070019131-6/events.jsonl",
+  "stable_fields": {
+    "recommendation": "loaded:promotion-20260602020316192-0yauv5-run-20260602020315846-ak"
+  },
+  "runtime_events_sha256": "af601d8b88bb7ee0a57a895697219207b2aeb173a5deb6faaacc808fa1a3b5f8",
+  "runtime_event_count": 8,
+  "runtime_ledger_head_sha256": "b171cbd2579e06f9ea47ee126c652170a77f02ff6b849bd1a590efe0a5b3c129",
+  "promotion_loaded_event_sequence": 5,
+  "promotion_loaded_event_sha256": "e3fbac81132336343a4ab86df265d12438845bda3fad4279ef60a117e32a0d49",
+  "runtime_ledger_compatibility": "projection_legacy_prev_hash_backfill",
+  "runtime_ledger_migrated_events": 8
+}
