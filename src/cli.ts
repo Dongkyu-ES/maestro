@@ -56,7 +56,7 @@ import {
   reviewProvenanceSignature,
   sha256Text,
 } from './util.js';
-import { createOrchestratorServer } from './harness/orchestrator-server.js';
+import { createOrchestratorServer, defaultExecutorRegistry, runSubmittedGraph } from './harness/orchestrator-server.js';
 import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -150,7 +150,8 @@ function usage(): string {
   agent maintenance reconcile-runs
   agent quality gate [--write]
   agent web [--host 127.0.0.1] [--port 4317] [--unsafe-host]
-  agent orchestrate serve [--host 127.0.0.1] [--port 4319] [--auth-token TOKEN] [--unsafe-host]`;
+  agent orchestrate serve [--host 127.0.0.1] [--port 4319] [--auth-token TOKEN] [--unsafe-host]
+  agent orchestrate run --file <graph.json> [--reconcile] [--verify-cmd CMD] [--concurrency N]`;
 }
 
 async function main() {
@@ -651,6 +652,28 @@ async function main() {
       const report = runProductGate(process.cwd(), { write: has('--write') });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'orchestrate' && sub === 'run') {
+      const file = arg('--file');
+      if (!file) throw new Error('usage: agent orchestrate run --file <graph.json> [--reconcile] [--verify-cmd CMD]');
+      const spec = JSON.parse(readFileSync(file, 'utf8')) as {
+        goal?: string;
+        nodes?: { id: string; goal: string; deps?: string[]; executor?: string; purpose?: string }[];
+      };
+      if (!Array.isArray(spec.nodes) || spec.nodes.length === 0) throw new Error('graph file must contain a non-empty nodes[]');
+      const result = await runSubmittedGraph({
+        root: process.cwd(),
+        registry: defaultExecutorRegistry(),
+        goal: spec.goal,
+        nodes: spec.nodes,
+        reconcile: has('--reconcile'),
+        reconcileVerifyCmd: arg('--verify-cmd'),
+        concurrency: arg('--concurrency') !== undefined ? Number(arg('--concurrency')) : undefined,
+      });
+      console.log(JSON.stringify(result, null, 2));
+      const failed = result.graph.supportedCount === 0 || (result.reconcile && result.reconcile.verifyPassed === false);
+      if (failed) process.exitCode = 2;
       return;
     }
     if (cmd === 'orchestrate' && sub === 'serve') {
