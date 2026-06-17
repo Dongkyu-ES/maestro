@@ -289,53 +289,98 @@ export function reconcileWorkers(options: {
   order: Array<{ workerId: string; branch: string; worktreePath: string }>;
   verifyCmd?: string;
   parentRunDir?: string;
+  bisect?: boolean; // when the whole-set verify fails, drop culprits to find the largest verifying subset (default true)
 }): ReconcileResult {
   const root = resolve(options.root);
   if (!WORKER_ID_RE.test(options.reconId)) throw new Error(`invalid reconId: ${options.reconId}`);
   const branch = `wt/${options.reconId}`;
   const reconWorktree = worktreePathFor(root, options.reconId);
-  git(root, ['worktree', 'add', reconWorktree, '-b', branch, 'HEAD']);
-
-  const merged: string[] = [];
   const quarantined: Array<{ workerId: string; reason: string }> = [];
   const emit = (type: string, payload: Record<string, unknown>) => {
     if (options.parentRunDir)
       appendRuntimeEvent(options.parentRunDir, { runId: options.reconId, source: 'harness', type, payload });
   };
 
+  // Commit each worker's REAL changes onto its branch once (excluding the .agent evidence
+  // dir) so it is mergeable; drop workers with no changes.
+  const mergeable: Array<{ workerId: string; branch: string }> = [];
   for (const w of options.order) {
-    // Commit the worker's REAL changes onto its branch so it is mergeable. Exclude the
-    // .agent evidence dir so reconciliation merges work product, not run ledgers.
     git(w.worktreePath, ['add', '-A', '--', '.', ':(exclude).agent']);
-    const committed = tryGit(w.worktreePath, ['commit', '-m', `worker ${w.workerId}`]);
-    if (!committed.ok) {
+    if (tryGit(w.worktreePath, ['commit', '-m', `worker ${w.workerId}`]).ok) {
+      mergeable.push({ workerId: w.workerId, branch: w.branch });
+    } else {
       quarantined.push({ workerId: w.workerId, reason: 'no changes to merge' });
       emit('orchestration.conflict.quarantined', { worker_id: w.workerId, reason: 'no changes' });
-      continue;
     }
-    const mergeRes = tryGit(reconWorktree, ['merge', '--no-edit', w.branch]);
-    if (!mergeRes.ok) {
-      tryGit(reconWorktree, ['merge', '--abort']);
-      quarantined.push({ workerId: w.workerId, reason: 'merge conflict' });
-      emit('orchestration.conflict.quarantined', { worker_id: w.workerId, reason: 'merge conflict' });
-      continue;
-    }
-    merged.push(w.workerId);
-    emit('orchestration.merged', { worker_id: w.workerId });
   }
 
-  // Final whole-set gate: verify once over everything that merged cleanly.
+  // Build a fresh worktree merging a subset (in order); conflicting branches are skipped.
+  const buildMerge = (id: string, subset: Array<{ workerId: string; branch: string }>) => {
+    const wp = worktreePathFor(root, id);
+    tryGit(root, ['worktree', 'remove', '--force', wp]);
+    tryGit(root, ['branch', '-D', `wt/${id}`]);
+    git(root, ['worktree', 'add', wp, '-b', `wt/${id}`, 'HEAD']);
+    const merged: string[] = [];
+    const conflicts: string[] = [];
+    for (const w of subset) {
+      if (tryGit(wp, ['merge', '--no-edit', w.branch]).ok) merged.push(w.workerId);
+      else {
+        tryGit(wp, ['merge', '--abort']);
+        conflicts.push(w.workerId);
+      }
+    }
+    return { worktreePath: wp, merged, conflicts };
+  };
+  const verifyTree = (wp: string): boolean => {
+    const r = spawnSync('/bin/sh', ['-c', options.verifyCmd as string], { cwd: wp, encoding: 'utf8', timeout: 120000 });
+    return (r.status ?? 1) === 0;
+  };
+
+  const full = buildMerge(options.reconId, mergeable);
+  for (const c of full.conflicts) {
+    quarantined.push({ workerId: c, reason: 'merge conflict' });
+    emit('orchestration.conflict.quarantined', { worker_id: c, reason: 'merge conflict' });
+  }
+  let kept = full.merged;
+  for (const id of kept) emit('orchestration.merged', { worker_id: id });
+
   let verifyPassed: boolean | null = null;
   if (options.verifyCmd) {
-    const r = spawnSync('/bin/sh', ['-c', options.verifyCmd], {
-      cwd: reconWorktree,
-      encoding: 'utf8',
-      timeout: 120000,
-    });
-    verifyPassed = (r.status ?? 1) === 0;
-    emit('orchestration.reconcile.verified', { verify_passed: verifyPassed, exit_code: r.status ?? null, merged });
+    verifyPassed = verifyTree(reconWorktree);
+    emit('orchestration.reconcile.verified', { verify_passed: verifyPassed, merged: kept });
+
+    if (!verifyPassed && options.bisect !== false && kept.length > 0) {
+      // Greedy leave-one-out: find a worker whose removal makes the set verify; quarantine
+      // it as the regression culprit. Repeat for multi-culprit until it passes or empties.
+      const trialId = `${options.reconId}-t`;
+      let guard = 0;
+      while (kept.length > 0 && guard < mergeable.length + 1) {
+        guard += 1;
+        let culprit: string | null = null;
+        for (const w of [...kept].reverse()) {
+          const subset = mergeable.filter((m) => kept.includes(m.workerId) && m.workerId !== w);
+          buildMerge(trialId, subset);
+          if (verifyTree(worktreePathFor(root, trialId))) {
+            culprit = w;
+            break;
+          }
+        }
+        tryGit(root, ['worktree', 'remove', '--force', worktreePathFor(root, trialId)]);
+        tryGit(root, ['branch', '-D', `wt/${trialId}`]);
+        const drop = culprit ?? kept[kept.length - 1]; // if no single removal fixes it, shed the most recent
+        quarantined.push({ workerId: drop, reason: 'verify regression' });
+        emit('orchestration.reconcile.bisected', { quarantined: drop, single_fix: culprit !== null });
+        kept = kept.filter((id) => id !== drop);
+        buildMerge(
+          options.reconId,
+          mergeable.filter((m) => kept.includes(m.workerId)),
+        );
+        verifyPassed = verifyTree(reconWorktree);
+        if (verifyPassed) break;
+      }
+    }
   }
-  return { reconId: options.reconId, reconWorktree, branch, merged, quarantined, verifyPassed };
+  return { reconId: options.reconId, reconWorktree, branch, merged: kept, quarantined, verifyPassed };
 }
 
 // ---- M11.3: dependency DAG (verifier-gated) + M11.5 spawn caps ----

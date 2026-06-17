@@ -193,12 +193,40 @@ test('RECONCILE: the verify command is a FINAL whole-set gate (verifyPassed=fals
   const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
   const fan = await runParallelWorkers({ root, workers: [{ workerId: 'v1', goal: 'write ok.txt', executor }] });
   const order = fan.workers.map((w) => ({ workerId: w.workerId, branch: w.branch, worktreePath: w.worktreePath }));
-  // No merge conflict, so the worker merges; the whole-set verify then fails (ok.txt present).
-  const recon = reconcileWorkers({ root, reconId: 'recon-verify', order, verifyCmd: 'test ! -f ok.txt' });
+  // bisect off: the worker merges; the whole-set verify then fails (ok.txt present).
+  const recon = reconcileWorkers({
+    root,
+    reconId: 'recon-verify',
+    order,
+    verifyCmd: 'test ! -f ok.txt',
+    bisect: false,
+  });
 
   assert.deepEqual(recon.merged, ['v1']);
   assert.equal(recon.quarantined.length, 0);
   assert.equal(recon.verifyPassed, false);
+});
+
+test('RECONCILE: bisect quarantines the regression culprit and keeps the verifying subset', async () => {
+  const root = tmpRepo();
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+  const fan = await runParallelWorkers({
+    root,
+    workers: [
+      { workerId: 'wgood', goal: 'write good.txt', executor },
+      { workerId: 'wbad', goal: 'write bad.txt', executor },
+    ],
+  });
+  const order = fan.workers.map((w) => ({ workerId: w.workerId, branch: w.branch, worktreePath: w.worktreePath }));
+  // verify fails while bad.txt is present → bisect should drop wbad and keep wgood.
+  const recon = reconcileWorkers({ root, reconId: 'recon-bisect', order, verifyCmd: 'test ! -f bad.txt' });
+
+  assert.equal(recon.verifyPassed, true);
+  assert.deepEqual(recon.merged, ['wgood']);
+  assert.equal(
+    recon.quarantined.some((q) => q.workerId === 'wbad' && /verify regression/.test(q.reason)),
+    true,
+  );
 });
 
 test('RECONCILE: a cross-file invariant passes only with all workers merged (final gate)', async () => {
