@@ -28,11 +28,23 @@ import { runVerifier, type VerifierResult } from './verifier.js';
 
 export type HarnessSliceState = 'completed' | 'blocked';
 
+// Pluggable executor: defaults to codex, but any agent CLI (claude -p, agy -p, ...) can
+// be driven behind the same evidence contract. DH's verifier/ledger/redaction read git
+// diff, which is executor-agnostic, so swapping the model changes only this function.
+export type HarnessExecutor = (opts: {
+  runDir: string;
+  cwd: string;
+  prompt: string;
+  timeoutMs?: number;
+  label?: string;
+}) => Promise<CodexExecResult>;
+
 export interface HarnessRunOptions {
   root: string;
   goal: string;
   contextExtras?: string;
   executorBin?: string;
+  executor?: HarnessExecutor;
   runId?: string;
   timeoutMs?: number;
   hooks?: HookHandler[];
@@ -456,8 +468,9 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     artifactRefs: ['context-bundle.json', 'context-provenance.json'],
   });
 
+  const runExec: HarnessExecutor = options.executor ?? ((o) => runCodexExec(o));
   const executor = await withExecutorBin(options.executorBin, () =>
-    runCodexExec({
+    runExec({
       runDir,
       cwd: root,
       prompt: executorPrompt,
