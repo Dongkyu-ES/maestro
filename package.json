@@ -22,6 +22,7 @@
     "harness:compare": "npm run build && node scripts/harness-compare.mjs",
     "harness:compare:self-test": "npm run build && node scripts/harness-compare.mjs --self-test",
     "harness:executors-compare": "npm run build && node scripts/harness-executors-compare.mjs",
+    "harness:orchestration-demo": "npm run build && node scripts/harness-orchestration-demo.mjs",
     "harness:review-custody-preflight": "node scripts/review-custody-preflight.mjs",
     "harness:review-custody-preflight:self-test": "node scripts/review-custody-preflight.mjs --self-test",
     "harness:review-custody-bootstrap": "node scripts/review-custody-bootstrap.mjs",

@@ -15,6 +15,35 @@ verdict over the ledger**, never a self-report; conflicts that fail verification
 **quarantined, not silently merged**. This is the OMC ReadPath/WritePath + gajae-receipt +
 ouroboros evidence-contract lesson applied to fan-out.
 
+## External reference: `../learn-claude-code` (s01→s20)
+
+A from-scratch "build the harness" course independently validates this plan's spine: its
+thesis is *"the 30-line `while` loop never changes (s01→s20); the 19 added mechanisms are all
+**layers around** it — the harness matured, not the model"* — i.e., DH's own-the-layer thesis.
+Borrow these working reference shapes (don't reinvent):
+
+- **s12 Task System** → M11.3: `.tasks/{id}.json {id,subject,status,owner,blockedBy}` + `can_start()` = all `blockedBy` are `completed`. This is the structured DAG we chose.
+- **s18 Worktree Isolation** → M11.1: `git worktree add .worktrees/<n> -b wt/<n> HEAD`; **task stays `pending` after binding** so auto-claim still works; refuse remove on uncommitted changes; lifecycle to an events log.
+- **s17 Autonomy** → coordinator: race-free `claim_task` only when `pending && !owner && can_start` (prevents last-writer-wins).
+- **s16 Team Protocols** → M11.5: `request_id` handshake state machine (shutdown/approval) — DH's existing SendMessage `shutdown_request`/`plan_approval_request` is the same pattern.
+- **s13/s14 Background + Cron** → the daemon: producer(scheduler)–queue–consumer(agent) split, dispatch only when idle (`lock.acquire(blocking=False)`), inject completion as a notification on the next turn.
+- **s06 Subagent** → M11.2: fresh context, **return summary/ref only** — our refs-not-raw invariant.
+
+**Adaptation (DH improves on the course):** s15 uses an ephemeral *destructive-read* file
+mailbox as the bus. DH instead routes worker results as **evidence refs appended to the
+hash-chained ledger** — durable + auditable, not consumed-on-read.
+
+## Load-bearing invariant the course does NOT have (do not regress)
+
+The course's completion is still **self-report**: a turn ends when the model stops calling
+tools (`stop_reason != "tool_use"`); there is no independent verifier/critic gating completion,
+and its state is file-based but not forgery-resistant. DH's net-new spine is exactly this gap:
+**completion is owned by the recomputable verifier over the hash-chained ledger, never by a
+worker's self-report.** The orchestrator therefore emits fan-in events with per-worker verifier
+verdicts — it never declares overall "done" from worker self-claims; acceptance is a separate
+verifier/coordinator step (M11.3/M11.4). Borrow the course's layer-attachment patterns; keep
+DH's verifier-as-completion-authority and redacted, hash-chained evidence.
+
 ## Existing primitives to reuse (no rebuild)
 - Pluggable executor: `runHarnessSlice({executor})` + `generic-cli-runner` (heterogeneous workers: codex/claude/agy).
 - Per-run hash-chained ledger + `captureToolEvidence` (redacted diff/status) + `runVerifier` (digest-bound diff).
