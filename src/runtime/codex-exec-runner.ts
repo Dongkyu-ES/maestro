@@ -169,7 +169,7 @@ export function runCodexExec(options: {
       clearInterval(cancelTimer);
       if (stdoutBuffer.trim()) consumeLine(stdoutBuffer);
       const exitCode = cancelled ? 130 : (code ?? (timedOut ? 124 : 1));
-      writeFileSync(join(options.runDir, 'codex-events.jsonl'), `${rawLines.join('\n')}\n`);
+      writeFileSync(join(options.runDir, 'codex-events.jsonl'), `${redact(rawLines.join('\n'))}\n`);
       const result: CodexExecResult = {
         label,
         cwd: options.cwd,

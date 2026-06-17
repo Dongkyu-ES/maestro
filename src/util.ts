@@ -286,6 +286,14 @@ export function redact(s: string): string {
   for (const re of SECRET_VALUE_PATTERNS) out = out.replace(re, '[REDACTED]');
   return out.replace(SECRET_KV_PATTERN, '$1[REDACTED]$3');
 }
+// True when text still contains something that SHOULD have been redacted. Shares the
+// redact() patterns as the single source of truth: redact(s) leaves no match, so this
+// returns false for already-redacted text and true for a raw leak.
+export function containsLikelySecret(s: string): boolean {
+  if ([...SECRET_VALUE_PATTERNS].some((re) => new RegExp(re.source).test(s))) return true;
+  if (new RegExp(SECRET_KV_PATTERN.source, 'i').test(s)) return true;
+  return new RegExp(SECRET_DB_URL_PATTERN.source).test(s);
+}
 export function sha256Text(text: string): string {
   return createHash('sha256').update(text).digest('hex');
 }

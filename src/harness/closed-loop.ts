@@ -5,7 +5,23 @@ import { homedir, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { appendRuntimeEvent, createRuntimeLedgerHeadBinding, readRuntimeEvents } from '../events/ledger.js';
 import { runCodexExec } from '../runtime/codex-exec-runner.js';
+import { redact } from '../util.js';
 import { runHarnessSlice, type HarnessRunReport } from './harness-run.js';
+
+export type ExecutorErrorClass = 'auth' | 'transient' | 'fatal';
+
+// Classify an executor/critic failure from its message so the loop can react instead
+// of crashing: transient (rate limit, network, timeout) is worth a bounded retry;
+// auth (401/credentials) and fatal stop the loop as an incident — neither is silently
+// passed (that would be the fail-open-on-a-gate anti-pattern).
+export function classifyExecutorError(message: string): ExecutorErrorClass {
+  const text = message.toLowerCase();
+  if (/\b401\b|unauthor|forbidden|\b403\b|invalid api key|authentication|credential|not logged in/.test(text))
+    return 'auth';
+  if (/\b429\b|rate.?limit|timeout|timed out|etimedout|econnreset|econnrefused|enotfound|network|temporarily|503|502|504|overloaded/.test(text))
+    return 'transient';
+  return 'fatal';
+}
 
 export interface CriticVerdict {
   met: boolean;
@@ -13,6 +29,13 @@ export interface CriticVerdict {
   unmet_criteria: string[];
   required_next: string[];
   confidence: number;
+  drift_suspected: boolean;
+}
+
+export interface VerifyResult {
+  ran: boolean;
+  exit_code: number | null;
+  passed: boolean;
 }
 
 export interface StallStrategy {
@@ -26,6 +49,8 @@ export interface LoopIteration {
   runDir: string;
   deterministicStatus: HarnessRunReport['verifier']['status'];
   deterministicState: HarnessRunReport['state'];
+  verify: VerifyResult;
+  changedFiles: string[];
   critic: CriticVerdict;
   done: boolean;
 }
@@ -50,15 +75,35 @@ const EVIDENCE_FILES = [
   'tool-verify-output.txt',
 ];
 
-function runVerifyCmd(root: string, cmd: string, outPath: string): void {
+function runVerifyCmd(root: string, cmd: string, runDir: string): VerifyResult {
   // Run the operator-supplied verification command and capture its REAL output as
   // objective behavioral evidence for the isolated critic (so completion rests on
-  // observed runtime behavior, not on code that merely looks correct).
+  // observed runtime behavior, not on code that merely looks correct). The exit code
+  // is recorded as STRUCTURED, digest-bound evidence so the deterministic gate can key
+  // on "exit_code passed" (not just "the command ran") — success != ran.
   const r = spawnSync('/bin/sh', ['-c', cmd], { cwd: root, encoding: 'utf8', timeout: 120000 });
+  const exitCode = r.status ?? null;
+  const result: VerifyResult = { ran: true, exit_code: exitCode, passed: exitCode === 0 };
   writeFileSync(
-    outPath,
-    `$ ${cmd}\nexit: ${r.status ?? 'null'}\n--- stdout ---\n${r.stdout || ''}\n--- stderr ---\n${r.stderr || ''}\n`,
+    join(runDir, 'tool-verify-output.txt'),
+    redact(`$ ${cmd}\nexit: ${exitCode ?? 'null'}\n--- stdout ---\n${r.stdout || ''}\n--- stderr ---\n${r.stderr || ''}\n`),
   );
+  writeFileSync(
+    join(runDir, 'tool-verify-result.json'),
+    `${JSON.stringify({ schema_version: 1, command: redact(cmd), ...result }, null, 2)}\n`,
+  );
+  return result;
+}
+
+function readChangedFiles(runDir: string): string[] {
+  const path = join(runDir, 'tool-execution-evidence.json');
+  if (!existsSync(path)) return [];
+  try {
+    const evidence = JSON.parse(readFileSync(path, 'utf8')) as { changed_files?: unknown };
+    return Array.isArray(evidence.changed_files) ? evidence.changed_files.map(String) : [];
+  } catch {
+    return [];
+  }
 }
 
 function loopRunDir(root: string, runId: string): string {
@@ -152,6 +197,7 @@ function normalizeCritic(value: Partial<CriticVerdict>): CriticVerdict {
     unmet_criteria: Array.isArray(value.unmet_criteria) ? value.unmet_criteria.map(String) : [],
     required_next: Array.isArray(value.required_next) ? value.required_next.map(String) : [],
     confidence: typeof value.confidence === 'number' ? value.confidence : 0,
+    drift_suspected: value.drift_suspected === true,
   };
 }
 
@@ -188,8 +234,10 @@ Read ONLY the files in this temp directory:
 
 Default verdict is NOT met. Reject theater: trivial or irrelevant tests, stubs, hardcoded returns, asserts that do not exercise the goal, and output unsupported by the diff. A passing test counts ONLY if it genuinely exercises the goal AND real behavior is visible in the verify output. Do not use executor transcript claims; none are provided.
 
+Also judge goal drift: set "drift_suspected" true if the change solves a DIFFERENT or narrower problem than the goal/acceptance contract, optimizes a proxy instead of the goal, or weakens/deletes the acceptance criteria themselves. drift_suspected is independent of "met".
+
 Return ONLY JSON with this exact shape:
-{"met":false,"theater_found":[],"unmet_criteria":[],"required_next":[],"confidence":0}`;
+{"met":false,"theater_found":[],"unmet_criteria":[],"required_next":[],"confidence":0,"drift_suspected":false}`;
   const result = await withIsolatedCodexHome(isolated.codexHome, () =>
     runCodexExec({
       runDir: isolated.cwd,
@@ -262,6 +310,7 @@ export async function runClosedLoop(options: {
   stall?: number;
   executorBin?: string;
   verifyCmd?: string;
+  transientRetryBudget?: number;
 }): Promise<LoopReport> {
   const root = resolve(options.root);
   const runId = `loop-${randomUUID()}`;
@@ -274,6 +323,8 @@ export async function runClosedLoop(options: {
   let previousUnmet: string[] = [];
   const unmetHistory: string[][] = [];
   const iterations: LoopIteration[] = [];
+  const transientRetryBudget = options.transientRetryBudget ?? 2;
+  let transientRetries = 0;
 
   appendRuntimeEvent(runDir, {
     runId,
@@ -289,24 +340,65 @@ export async function runClosedLoop(options: {
       type: 'loop.iteration',
       payload: { iteration: index, strategy, previous_unmet_criteria: previousUnmet },
     });
-    const slice = await withOptionalCodexBin(options.executorBin, () =>
-      runHarnessSlice({
-        root,
-        goal: buildIterationGoal({ goal: options.goal, strategy, previousUnmet }),
-        executorBin: options.executorBin,
-        runId: `${runId}-iter-${index}`,
-      }),
-    );
-    if (options.verifyCmd) runVerifyCmd(root, options.verifyCmd, join(slice.runDir, 'tool-verify-output.txt'));
-    const critic = await withOptionalCodexBin(options.executorBin, () =>
-      isolatedCritic({
-        root,
-        goal: options.goal,
-        acceptanceContract: options.acceptanceContract,
-        evidenceDir: slice.runDir,
-      }),
-    );
-    const deterministicPass = slice.state === 'completed' && slice.verifier.status === 'supported';
+    let slice: HarnessRunReport;
+    let verify: VerifyResult;
+    let critic: CriticVerdict;
+    try {
+      slice = await withOptionalCodexBin(options.executorBin, () =>
+        runHarnessSlice({
+          root,
+          goal: buildIterationGoal({ goal: options.goal, strategy, previousUnmet }),
+          executorBin: options.executorBin,
+          runId: `${runId}-iter-${index}`,
+        }),
+      );
+      // slice.runDir is repo-relative; resolve against root (which may differ from cwd).
+      const sliceRunDir = join(root, slice.runDir);
+      verify = options.verifyCmd
+        ? runVerifyCmd(root, options.verifyCmd, sliceRunDir)
+        : { ran: false, exit_code: null, passed: true };
+      critic = await withOptionalCodexBin(options.executorBin, () =>
+        isolatedCritic({
+          root,
+          goal: options.goal,
+          acceptanceContract: options.acceptanceContract,
+          evidenceDir: slice.runDir,
+        }),
+      );
+    } catch (error) {
+      // Classify rather than crash: a transient (rate-limit/network) failure earns a
+      // bounded retry; auth/fatal stop the loop as a recorded incident. The failure is
+      // never silently treated as "work done" (that would be fail-open on a gate).
+      const message = error instanceof Error ? error.message : String(error);
+      const errorClass = classifyExecutorError(message);
+      if (errorClass === 'transient') transientRetries += 1;
+      const willRetry = errorClass === 'transient' && transientRetries <= transientRetryBudget && index < maxIters;
+      appendRuntimeEvent(runDir, {
+        runId,
+        source: 'harness',
+        type: 'loop.executor_error',
+        payload: {
+          iteration: index,
+          error_class: errorClass,
+          message: redact(message),
+          will_retry: willRetry,
+          transient_retries: transientRetries,
+        },
+      });
+      if (willRetry) continue;
+      const incident = `executor ${errorClass} error: ${redact(message)}`;
+      appendRuntimeEvent(runDir, {
+        runId,
+        source: 'harness',
+        type: 'loop.blocked',
+        payload: { iteration: index, incident: true, error_class: errorClass, reason: incident },
+      });
+      return finalizeLoopReport({ runDir, runId, goal: options.goal, status: 'blocked', iterations, strategy, persistent: [incident] });
+    }
+
+    const deterministicPass =
+      slice.state === 'completed' && slice.verifier.status === 'supported' && (verify.ran ? verify.passed : true);
+    const changedFiles = readChangedFiles(join(root, slice.runDir));
     const done = deterministicPass && critic.met === true;
     const iteration: LoopIteration = {
       iteration: index,
@@ -314,11 +406,27 @@ export async function runClosedLoop(options: {
       runDir: slice.runDir,
       deterministicStatus: slice.verifier.status,
       deterministicState: slice.state,
+      verify,
+      changedFiles,
       critic,
       done,
     };
     iterations.push(iteration);
     unmetHistory.push(critic.unmet_criteria);
+
+    appendRuntimeEvent(runDir, {
+      runId,
+      source: 'harness',
+      type: 'loop.verify',
+      payload: {
+        iteration: index,
+        slice_run_id: slice.runId,
+        verify,
+        changed_files: changedFiles,
+        coverage_checked: verify.ran,
+        drift_suspected: critic.drift_suspected,
+      },
+    });
 
     appendRuntimeEvent(runDir, {
       runId,
@@ -354,31 +462,43 @@ export async function runClosedLoop(options: {
         type: 'loop.stalled',
         payload: { iteration: index, dominant_blocker: dominantBlocker(previousUnmet), stall: stallWindow },
       });
-      const strategyResult = await withOptionalCodexBin(options.executorBin, () =>
-        stallStrategist({ root, goal: options.goal, history: unmetHistory.flat() }),
-      );
-      strategy = strategyResult.new_strategy || strategy;
-      appendRuntimeEvent(runDir, {
-        runId,
-        source: 'harness',
-        type: 'loop.escalated',
-        payload: { iteration: index, strategy: strategyResult },
-      });
-      if (strategyResult.tool_to_create) {
-        await withOptionalCodexBin(options.executorBin, () =>
-          runHarnessSlice({
-            root,
-            goal: `Create the closed-loop support tool at ${strategyResult.tool_to_create?.path}.
+      try {
+        const strategyResult = await withOptionalCodexBin(options.executorBin, () =>
+          stallStrategist({ root, goal: options.goal, history: unmetHistory.flat() }),
+        );
+        strategy = strategyResult.new_strategy || strategy;
+        appendRuntimeEvent(runDir, {
+          runId,
+          source: 'harness',
+          type: 'loop.escalated',
+          payload: { iteration: index, strategy: strategyResult },
+        });
+        if (strategyResult.tool_to_create) {
+          await withOptionalCodexBin(options.executorBin, () =>
+            runHarnessSlice({
+              root,
+              goal: `Create the closed-loop support tool at ${strategyResult.tool_to_create?.path}.
 
 Purpose:
 ${strategyResult.tool_to_create?.purpose}
 
 Then continue with strategy:
 ${strategy}`,
-            executorBin: options.executorBin,
-            runId: `${runId}-tool-${index}`,
-          }),
-        );
+              executorBin: options.executorBin,
+              runId: `${runId}-tool-${index}`,
+            }),
+          );
+        }
+      } catch (error) {
+        // Escalation is best-effort: a strategist failure must not crash the loop. Record
+        // it and continue with the previous strategy.
+        const message = error instanceof Error ? error.message : String(error);
+        appendRuntimeEvent(runDir, {
+          runId,
+          source: 'harness',
+          type: 'loop.executor_error',
+          payload: { iteration: index, error_class: classifyExecutorError(message), message: redact(message), stage: 'escalation' },
+        });
       }
     }
   }

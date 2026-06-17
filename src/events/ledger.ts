@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { redact } from '../util.js';
 
 export type RuntimeEventSource =
   | 'web'
@@ -55,6 +56,15 @@ export function sanitizeJsonValue(value: unknown): unknown {
   return out;
 }
 
+export function redactJsonValue(value: unknown): unknown {
+  if (typeof value === 'string') return redact(value);
+  if (value === null || typeof value !== 'object') return value;
+  if (Array.isArray(value)) return value.map(redactJsonValue);
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) out[key] = redactJsonValue(item);
+  return out;
+}
+
 export function stableJson(value: unknown): string {
   if (value === null || typeof value !== 'object') return JSON.stringify(value);
   if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`;
@@ -91,7 +101,7 @@ export function readRuntimeEvents(runDir: string): RuntimeEventEnvelope[] {
 export function appendRuntimeEvent(runDir: string, input: AppendRuntimeEventInput): RuntimeEventEnvelope {
   mkdirSync(runDir, { recursive: true });
   const existing = readRuntimeEvents(runDir);
-  const payload = sanitizeJsonValue(input.payload || {}) as Record<string, unknown>;
+  const payload = redactJsonValue(sanitizeJsonValue(input.payload || {})) as Record<string, unknown>;
   const previous = existing.at(-1);
   const event: RuntimeEventEnvelope = {
     schema_version: 1,

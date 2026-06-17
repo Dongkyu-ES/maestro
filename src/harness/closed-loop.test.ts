@@ -32,6 +32,11 @@ const out = args.includes('-o') ? args[args.indexOf('-o') + 1] : null;
 const cwd = args.includes('-C') ? args[args.indexOf('-C') + 1] : process.cwd();
 const prompt = args.at(-1) || '';
 
+if (process.env.CLOSED_LOOP_EXECUTOR_MODE === 'auth') {
+  process.stderr.write('Error: 401 Unauthorized - not logged in\\n');
+  process.exit(1);
+}
+
 function emit(text) {
   process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 'fake-closed-loop' }) + '\\n');
   process.stdout.write(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text } }) + '\\n');
@@ -159,4 +164,47 @@ test('STALL->ESCALATE: repeated unmet criteria invokes stall strategist', async 
   const events = readRuntimeEvents(report.runDir);
   assert.equal(events.some((event) => event.type === 'loop.stalled'), true);
   assert.equal(events.some((event) => event.type === 'loop.escalated'), true);
+});
+
+test('AUTH FAILURE CLASSIFIED: executor 401 ends blocked with a classified incident, no crash', async () => {
+  const root = tmpRepo();
+  const report = await withEnv(
+    { CLOSED_LOOP_EXECUTOR_MODE: 'auth' },
+    () =>
+      runClosedLoop({
+        root,
+        goal: 'change target.txt to after',
+        acceptanceContract: 'target.txt must contain after',
+        maxIters: 2,
+        executorBin: fakeCodex(),
+      }),
+  );
+
+  assert.equal(report.status, 'blocked');
+  const events = readRuntimeEvents(report.runDir);
+  const errorEvent = events.find((event) => event.type === 'loop.executor_error');
+  assert.ok(errorEvent, 'a loop.executor_error event must be recorded');
+  assert.equal((errorEvent?.payload as { error_class?: string }).error_class, 'auth');
+});
+
+test('VERIFY EXIT GATES COMPLETION: a failing verify command blocks done even when slice + critic pass', async () => {
+  const root = tmpRepo();
+  const report = await withEnv(
+    { CLOSED_LOOP_EXECUTOR_MODE: 'edit', CLOSED_LOOP_CRITIC_MODE: 'pass' },
+    () =>
+      runClosedLoop({
+        root,
+        goal: 'change target.txt to after',
+        acceptanceContract: 'target.txt must contain after',
+        maxIters: 1,
+        executorBin: fakeCodex(),
+        verifyCmd: 'exit 3',
+      }),
+  );
+
+  assert.equal(report.status, 'blocked');
+  assert.equal(report.iterations[0]?.deterministicStatus, 'supported');
+  assert.equal(report.iterations[0]?.verify.exit_code, 3);
+  assert.equal(report.iterations[0]?.verify.passed, false);
+  assert.equal(report.iterations[0]?.done, false);
 });

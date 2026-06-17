@@ -12,6 +12,7 @@ import {
   type RuntimeLedgerHeadBinding,
 } from '../events/ledger.js';
 import { runCodexExec, type CodexExecResult } from '../runtime/codex-exec-runner.js';
+import { redact } from '../util.js';
 import { compileBaseRules, type BaseRuleSet } from './base-rules.js';
 import {
   buildContextBundle as buildCanonicalContextBundle,
@@ -254,8 +255,12 @@ function captureToolEvidence(options: {
   } catch {
     /* nothing to stage */
   }
-  const diffText = git(options.root, ['diff', '--binary', '--', '.', excludeRunDir]);
-  const statusText = git(options.root, ['status', '--porcelain', '--', '.', excludeRunDir]);
+  // Redact secrets BEFORE persisting or hashing: this evidence is copied into the
+  // isolated critic's temp dir and fed to a second executor process, so a raw secret
+  // in a diff (a committed .env, an inline key) would leak across the boundary. The
+  // digest-bound `diff` verifier re-reads these files, so hash over the redacted bytes.
+  const diffText = redact(git(options.root, ['diff', '--binary', '--', '.', excludeRunDir]));
+  const statusText = redact(git(options.root, ['status', '--porcelain', '--', '.', excludeRunDir]));
   writeFileSync(join(options.runDir, 'tool-git-diff.patch'), diffText);
   writeFileSync(join(options.runDir, 'tool-git-status.txt'), statusText);
   const changedFiles = changedFilesFromStatus(statusText);
