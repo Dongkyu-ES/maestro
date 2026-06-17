@@ -53,6 +53,7 @@ interface SubmittedNode {
   deps?: string[];
   executor?: string;
   purpose?: string;
+  accept?: { artifactPath?: unknown; sha256?: unknown };
 }
 
 // The deterministic router: declared executor wins, else purpose map, else codex default.
@@ -74,11 +75,23 @@ function routeSubmittedNodes(nodes: SubmittedNode[], registry: ExecutorRegistry)
   const routing: Array<{ id: string; kind: ExecutorKind }> = [];
   for (const n of nodes) {
     const route = routeNode(n, registry);
+    const acceptObject = n.accept && typeof n.accept === 'object' ? n.accept : null;
+    const accept =
+      n.accept === undefined
+        ? undefined
+        : acceptObject &&
+            typeof acceptObject.artifactPath === 'string' &&
+            typeof acceptObject.sha256 === 'string' &&
+            /^[a-fA-F0-9]{64}$/.test(acceptObject.sha256)
+          ? { artifactPath: acceptObject.artifactPath, sha256: acceptObject.sha256 }
+          : null;
+    if (accept === null) throw new Error(`invalid accept for node ${n.id}`);
     routed.push({
       id: n.id,
       goal: n.goal,
       deps: n.deps,
       executor: route.executor,
+      accept,
     });
     routing.push({ id: n.id, kind: route.kind });
   }
@@ -163,7 +176,8 @@ export function createOrchestratorServer(options: {
       if (req.method === 'POST' && url.pathname === '/graph') {
         if (!authToken)
           return json(401, {
-            error: 'graph submission requires an auth token; start orchestrate serve with --auth-token or AGENT_ORCH_TOKEN',
+            error:
+              'graph submission requires an auth token; start orchestrate serve with --auth-token or AGENT_ORCH_TOKEN',
           });
         if (!authed()) return json(401, { error: 'invalid auth token' });
         const chunks: Buffer[] = [];

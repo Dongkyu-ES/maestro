@@ -9,6 +9,7 @@ import {
   readRuntimeEvents,
 } from '../events/ledger.js';
 import { type HarnessExecutor, runHarnessSlice } from './harness-run.js';
+import { runVerifier } from './verifier.js';
 
 // M11 orchestrator: fan a task out to parallel workers, each isolated in its own git
 // worktree (so concurrent writers never collide — s18). Workers return evidence REFS
@@ -385,11 +386,17 @@ export function reconcileWorkers(options: {
 
 // ---- M11.3: dependency DAG (verifier-gated) + M11.5 spawn caps ----
 
+export interface NodeAcceptance {
+  artifactPath: string;
+  sha256: string;
+}
+
 export interface GraphNode {
   id: string;
   goal: string;
   deps?: string[];
   executor?: HarnessExecutor;
+  accept?: NodeAcceptance;
 }
 
 export type NodeState = 'supported' | 'blocked' | 'failed' | 'skipped';
@@ -397,6 +404,7 @@ export type NodeState = 'supported' | 'blocked' | 'failed' | 'skipped';
 export interface GraphNodeResult extends WorkerResult {
   deps: string[];
   nodeState: NodeState;
+  acceptance?: { status: string; reason: string; artifactPath: string } | null;
   skippedReason?: string;
 }
 
@@ -489,6 +497,7 @@ export async function runTaskGraph(options: {
           outputRef: null,
           deps: n.deps ?? [],
           nodeState: 'skipped',
+          acceptance: null,
           skippedReason: `unsupported deps: ${bad.join(', ')}`,
         };
         results.set(n.id, skipped);
@@ -532,13 +541,42 @@ export async function runTaskGraph(options: {
           goal: node.goal,
           executor: node.executor,
         });
+        const acceptance = node.accept
+          ? (() => {
+              const acc = runVerifier({
+                type: 'artifact',
+                root: worktreePath,
+                artifactRef: node.accept.artifactPath,
+                expectedSha256: node.accept.sha256,
+              });
+              const recorded = {
+                status: acc.status,
+                reason: acc.reason,
+                artifactPath: node.accept.artifactPath,
+              };
+              appendRuntimeEvent(parentRunDir, {
+                runId: parentRunId,
+                source: 'harness',
+                type: 'orchestration.acceptance',
+                payload: {
+                  node_id: node.id,
+                  status: recorded.status,
+                  artifact_path: recorded.artifactPath,
+                  reason: recorded.reason,
+                },
+              });
+              return recorded;
+            })()
+          : null;
         const nodeState: NodeState =
-          r.state === 'completed' && r.verifierStatus === 'supported'
+          r.state === 'completed' &&
+          r.verifierStatus === 'supported' &&
+          (!node.accept || acceptance?.status === 'supported')
             ? 'supported'
             : r.state === 'failed'
               ? 'failed'
               : 'blocked';
-        const nr: GraphNodeResult = { ...r, deps: node.deps ?? [], nodeState };
+        const nr: GraphNodeResult = { ...r, deps: node.deps ?? [], nodeState, acceptance };
         appendRuntimeEvent(parentRunDir, {
           runId: parentRunId,
           source: 'harness',

@@ -480,3 +480,21 @@ test('SERVER: unknown explicit executor is rejected before scheduling', async ()
     server.close();
   }
 });
+
+test('SERVER: malformed node accept contract is rejected before scheduling', async () => {
+  const root = tmpRepo();
+  const server = createOrchestratorServer({ root, registry: fakeRegistry(), authToken: 'secret' });
+  const port = await listen(server);
+  try {
+    const rejected = await post(
+      port,
+      '/graph',
+      { nodes: [{ id: 'x', goal: 'write x.txt', executor: 'codex', accept: { artifactPath: 'x.txt' } }] },
+      { 'x-agent-auth': 'secret' },
+    );
+    assert.equal(rejected.status, 400);
+    assert.equal(rejected.json.error, 'invalid accept for node x');
+  } finally {
+    server.close();
+  }
+});

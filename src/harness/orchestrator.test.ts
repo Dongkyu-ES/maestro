@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -133,6 +134,69 @@ test('DAG: a blocked dep (no change) skips downstream rather than running it', a
   assert.match(dependent?.skippedReason ?? '', /unsupported deps: base/);
   // downstream never spawned a worktree
   assert.equal(existsSync(join(root, '.agent', 'worktrees', 'dependent')), false);
+});
+
+test('DAG: declared artifact acceptance supports a node and unlocks dependents', async () => {
+  const root = tmpRepo();
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+  const artifactBytes = 'accepted artifact\n';
+  const sha256 = createHash('sha256').update(artifactBytes).digest('hex');
+
+  const report = await runTaskGraph({
+    root,
+    concurrency: 2,
+    nodes: [
+      {
+        id: 'artifact',
+        goal: 'write accepted.txt CONTENT accepted artifact',
+        executor,
+        accept: { artifactPath: 'accepted.txt', sha256 },
+      },
+      { id: 'dependent', goal: 'write dependent.txt', deps: ['artifact'], executor },
+    ],
+  });
+
+  const artifact = report.nodes.find((n) => n.workerId === 'artifact');
+  const dependent = report.nodes.find((n) => n.workerId === 'dependent');
+  assert.equal(artifact?.nodeState, 'supported');
+  assert.equal(artifact?.acceptance?.status, 'supported');
+  assert.equal(dependent?.nodeState, 'supported');
+  assert.equal(existsSync(join(root, '.agent', 'worktrees', 'dependent', 'dependent.txt')), true);
+});
+
+test('DAG: declared artifact acceptance blocks forged output and skips dependents', async () => {
+  const root = tmpRepo();
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+  const intendedSha256 = createHash('sha256').update('intended artifact\n').digest('hex');
+
+  const report = await runTaskGraph({
+    root,
+    concurrency: 2,
+    nodes: [
+      {
+        id: 'artifact',
+        goal: 'write accepted.txt CONTENT forged artifact',
+        executor,
+        accept: { artifactPath: 'accepted.txt', sha256: intendedSha256 },
+      },
+      { id: 'dependent', goal: 'write dependent.txt', deps: ['artifact'], executor },
+    ],
+  });
+
+  const artifact = report.nodes.find((n) => n.workerId === 'artifact');
+  const dependent = report.nodes.find((n) => n.workerId === 'dependent');
+  assert.equal(artifact?.state, 'completed');
+  assert.equal(artifact?.verifierStatus, 'supported');
+  assert.equal(artifact?.nodeState, 'blocked');
+  assert.notEqual(artifact?.acceptance?.status, 'supported');
+  assert.equal(dependent?.nodeState, 'skipped');
+  assert.equal(existsSync(join(root, '.agent', 'worktrees', 'dependent')), false);
+
+  const acceptanceEvents = readRuntimeEvents(report.parentRunDir).filter((e) => e.type === 'orchestration.acceptance');
+  assert.equal(acceptanceEvents.length, 1);
+  const payload = acceptanceEvents[0].payload as { status: string; node_id: string };
+  assert.equal(payload.node_id, 'artifact');
+  assert.notEqual(payload.status, 'supported');
 });
 
 test('DAG: cycles and dangling deps are rejected before any spawn', async () => {
