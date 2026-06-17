@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'node:crypto';
+import { randomUUID, timingSafeEqual } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
 import { resolve } from 'node:path';
 import { readRuntimeEvents } from '../events/ledger.js';
@@ -77,6 +77,7 @@ export async function runSubmittedGraph(options: {
   reconcile?: boolean;
   concurrency?: number;
   maxNodes?: number;
+  runId?: string;
 }) {
   const routed: GraphNode[] = options.nodes.map((n) => ({
     id: n.id,
@@ -91,6 +92,7 @@ export async function runSubmittedGraph(options: {
     nodes: routed,
     concurrency: options.concurrency,
     maxNodes: options.maxNodes,
+    runId: options.runId,
   });
   let reconcile: ReturnType<typeof reconcileWorkers> | undefined;
   if (options.reconcile) {
@@ -123,6 +125,12 @@ export function createOrchestratorServer(options: {
   const registry = options.registry ?? defaultExecutorRegistry();
   const host = options.host ?? '127.0.0.1';
   const authToken = options.authToken ?? process.env.AGENT_ORCH_TOKEN ?? '';
+
+  // In-memory job projection over the ledger SSOT: a graph runs in the background and its
+  // result is referenced by jobId == parentRunId, so /jobs/:id and the SSE event stream
+  // share one id. Lost on restart, but the run dirs (the real evidence) persist.
+  type Job = { status: 'running' | 'done' | 'error'; submittedAt: string; result?: unknown; error?: string };
+  const jobs = new Map<string, Job>();
 
   return createServer(async (req, res) => {
     const url = new URL(req.url || '/', `http://${host}`);
@@ -158,23 +166,73 @@ export function createOrchestratorServer(options: {
           return json(400, { error: 'invalid JSON body' });
         }
         if (!Array.isArray(body.nodes) || body.nodes.length === 0) return json(400, { error: 'nodes[] required' });
-        const result = await runSubmittedGraph({
+        // Async: return a jobId immediately; the graph runs in the background so long
+        // fan-outs don't hold the connection. Poll /jobs/:id, stream /runs/:id/events.
+        const jobId = `graph-${randomUUID()}`;
+        jobs.set(jobId, { status: 'running', submittedAt: new Date().toISOString() });
+        const submitted = { ...body };
+        void runSubmittedGraph({
           root,
           registry,
-          goal: body.goal,
-          nodes: body.nodes,
-          reconcile: body.reconcile === true,
-          reconcileVerifyCmd: body.verifyCmd,
-          concurrency: body.concurrency,
-          maxNodes: body.maxNodes,
-        });
-        return json(200, result);
+          goal: submitted.goal,
+          nodes: submitted.nodes as SubmittedNode[],
+          reconcile: submitted.reconcile === true,
+          reconcileVerifyCmd: submitted.verifyCmd,
+          concurrency: submitted.concurrency,
+          maxNodes: submitted.maxNodes,
+          runId: jobId,
+        })
+          .then((result) => jobs.set(jobId, { ...(jobs.get(jobId) as Job), status: 'done', result }))
+          .catch((err) =>
+            jobs.set(jobId, {
+              ...(jobs.get(jobId) as Job),
+              status: 'error',
+              error: err instanceof Error ? err.message : String(err),
+            }),
+          );
+        return json(202, { jobId, status: 'running' });
+      }
+
+      const jobMatch = url.pathname.match(/^\/jobs\/([\w-]+)$/);
+      if (req.method === 'GET' && jobMatch) {
+        const job = jobs.get(jobMatch[1]);
+        if (!job) return json(404, { error: 'unknown job' });
+        return json(200, { jobId: jobMatch[1], ...job });
       }
 
       const eventsMatch = url.pathname.match(/^\/runs\/([\w-]+)\/events$/);
       if (req.method === 'GET' && eventsMatch) {
         const runDir = resolve(root, '.agent', 'runs', eventsMatch[1]);
-        return json(200, { runId: eventsMatch[1], events: readRuntimeEvents(runDir) });
+        // Real SSE: stream new ledger events as they append; end when the job settles.
+        res.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache',
+          connection: 'keep-alive',
+        });
+        let sent = 0;
+        const tick = () => {
+          for (const event of readRuntimeEvents(runDir).slice(sent))
+            res.write(`event: runtime\ndata: ${JSON.stringify(event)}\n\n`);
+          sent = readRuntimeEvents(runDir).length;
+          const job = jobs.get(eventsMatch[1]);
+          if (job && job.status !== 'running') {
+            res.write(`event: end\ndata: ${JSON.stringify({ status: job.status })}\n\n`);
+            cleanup();
+            res.end();
+          }
+        };
+        const timer = setInterval(tick, 300);
+        const deadline = setTimeout(() => {
+          cleanup();
+          res.end();
+        }, 120000);
+        function cleanup() {
+          clearInterval(timer);
+          clearTimeout(deadline);
+        }
+        req.on('close', cleanup);
+        tick();
+        return;
       }
 
       return json(404, { error: 'not found' });

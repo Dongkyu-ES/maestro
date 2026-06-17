@@ -5,8 +5,8 @@ import { join, resolve } from 'node:path';
 import {
   appendRuntimeEvent,
   createRuntimeLedgerHeadBinding,
-  readRuntimeEvents,
   type RuntimeLedgerHeadBinding,
+  readRuntimeEvents,
 } from '../events/ledger.js';
 import { type HarnessExecutor, runHarnessSlice } from './harness-run.js';
 
@@ -143,10 +143,21 @@ export async function runIsolatedWorker(options: {
 }): Promise<WorkerResult> {
   const root = resolve(options.root);
   const { branch, worktreePath } = createWorktree(root, options.workerId);
-  return runWorkerSlice({ worktreePath, branch, workerId: options.workerId, goal: options.goal, executor: options.executor, timeoutMs: options.timeoutMs });
+  return runWorkerSlice({
+    worktreePath,
+    branch,
+    workerId: options.workerId,
+    goal: options.goal,
+    executor: options.executor,
+    timeoutMs: options.timeoutMs,
+  });
 }
 
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T, index: number) => Promise<R>): Promise<R[]> {
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  fn: (item: T, index: number) => Promise<R>,
+): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let next = 0;
   const cap = Math.max(1, Math.min(limit, items.length));
@@ -195,22 +206,32 @@ export async function runParallelWorkers(options: {
     return { spec, branch, worktreePath };
   });
 
-  const workers = await mapWithConcurrency(prepared, options.concurrency ?? 4, async ({ spec, branch, worktreePath }) => {
-    const result = await runWorkerSlice({ worktreePath, branch, workerId: spec.workerId, goal: spec.goal, executor: spec.executor });
-    appendRuntimeEvent(parentRunDir, {
-      runId: parentRunId,
-      source: 'harness',
-      type: 'orchestration.joined',
-      payload: {
-        worker_id: result.workerId,
-        state: result.state,
-        verifier_status: result.verifierStatus,
-        output_ref: result.outputRef, // ref, not raw
-      },
-      artifactRefs: result.runDir ? [join(result.worktreePath, result.runDir, 'harness-run-report.json')] : [],
-    });
-    return result;
-  });
+  const workers = await mapWithConcurrency(
+    prepared,
+    options.concurrency ?? 4,
+    async ({ spec, branch, worktreePath }) => {
+      const result = await runWorkerSlice({
+        worktreePath,
+        branch,
+        workerId: spec.workerId,
+        goal: spec.goal,
+        executor: spec.executor,
+      });
+      appendRuntimeEvent(parentRunDir, {
+        runId: parentRunId,
+        source: 'harness',
+        type: 'orchestration.joined',
+        payload: {
+          worker_id: result.workerId,
+          state: result.state,
+          verifier_status: result.verifierStatus,
+          output_ref: result.outputRef, // ref, not raw
+        },
+        artifactRefs: result.runDir ? [join(result.worktreePath, result.runDir, 'harness-run-report.json')] : [],
+      });
+      return result;
+    },
+  );
 
   const supportedCount = workers.filter((w) => w.state === 'completed' && w.verifierStatus === 'supported').length;
   appendRuntimeEvent(parentRunDir, {
@@ -245,7 +266,10 @@ export interface ReconcileResult {
 
 function tryGit(root: string, args: string[]): { ok: boolean; output: string } {
   try {
-    return { ok: true, output: execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+    return {
+      ok: true,
+      output: execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }),
+    };
   } catch (err) {
     const e = err as { stdout?: string; stderr?: string; message?: string };
     return { ok: false, output: String(e.stdout || '') + String(e.stderr || e.message || '') };
@@ -272,7 +296,8 @@ export function reconcileWorkers(options: {
   const merged: string[] = [];
   const quarantined: Array<{ workerId: string; reason: string }> = [];
   const emit = (type: string, payload: Record<string, unknown>) => {
-    if (options.parentRunDir) appendRuntimeEvent(options.parentRunDir, { runId: options.reconId, source: 'harness', type, payload });
+    if (options.parentRunDir)
+      appendRuntimeEvent(options.parentRunDir, { runId: options.reconId, source: 'harness', type, payload });
   };
 
   for (const w of options.order) {
@@ -294,7 +319,11 @@ export function reconcileWorkers(options: {
       continue;
     }
     if (options.verifyCmd) {
-      const r = spawnSync('/bin/sh', ['-c', options.verifyCmd], { cwd: reconWorktree, encoding: 'utf8', timeout: 120000 });
+      const r = spawnSync('/bin/sh', ['-c', options.verifyCmd], {
+        cwd: reconWorktree,
+        encoding: 'utf8',
+        timeout: 120000,
+      });
       if ((r.status ?? 1) !== 0) {
         git(reconWorktree, ['reset', '--hard', preSha]); // undo this worker's merge
         quarantined.push({ workerId: w.workerId, reason: `verify failed (exit ${r.status ?? 'null'})` });
@@ -345,7 +374,8 @@ function validateGraph(nodes: GraphNode[], maxNodes: number): void {
     if (ids.has(n.id)) throw new Error(`duplicate node id: ${n.id}`);
     ids.add(n.id);
   }
-  for (const n of nodes) for (const d of n.deps ?? []) if (!ids.has(d)) throw new Error(`node ${n.id} depends on unknown node ${d}`);
+  for (const n of nodes)
+    for (const d of n.deps ?? []) if (!ids.has(d)) throw new Error(`node ${n.id} depends on unknown node ${d}`);
   // Kahn's algorithm: if any node remains, there is a cycle.
   const indeg = new Map(nodes.map((n) => [n.id, (n.deps ?? []).length]));
   const queue = nodes.filter((n) => (n.deps ?? []).length === 0).map((n) => n.id);
@@ -353,10 +383,11 @@ function validateGraph(nodes: GraphNode[], maxNodes: number): void {
   while (queue.length) {
     const id = queue.shift() as string;
     seen += 1;
-    for (const n of nodes) if ((n.deps ?? []).includes(id)) {
-      indeg.set(n.id, (indeg.get(n.id) as number) - 1);
-      if (indeg.get(n.id) === 0) queue.push(n.id);
-    }
+    for (const n of nodes)
+      if ((n.deps ?? []).includes(id)) {
+        indeg.set(n.id, (indeg.get(n.id) as number) - 1);
+        if (indeg.get(n.id) === 0) queue.push(n.id);
+      }
   }
   if (seen !== nodes.length) throw new Error('graph has a cycle');
 }
@@ -370,12 +401,13 @@ export async function runTaskGraph(options: {
   nodes: GraphNode[];
   concurrency?: number;
   maxNodes?: number;
+  runId?: string;
 }): Promise<GraphReport> {
   const root = resolve(options.root);
   const maxNodes = options.maxNodes ?? 32;
   validateGraph(options.nodes, maxNodes);
 
-  const parentRunId = `graph-${randomUUID()}`;
+  const parentRunId = options.runId ?? `graph-${randomUUID()}`;
   const parentRunDir = join(root, '.agent', 'runs', parentRunId);
   mkdirSync(parentRunDir, { recursive: true });
   appendRuntimeEvent(parentRunDir, {
@@ -400,13 +432,24 @@ export async function runTaskGraph(options: {
         const bad = (n.deps ?? []).filter((d) => !isSupported(d));
         state.set(n.id, 'skipped');
         const skipped: GraphNodeResult = {
-          workerId: n.id, branch: `wt/${n.id}`, worktreePath: worktreePathFor(root, n.id), runDir: null,
-          state: 'failed', verifierStatus: null, diffRef: null, diffSha256: null, outputRef: null,
-          deps: n.deps ?? [], nodeState: 'skipped', skippedReason: `unsupported deps: ${bad.join(', ')}`,
+          workerId: n.id,
+          branch: `wt/${n.id}`,
+          worktreePath: worktreePathFor(root, n.id),
+          runDir: null,
+          state: 'failed',
+          verifierStatus: null,
+          diffRef: null,
+          diffSha256: null,
+          outputRef: null,
+          deps: n.deps ?? [],
+          nodeState: 'skipped',
+          skippedReason: `unsupported deps: ${bad.join(', ')}`,
         };
         results.set(n.id, skipped);
         appendRuntimeEvent(parentRunDir, {
-          runId: parentRunId, source: 'harness', type: 'orchestration.skipped',
+          runId: parentRunId,
+          source: 'harness',
+          type: 'orchestration.skipped',
           payload: { node_id: n.id, reason: skipped.skippedReason },
         });
       }
@@ -416,7 +459,9 @@ export async function runTaskGraph(options: {
     if (ready.length === 0) break;
     waves += 1;
     appendRuntimeEvent(parentRunDir, {
-      runId: parentRunId, source: 'harness', type: 'orchestration.stage.advanced',
+      runId: parentRunId,
+      source: 'harness',
+      type: 'orchestration.stage.advanced',
       payload: { wave: waves, node_ids: ready.map((n) => n.id) },
     });
 
@@ -424,21 +469,45 @@ export async function runTaskGraph(options: {
     const prepared = ready.map((n) => ({ node: n, ...createWorktree(root, n.id) }));
     for (const { node } of prepared) {
       appendRuntimeEvent(parentRunDir, {
-        runId: parentRunId, source: 'harness', type: 'orchestration.spawned',
+        runId: parentRunId,
+        source: 'harness',
+        type: 'orchestration.spawned',
         payload: { node_id: node.id, deps: node.deps ?? [], goal: node.goal },
       });
     }
-    const waveResults = await mapWithConcurrency(prepared, options.concurrency ?? 4, async ({ node, branch, worktreePath }) => {
-      const r = await runWorkerSlice({ worktreePath, branch, workerId: node.id, goal: node.goal, executor: node.executor });
-      const nodeState: NodeState = r.state === 'completed' && r.verifierStatus === 'supported' ? 'supported' : r.state === 'failed' ? 'failed' : 'blocked';
-      const nr: GraphNodeResult = { ...r, deps: node.deps ?? [], nodeState };
-      appendRuntimeEvent(parentRunDir, {
-        runId: parentRunId, source: 'harness', type: 'orchestration.joined',
-        payload: { node_id: node.id, node_state: nodeState, verifier_status: r.verifierStatus, output_ref: r.outputRef },
-        artifactRefs: r.runDir ? [join(r.worktreePath, r.runDir, 'harness-run-report.json')] : [],
-      });
-      return nr;
-    });
+    const waveResults = await mapWithConcurrency(
+      prepared,
+      options.concurrency ?? 4,
+      async ({ node, branch, worktreePath }) => {
+        const r = await runWorkerSlice({
+          worktreePath,
+          branch,
+          workerId: node.id,
+          goal: node.goal,
+          executor: node.executor,
+        });
+        const nodeState: NodeState =
+          r.state === 'completed' && r.verifierStatus === 'supported'
+            ? 'supported'
+            : r.state === 'failed'
+              ? 'failed'
+              : 'blocked';
+        const nr: GraphNodeResult = { ...r, deps: node.deps ?? [], nodeState };
+        appendRuntimeEvent(parentRunDir, {
+          runId: parentRunId,
+          source: 'harness',
+          type: 'orchestration.joined',
+          payload: {
+            node_id: node.id,
+            node_state: nodeState,
+            verifier_status: r.verifierStatus,
+            output_ref: r.outputRef,
+          },
+          artifactRefs: r.runDir ? [join(r.worktreePath, r.runDir, 'harness-run-report.json')] : [],
+        });
+        return nr;
+      },
+    );
     for (const nr of waveResults) {
       state.set(nr.workerId, nr.nodeState);
       results.set(nr.workerId, nr);
@@ -448,12 +517,19 @@ export async function runTaskGraph(options: {
   const ordered = options.nodes.map((n) => results.get(n.id) as GraphNodeResult).filter(Boolean);
   const supportedCount = ordered.filter((r) => r.nodeState === 'supported').length;
   appendRuntimeEvent(parentRunDir, {
-    runId: parentRunId, source: 'harness', type: 'orchestration.fanin',
+    runId: parentRunId,
+    source: 'harness',
+    type: 'orchestration.fanin',
     payload: { node_count: ordered.length, supported_count: supportedCount, waves },
   });
   const report: GraphReport = {
-    schema_version: 1, parentRunId, parentRunDir, goal: options.goal,
-    nodes: ordered, supportedCount, waves,
+    schema_version: 1,
+    parentRunId,
+    parentRunDir,
+    goal: options.goal,
+    nodes: ordered,
+    supportedCount,
+    waves,
     ledgerHead: createRuntimeLedgerHeadBinding(readRuntimeEvents(parentRunDir)),
   };
   writeFileSync(join(parentRunDir, 'graph-report.json'), `${JSON.stringify(report, null, 2)}\n`);

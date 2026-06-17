@@ -79,12 +79,55 @@ function post(
   });
 }
 
-test('SERVER: routes a structured DAG to executors and runs it verifier-gated', async () => {
+function get(port: number, path: string, headers: Record<string, string> = {}): Promise<{ status: number; json: any }> {
+  return new Promise((resolveReq, reject) => {
+    const req = request({ host: '127.0.0.1', port, path, method: 'GET', headers }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (c) => chunks.push(Buffer.from(c)));
+      res.on('end', () =>
+        resolveReq({ status: res.statusCode || 0, json: JSON.parse(Buffer.concat(chunks).toString() || '{}') }),
+      );
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+async function pollJob(port: number, jobId: string, headers: Record<string, string> = {}): Promise<any> {
+  for (let i = 0; i < 200; i += 1) {
+    const r = await get(port, `/jobs/${jobId}`, headers);
+    if (r.json.status !== 'running') return r.json;
+    await new Promise((res) => setTimeout(res, 50));
+  }
+  throw new Error('job did not settle');
+}
+
+// Collect an SSE stream until the server emits its `end` event (job settled).
+function sse(port: number, path: string): Promise<string> {
+  return new Promise((resolveReq, reject) => {
+    const req = request({ host: '127.0.0.1', port, path, method: 'GET' }, (res) => {
+      let buf = '';
+      res.setEncoding('utf8');
+      res.on('data', (c) => {
+        buf += c;
+        if (buf.includes('event: end')) {
+          res.destroy();
+          resolveReq(buf);
+        }
+      });
+      res.on('end', () => resolveReq(buf));
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+test('SERVER: async job routes a DAG, settles done, and streams ledger events over SSE', async () => {
   const root = tmpRepo();
   const server = createOrchestratorServer({ root, registry: fakeRegistry() });
   const port = await listen(server);
   try {
-    const res = await post(port, '/graph', {
+    const submit = await post(port, '/graph', {
       goal: 'server dag',
       reconcile: true,
       nodes: [
@@ -92,15 +135,23 @@ test('SERVER: routes a structured DAG to executors and runs it verifier-gated', 
         { id: 'api', goal: 'write api.txt', deps: ['schema'], purpose: 'research' }, // purpose→claude
       ],
     });
-    assert.equal(res.status, 200);
-    assert.equal(res.json.graph.supportedCount, 2);
-    assert.equal(res.json.graph.waves, 2);
-    // deterministic routing: explicit kind, then purpose map.
-    assert.deepEqual(res.json.routing, [
+    assert.equal(submit.status, 202);
+    assert.ok(submit.json.jobId);
+
+    const job = await pollJob(port, submit.json.jobId);
+    assert.equal(job.status, 'done');
+    assert.equal(job.result.graph.supportedCount, 2);
+    assert.equal(job.result.graph.waves, 2);
+    assert.deepEqual(job.result.routing, [
       { id: 'schema', kind: 'codex' },
       { id: 'api', kind: 'claude' },
     ]);
-    assert.deepEqual(res.json.reconcile.merged.sort(), ['api', 'schema']);
+    assert.deepEqual(job.result.reconcile.merged.sort(), ['api', 'schema']);
+
+    // SSE replays the parent ledger and ends when the job settled.
+    const stream = await sse(port, `/runs/${submit.json.jobId}/events`);
+    assert.ok(stream.includes('orchestration.fanin'), 'SSE carries ledger events');
+    assert.ok(stream.includes('event: end'), 'SSE ends on settle');
   } finally {
     server.close();
   }
@@ -114,8 +165,10 @@ test('SERVER: /health is open; /graph requires the auth token when configured', 
     const denied = await post(port, '/graph', { nodes: [{ id: 'x', goal: 'write x.txt' }] });
     assert.equal(denied.status, 401);
     const ok = await post(port, '/graph', { nodes: [{ id: 'x', goal: 'write x.txt' }] }, { 'x-agent-auth': 'secret' });
-    assert.equal(ok.status, 200);
-    assert.equal(ok.json.graph.supportedCount, 1);
+    assert.equal(ok.status, 202);
+    const job = await pollJob(port, ok.json.jobId, { 'x-agent-auth': 'secret' });
+    assert.equal(job.status, 'done');
+    assert.equal(job.result.graph.supportedCount, 1);
   } finally {
     server.close();
   }
