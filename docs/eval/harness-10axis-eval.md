@@ -46,7 +46,20 @@ evidence from this codebase, then independently re-scored by Codex and reconcile
 | 10 | Philosophy/differentiation | 5 | Sharp, defensible thesis: completion is declared only by the product's recomputable verifier over a product-owned ledger — never by a model, vendor CLI, or review prose. Proven adversarially this session. (All 7 wiki frameworks scored 5 here.) |
 | | **Total (50)** | **38 (Claude)** | spiky specialist: verification/state/philosophy = 5, orchestration/tools/self-improve = 3, DX = 2 |
 
-## Extended comparison matrix (wiki 7 + DH)
+## Same-basis re-scoring of the 7 references
+
+The 7 reference scores are **not** casual imports: each was derived by the same method used
+for DH — per-axis 1–5 with file citations, then Claude↔Codex cross-validated against the real
+source (see each `_개요.md`; every framework has a recorded "점수 보정" reconciliation, e.g.
+Codex pulled OMC 49→44, fable-ish 38→33, Claude Code down 5 axes). Their source is not on this
+machine, so the basis for the 7 is each project's documented code-cited cross-validation; DH's
+basis is live source here, scored by the same evaluator pair. Method parity, different evidence
+locus — stated plainly so the matrix isn't over-read as a single live benchmark.
+
+Re-summing each row from its per-axis evidence surfaced one wiki arithmetic slip: **OMC sums to
+45** (5+5+4+5+4+4+4+5+4+5), though the wiki states 44. The corrected per-axis total is used below.
+
+## Extended comparison matrix (wiki 7 + DH) — all 10 axes
 
 | Axis | Claude Code | Codex | OMC | gajae | ouroboros | fable-ish | 내패턴 | **DH (Claude)** |
 |------|---|---|---|---|---|---|---|---|
@@ -60,7 +73,9 @@ evidence from this codebase, then independently re-scored by Codex and reconcile
 | State | 4 | 5 | 5 | 5 | 5 | 4 | 4 | **5** |
 | Deploy/DX | 4 | 5 | 4 | 4 | 4 | 3 | 3 | **2** |
 | Philosophy | 5 | 5 | 5 | 5 | 5 | 5 | 5 | **5** |
-| **Total** | 42 | 46 | 44 | 43 | 45 | 33 | 42 | **38** |
+| **Total** | 42 | 46 | 45¹ | 43 | 45 | 33 | 42 | **38** |
+
+¹ wiki states 44; per-axis sum is 45 (wiki arithmetic slip).
 
 Reading: DH is the **verification + state specialist** — it ties/beats everyone on Verification
 (5, with 내패턴) and State (5), and holds a sharp Philosophy (5), but is deliberately thin on
@@ -93,9 +108,9 @@ the rubric's credibility signal: two models with the same yardstick converged on
 
 ## Final reconciled placement
 
-| | Codex | ouroboros | OMC | gajae | Claude Code | 내패턴 | **DH** | fable-ish |
+| | Codex | OMC | ouroboros | gajae | Claude Code | 내패턴 | **DH** | fable-ish |
 |---|---|---|---|---|---|---|---|---|
-| Total /50 | 46 | 45 | 44 | 43 | 42 | 42 | **40** | 33 |
+| Total /50 | 46 | 45 | 45 | 43 | 42 | 42 | **40** | 33 |
 
 DH lands just below the mature generalist cluster (42–46) and well above the lean specialist
 (fable-ish 33) — consistent with a young **evidence-layer specialist**: it ties the best on
