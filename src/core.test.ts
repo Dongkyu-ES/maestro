@@ -31,7 +31,13 @@ import {
   startRun,
   updateTask,
 } from './core.js';
-import { appendRuntimeEvent, createRuntimeLedgerHeadBinding, envelopeHash, readRuntimeEvents } from './events/ledger.js';
+import {
+  appendRuntimeEvent,
+  createRuntimeLedgerHeadBinding,
+  envelopeHash,
+  payloadHash,
+  readRuntimeEvents,
+} from './events/ledger.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
@@ -581,6 +587,56 @@ test('init, task, basic run lifecycle creates v0 artifacts', async () => {
   ]) {
     assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, artifact)), true, artifact);
   }
+});
+
+test('collectRun completes honest passing run when ledger verifier supports events', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('ledger supported task', dir);
+  const run = createRun(task.id, {}, dir);
+  await startForEvidence(run, dir);
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.status, 'completed');
+  assert.equal(collected.decision, 'pass');
+  const events = readRuntimeEvents(join(dir, '.agent', 'runs', run.id));
+  const verifierIndex = events.findIndex((event) => event.type === 'verifier.completed');
+  const completedIndex = events.findIndex((event) => event.type === 'run.completed');
+  assert.notEqual(verifierIndex, -1);
+  assert.notEqual(completedIndex, -1);
+  assert.equal(events[verifierIndex].payload.status, 'supported');
+  assert.equal(verifierIndex < completedIndex, true);
+});
+
+test('collectRun blocks passing heuristic when ledger hash chain is tampered', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('ledger tamper task', dir);
+  const run = createRun(task.id, {}, dir);
+  await startForEvidence(run, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const events = readRuntimeEvents(runDir);
+  assert.equal(events.length >= 3, true);
+  events[1].payload = { ...events[1].payload, forged: true };
+  events[1].payload_sha256 = payloadHash(events[1].payload);
+  writeFileSync(join(runDir, 'events.jsonl'), `${events.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.status, 'failed');
+  assert.equal(collected.decision, 'blocked');
+  const collectedEvents = readRuntimeEvents(runDir);
+  assert.equal(
+    collectedEvents.some((event) => event.type === 'run.completed'),
+    false,
+  );
+  assert.equal(
+    collectedEvents.some((event) => event.type === 'run.failed'),
+    true,
+  );
+  const verifierEvent = collectedEvents.find((event) => event.type === 'verifier.completed');
+  assert.ok(verifierEvent);
+  assert.equal(verifierEvent.payload.status, 'blocked');
+  const review = readFileSync(join(runDir, 'review.md'), 'utf8');
+  assert.match(review, /## Blocking Issues\n- Ledger verifier rejected the run: broken event hash chain/);
 });
 
 test('promotion engine classifies a passing run into a memory candidate', async () => {

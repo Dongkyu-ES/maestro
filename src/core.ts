@@ -24,6 +24,7 @@ import {
   validateRuntimeLedger,
 } from './events/ledger.js';
 import { skillContractIssuesForRun } from './harness/skill-contracts.js';
+import { runVerifier } from './harness/verifier.js';
 import { evaluatePermission } from './policy/permission-broker.js';
 import { findProjectedRun, type RuntimeProjection, rebuildRuntimeProjection } from './projection/projection.js';
 import { writeProjectionSqlite } from './projection/sqlite-store.js';
@@ -1569,6 +1570,18 @@ export function collectRun(runId: string, cwd = process.cwd()): RunMeta {
     writeSkillUsageIssuesIntoReview(runDir, skillIssues);
     decision = 'changes_requested';
   }
+  const ledgerVerdict = runVerifier({ type: 'ledger', root: runDir, events: readRuntimeEvents(runDir) });
+  appendRuntimeEvent(runDir, {
+    runId: runMeta.id,
+    source: 'runtime-manager',
+    type: 'verifier.completed',
+    payload: ledgerVerdict as unknown as Record<string, unknown>,
+    artifactRefs: ['events.jsonl'],
+  });
+  if (decision === 'pass' && ledgerVerdict.status !== 'supported') {
+    writeLedgerVerifierIssueIntoReview(runDir, ledgerVerdict.reason);
+    decision = 'blocked';
+  }
   writeNextActions(runDir, decision);
   if (decision !== 'pass')
     createApproval(
@@ -1588,7 +1601,14 @@ export function collectRun(runId: string, cwd = process.cwd()): RunMeta {
     runId: runMeta.id,
     source: 'runtime-manager',
     type: decision === 'pass' ? 'run.completed' : 'run.failed',
-    payload: { decision, status: runMeta.status, exit_code: runMeta.exit_code, runtime_label: 'run_lifecycle' },
+    payload: {
+      decision,
+      status: runMeta.status,
+      exit_code: runMeta.exit_code,
+      runtime_label: 'run_lifecycle',
+      ledger_verifier_status: ledgerVerdict.status,
+      ledger_verifier_reason: ledgerVerdict.reason,
+    },
     artifactRefs: ['review.md', 'result.md', 'closed-loop-report.md', 'closed-loop-report.json'],
   });
   writeFileSync(join(runDir, 'run.yaml'), yaml(runMeta as unknown as Record<string, unknown>));
@@ -2177,6 +2197,15 @@ function writeVerificationIssuesIntoReview(runDir: string, issues: string[]): vo
   next = replaceReviewSection(next, 'System Patch Suggestions', 'Keep hard verification failures visible in review and closed-loop reports.');
   next = replaceReviewSection(next, 'Closed Loop Verification Failures', issueLines);
   writeFileSync(reviewPath, `${next.trim()}\n`);
+}
+function writeLedgerVerifierIssueIntoReview(runDir: string, reason: string): void {
+  const reviewPath = join(runDir, 'review.md');
+  const current = existsSync(reviewPath) ? readFileSync(reviewPath, 'utf8') : '# Review\n';
+  const next = replaceReviewSection(current, 'Decision', 'blocked');
+  writeFileSync(
+    reviewPath,
+    `${next.trim()}\n\n## Blocking Issues\n- Ledger verifier rejected the run: ${reason}\n`,
+  );
 }
 function writeReportQualityIssuesIntoReview(runDir: string, issues: string[]): void {
   const reviewPath = join(runDir, 'review.md');
