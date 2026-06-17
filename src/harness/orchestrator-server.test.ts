@@ -176,8 +176,8 @@ async function pollJob(server: Server, jobId: string, headers: Record<string, st
 }
 
 // Collect an SSE stream until the server emits its `end` event (job settled).
-function sse(server: Server, path: string): Promise<string> {
-  return dispatch(server, 'GET', path, undefined).then((res) => res.text);
+function sse(server: Server, path: string, headers: Record<string, string> = {}): Promise<string> {
+  return dispatch(server, 'GET', path, undefined, headers).then((res) => res.text);
 }
 
 test('SERVER: async job routes a DAG, settles done, and streams ledger events over SSE', async () => {
@@ -256,6 +256,121 @@ test('SERVER: a restarted daemon recovers a finished job from disk (ledger SSOT)
     assert.equal(unknown.status, 404);
   } finally {
     s2.close();
+  }
+});
+
+test('SERVER: invalid graph is recoverable, not a durable 404', async () => {
+  const root = tmpRepo();
+  const reg = fakeRegistry();
+  const s1 = createOrchestratorServer({ root, registry: reg, authToken: 'secret' });
+  const p1 = await listen(s1);
+  let jobId: string;
+  try {
+    const submit = await post(
+      p1,
+      '/graph',
+      {
+        nodes: [
+          { id: 'a', goal: 'write a.txt', deps: ['b'], executor: 'codex' },
+          { id: 'b', goal: 'write b.txt', deps: ['a'], executor: 'codex' },
+        ],
+      },
+      { 'x-agent-auth': 'secret' },
+    );
+    assert.equal(submit.status, 202);
+    jobId = asString(submit.json.jobId);
+    const job = await pollJob(p1, jobId);
+    assert.equal(job.status, 'error');
+    assert.equal(job.error, 'graph has a cycle');
+  } finally {
+    s1.close();
+  }
+
+  const s2 = createOrchestratorServer({ root, registry: reg });
+  const p2 = await listen(s2);
+  try {
+    const recovered = await get(p2, `/jobs/${jobId}`);
+    assert.equal(recovered.status, 200);
+    assert.equal(recovered.json.recovered, true);
+    assert.equal(recovered.json.status, 'error');
+    assert.equal(recovered.json.error, 'graph has a cycle');
+
+    const unknown = await get(p2, '/jobs/graph-never-submitted');
+    assert.equal(unknown.status, 404);
+    assert.equal(unknown.json.error, 'unknown job');
+  } finally {
+    s2.close();
+  }
+});
+
+test('SERVER: read routes require auth under remote bind', async () => {
+  const remoteRoot = tmpRepo();
+  const remote = createOrchestratorServer({
+    root: remoteRoot,
+    registry: fakeRegistry(),
+    authToken: 'secret',
+    host: '0.0.0.0',
+  });
+  const remotePort = await listen(remote);
+  let jobId: string;
+  try {
+    const submit = await post(
+      remotePort,
+      '/graph',
+      { nodes: [{ id: 'x', goal: 'write x.txt', executor: 'codex' }] },
+      { 'x-agent-auth': 'secret' },
+    );
+    assert.equal(submit.status, 202);
+    jobId = asString(submit.json.jobId);
+    const settled = await pollJob(remotePort, jobId, { 'x-agent-auth': 'secret' });
+    assert.equal(settled.status, 'done');
+
+    const deniedJob = await get(remotePort, `/jobs/${jobId}`);
+    assert.equal(deniedJob.status, 401);
+    assert.equal(deniedJob.json.error, 'invalid auth token');
+    const authedJob = await get(remotePort, `/jobs/${jobId}`, { 'x-agent-auth': 'secret' });
+    assert.equal(authedJob.status, 200);
+    assert.equal(authedJob.json.status, 'done');
+
+    const deniedEvents = await get(remotePort, `/runs/${jobId}/events`);
+    assert.equal(deniedEvents.status, 401);
+    assert.equal(deniedEvents.json.error, 'invalid auth token');
+    const authedEvents = await sse(remotePort, `/runs/${jobId}/events`, { 'x-agent-auth': 'secret' });
+    assert.ok(authedEvents.includes('event: end'), 'remote SSE succeeds with auth');
+
+    const health = await get(remotePort, '/health');
+    assert.equal(health.status, 200);
+  } finally {
+    remote.close();
+  }
+
+  const loopbackRoot = tmpRepo();
+  const loopback = createOrchestratorServer({
+    root: loopbackRoot,
+    registry: fakeRegistry(),
+    authToken: 'secret',
+    host: '127.0.0.1',
+  });
+  const loopbackPort = await listen(loopback);
+  try {
+    const submit = await post(
+      loopbackPort,
+      '/graph',
+      { nodes: [{ id: 'x', goal: 'write x.txt', executor: 'codex' }] },
+      { 'x-agent-auth': 'secret' },
+    );
+    assert.equal(submit.status, 202);
+    const loopbackJobId = asString(submit.json.jobId);
+    const settled = await pollJob(loopbackPort, loopbackJobId);
+    assert.equal(settled.status, 'done');
+
+    const openJob = await get(loopbackPort, `/jobs/${loopbackJobId}`);
+    assert.equal(openJob.status, 200);
+    assert.equal(openJob.json.status, 'done');
+    const openEvents = await sse(loopbackPort, `/runs/${loopbackJobId}/events`);
+    assert.ok(openEvents.includes('event: end'), 'loopback SSE remains open without auth');
+  } finally {
+    loopback.close();
   }
 });
 

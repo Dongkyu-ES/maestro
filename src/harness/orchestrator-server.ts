@@ -1,5 +1,5 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
 import { join, resolve } from 'node:path';
 import { readRuntimeEvents } from '../events/ledger.js';
@@ -136,6 +136,7 @@ export function createOrchestratorServer(options: {
   const root = resolve(options.root);
   const registry = options.registry ?? defaultExecutorRegistry();
   const host = options.host ?? '127.0.0.1';
+  const remoteBind = !['127.0.0.1', 'localhost'].includes(host);
   const authToken = options.authToken ?? process.env.AGENT_ORCH_TOKEN ?? '';
   const reconcileVerifyCmd = options.reconcileVerifyCmd;
 
@@ -194,13 +195,21 @@ export function createOrchestratorServer(options: {
         // Async: return a jobId immediately; the graph runs in the background so long
         // fan-outs don't hold the connection. Poll /jobs/:id, stream /runs/:id/events.
         const jobId = `graph-${randomUUID()}`;
-        jobs.set(jobId, { status: 'running', submittedAt: new Date().toISOString() });
+        const submittedAt = new Date().toISOString();
+        jobs.set(jobId, { status: 'running', submittedAt });
+        const runDir = join(root, '.agent', 'runs', jobId);
+        mkdirSync(runDir, { recursive: true });
+        writeFileSync(
+          join(runDir, 'job-result.json'),
+          `${JSON.stringify({ jobId, status: 'running', submittedAt }, null, 2)}\n`,
+        );
         const submitted = { ...body };
         const settle = (job: Job) => {
           jobs.set(jobId, job);
           // Persist the outcome into the run dir (the ledger SSOT location) so a restarted
           // daemon can recover job status from disk rather than 404 on a finished job.
           try {
+            mkdirSync(join(root, '.agent', 'runs', jobId), { recursive: true });
             writeFileSync(
               join(root, '.agent', 'runs', jobId, 'job-result.json'),
               `${JSON.stringify({ jobId, ...job }, null, 2)}\n`,
@@ -233,6 +242,7 @@ export function createOrchestratorServer(options: {
 
       const jobMatch = url.pathname.match(/^\/jobs\/([\w-]+)$/);
       if (req.method === 'GET' && jobMatch) {
+        if (remoteBind && !authed()) return json(401, { error: 'invalid auth token' });
         const job = jobs.get(jobMatch[1]);
         if (job) return json(200, { jobId: jobMatch[1], ...job });
         // Recovery: a restarted daemon has an empty in-memory map; read the persisted
@@ -252,6 +262,7 @@ export function createOrchestratorServer(options: {
 
       const eventsMatch = url.pathname.match(/^\/runs\/([\w-]+)\/events$/);
       if (req.method === 'GET' && eventsMatch) {
+        if (remoteBind && !authed()) return json(401, { error: 'invalid auth token' });
         const runDir = resolve(root, '.agent', 'runs', eventsMatch[1]);
         // Real SSE: stream new ledger events as they append; end when the job settles.
         res.writeHead(200, {
