@@ -262,6 +262,7 @@ export interface ReconcileResult {
   branch: string;
   merged: string[];
   quarantined: Array<{ workerId: string; reason: string }>;
+  verifyPassed: boolean | null; // null = no verify cmd; otherwise the whole-set gate verdict
 }
 
 function tryGit(root: string, args: string[]): { ok: boolean; output: string } {
@@ -278,8 +279,10 @@ function tryGit(root: string, args: string[]): { ok: boolean; output: string } {
 
 // Merge each supported worker's REAL changes (from its worktree branch — not the redacted
 // evidence patch) into a fresh reconciliation worktree, in dependency order. A worker that
-// conflicts, or whose merge breaks the verify command, is QUARANTINED (reverted) rather
-// than force-merged. Conservative by design: any verifier regression → quarantine.
+// CONFLICTS is quarantined (never force-merged). The verify command is a FINAL whole-set
+// gate over the merged tree — not per-merge — because a cross-file invariant (e.g. fileA
+// needs fileB) can never be satisfied by the first worker alone. verifyPassed is the gate
+// verdict; completion remains owned by the verifier, never declared by the merge itself.
 export function reconcileWorkers(options: {
   root: string;
   reconId: string;
@@ -310,7 +313,6 @@ export function reconcileWorkers(options: {
       emit('orchestration.conflict.quarantined', { worker_id: w.workerId, reason: 'no changes' });
       continue;
     }
-    const preSha = git(reconWorktree, ['rev-parse', 'HEAD']).trim();
     const mergeRes = tryGit(reconWorktree, ['merge', '--no-edit', w.branch]);
     if (!mergeRes.ok) {
       tryGit(reconWorktree, ['merge', '--abort']);
@@ -318,23 +320,22 @@ export function reconcileWorkers(options: {
       emit('orchestration.conflict.quarantined', { worker_id: w.workerId, reason: 'merge conflict' });
       continue;
     }
-    if (options.verifyCmd) {
-      const r = spawnSync('/bin/sh', ['-c', options.verifyCmd], {
-        cwd: reconWorktree,
-        encoding: 'utf8',
-        timeout: 120000,
-      });
-      if ((r.status ?? 1) !== 0) {
-        git(reconWorktree, ['reset', '--hard', preSha]); // undo this worker's merge
-        quarantined.push({ workerId: w.workerId, reason: `verify failed (exit ${r.status ?? 'null'})` });
-        emit('orchestration.conflict.quarantined', { worker_id: w.workerId, reason: 'verify failed' });
-        continue;
-      }
-    }
     merged.push(w.workerId);
     emit('orchestration.merged', { worker_id: w.workerId });
   }
-  return { reconId: options.reconId, reconWorktree, branch, merged, quarantined };
+
+  // Final whole-set gate: verify once over everything that merged cleanly.
+  let verifyPassed: boolean | null = null;
+  if (options.verifyCmd) {
+    const r = spawnSync('/bin/sh', ['-c', options.verifyCmd], {
+      cwd: reconWorktree,
+      encoding: 'utf8',
+      timeout: 120000,
+    });
+    verifyPassed = (r.status ?? 1) === 0;
+    emit('orchestration.reconcile.verified', { verify_passed: verifyPassed, exit_code: r.status ?? null, merged });
+  }
+  return { reconId: options.reconId, reconWorktree, branch, merged, quarantined, verifyPassed };
 }
 
 // ---- M11.3: dependency DAG (verifier-gated) + M11.5 spawn caps ----

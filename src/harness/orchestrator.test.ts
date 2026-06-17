@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { readRuntimeEvents } from '../events/ledger.js';
-import { readFileSync } from 'node:fs';
 import { makeCliExecutor } from './compare.js';
 import { reconcileWorkers, runParallelWorkers, runTaskGraph } from './orchestrator.js';
 
@@ -101,11 +100,17 @@ test('DAG: a node runs only after its deps are verifier-supported; unsupported d
   // All three genuinely supported, run in 3 sequential waves (chain).
   assert.equal(report.supportedCount, 3);
   assert.equal(report.waves, 3);
-  assert.deepEqual(report.nodes.map((n) => n.nodeState), ['supported', 'supported', 'supported']);
+  assert.deepEqual(
+    report.nodes.map((n) => n.nodeState),
+    ['supported', 'supported', 'supported'],
+  );
 
   // stage.advanced waves are single-node and ordered by dependency.
   const stages = readRuntimeEvents(report.parentRunDir).filter((e) => e.type === 'orchestration.stage.advanced');
-  assert.deepEqual(stages.map((e) => (e.payload as { node_ids: string[] }).node_ids), [['schema'], ['endpoints'], ['tests']]);
+  assert.deepEqual(
+    stages.map((e) => (e.payload as { node_ids: string[] }).node_ids),
+    [['schema'], ['endpoints'], ['tests']],
+  );
 });
 
 test('DAG: a blocked dep (no change) skips downstream rather than running it', async () => {
@@ -133,13 +138,17 @@ test('DAG: a blocked dep (no change) skips downstream rather than running it', a
 test('DAG: cycles and dangling deps are rejected before any spawn', async () => {
   const root = tmpRepo();
   await assert.rejects(
-    () => runTaskGraph({ root, nodes: [{ id: 'a', goal: 'x', deps: ['b'] }, { id: 'b', goal: 'y', deps: ['a'] }] }),
+    () =>
+      runTaskGraph({
+        root,
+        nodes: [
+          { id: 'a', goal: 'x', deps: ['b'] },
+          { id: 'b', goal: 'y', deps: ['a'] },
+        ],
+      }),
     /cycle/,
   );
-  await assert.rejects(
-    () => runTaskGraph({ root, nodes: [{ id: 'a', goal: 'x', deps: ['ghost'] }] }),
-    /unknown node/,
-  );
+  await assert.rejects(() => runTaskGraph({ root, nodes: [{ id: 'a', goal: 'x', deps: ['ghost'] }] }), /unknown node/);
 });
 
 test('RECONCILE: non-overlapping worker changes merge into one verified tree', async () => {
@@ -179,16 +188,33 @@ test('RECONCILE: a conflicting worker is quarantined, not force-merged', async (
   assert.match(recon.quarantined[0].reason, /merge conflict/);
 });
 
-test('RECONCILE: a merge that breaks the verify command is reverted + quarantined', async () => {
+test('RECONCILE: the verify command is a FINAL whole-set gate (verifyPassed=false on failure)', async () => {
   const root = tmpRepo();
   const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
   const fan = await runParallelWorkers({ root, workers: [{ workerId: 'v1', goal: 'write ok.txt', executor }] });
   const order = fan.workers.map((w) => ({ workerId: w.workerId, branch: w.branch, worktreePath: w.worktreePath }));
-  // verify fails once ok.txt is present → the merge must be reverted and the worker quarantined.
+  // No merge conflict, so the worker merges; the whole-set verify then fails (ok.txt present).
   const recon = reconcileWorkers({ root, reconId: 'recon-verify', order, verifyCmd: 'test ! -f ok.txt' });
 
-  assert.equal(recon.merged.length, 0);
-  assert.equal(recon.quarantined.length, 1);
-  assert.match(recon.quarantined[0].reason, /verify failed/);
-  assert.equal(existsSync(join(recon.reconWorktree, 'ok.txt')), false); // reverted
+  assert.deepEqual(recon.merged, ['v1']);
+  assert.equal(recon.quarantined.length, 0);
+  assert.equal(recon.verifyPassed, false);
+});
+
+test('RECONCILE: a cross-file invariant passes only with all workers merged (final gate)', async () => {
+  const root = tmpRepo();
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+  const fan = await runParallelWorkers({
+    root,
+    workers: [
+      { workerId: 'fa', goal: 'write a.txt', executor },
+      { workerId: 'fb', goal: 'write b.txt', executor },
+    ],
+  });
+  const order = fan.workers.map((w) => ({ workerId: w.workerId, branch: w.branch, worktreePath: w.worktreePath }));
+  // Invariant needs BOTH files — would have failed per-merge, passes as a final whole-set gate.
+  const recon = reconcileWorkers({ root, reconId: 'recon-both', order, verifyCmd: 'test -f a.txt && test -f b.txt' });
+
+  assert.deepEqual(recon.merged.sort(), ['fa', 'fb']);
+  assert.equal(recon.verifyPassed, true);
 });
