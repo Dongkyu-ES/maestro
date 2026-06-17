@@ -1,6 +1,20 @@
 # Orchestration plan (M11) — evidence-reconciled parallel workers
 
-## Status (shipped 2026-06-17)
+## Status (EXPERIMENTAL SIDECAR — corrected 2026-06-17)
+
+> **Order correction (binding).** `HARNESS_OS_CORRECTED_PLAN.md` §3 places M11 LAST, after
+> M7 (recomputable verifier as the EXCLUSIVE completion authority) and M8. A 2026-06-17
+> tri-reviewer audit (Codex + critic + code-reviewer, all converging) found M11 was marked
+> "shipped" while M7's load-bearing done-gate was still UNPAID: the legacy `collectRun`
+> path in `src/core.ts` still emits `run.completed` from `writeReview()` heuristics
+> (`score = hasIssue ? 6 : 9`) and the self-certifying `src/product-gate.ts` (961 LOC) is
+> still wired and can still emit `decision: PASS`. So M11's "verifier-owned completion"
+> invariant is undermined by a second, forgeable completion authority living beside it.
+> **M11 is therefore reclassified EXPERIMENTAL SIDECAR, not shipped.** It may not be cited
+> as spine progress until: (a) `collectRun` cannot emit `run.completed` except behind an
+> independent `runVerifier` `supported` verdict over digest-bound evidence; (b) a regression
+> test proves the old `product-gate.ts` path can no longer green a run; (c) the daemon's
+> request-supplied `verifyCmd` shell + default-no-auth spawn route is closed.
 
 Implemented and tested (deterministic + one live heterogeneous codex+claude run); 233 tests pass.
 - **M11.1/.2** `src/harness/orchestrator.ts`: `runIsolatedWorker` (git worktree per worker) + `runParallelWorkers` (serial worktree create, bounded-concurrency slices), ledger `spawned/joined/fanin` with output refs + per-worker verifier verdicts (refs-not-raw).
