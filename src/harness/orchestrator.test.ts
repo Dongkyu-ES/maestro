@@ -133,7 +133,38 @@ test('DAG: a blocked dep (no change) skips downstream rather than running it', a
   assert.equal(dependent?.nodeState, 'skipped');
   assert.match(dependent?.skippedReason ?? '', /unsupported deps: base/);
   // downstream never spawned a worktree
-  assert.equal(existsSync(join(root, '.agent', 'worktrees', 'dependent')), false);
+  assert.equal(dependent?.worktreePath ? existsSync(dependent.worktreePath) : true, false);
+});
+
+test('DAG re-run with same node ids does not collide', async () => {
+  const root = tmpRepo();
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+  const nodes = [{ id: 'build', goal: 'write build.txt', executor }];
+
+  const first = await runTaskGraph({ root, nodes });
+  const second = await runTaskGraph({ root, nodes });
+  const firstBuild = first.nodes.find((n) => n.workerId === 'build');
+  const secondBuild = second.nodes.find((n) => n.workerId === 'build');
+
+  assert.equal(firstBuild?.nodeState, 'supported');
+  assert.equal(secondBuild?.nodeState, 'supported');
+  assert.notEqual(firstBuild?.worktreePath, secondBuild?.worktreePath);
+  assert.equal(firstBuild?.workerId, 'build');
+  assert.equal(secondBuild?.workerId, 'build');
+
+  for (const report of [first, second]) {
+    const events = readRuntimeEvents(report.parentRunDir);
+    const spawned = events.filter((e) => e.type === 'orchestration.spawned');
+    const joined = events.filter((e) => e.type === 'orchestration.joined');
+    assert.deepEqual(
+      spawned.map((e) => (e.payload as { node_id: string }).node_id),
+      ['build'],
+    );
+    assert.deepEqual(
+      joined.map((e) => (e.payload as { node_id: string }).node_id),
+      ['build'],
+    );
+  }
 });
 
 test('DAG: declared artifact acceptance supports a node and unlocks dependents', async () => {
@@ -161,7 +192,7 @@ test('DAG: declared artifact acceptance supports a node and unlocks dependents',
   assert.equal(artifact?.nodeState, 'supported');
   assert.equal(artifact?.acceptance?.status, 'supported');
   assert.equal(dependent?.nodeState, 'supported');
-  assert.equal(existsSync(join(root, '.agent', 'worktrees', 'dependent', 'dependent.txt')), true);
+  assert.equal(dependent?.worktreePath ? existsSync(join(dependent.worktreePath, 'dependent.txt')) : false, true);
 });
 
 test('DAG: declared artifact acceptance blocks forged output and skips dependents', async () => {
@@ -190,7 +221,7 @@ test('DAG: declared artifact acceptance blocks forged output and skips dependent
   assert.equal(artifact?.nodeState, 'blocked');
   assert.notEqual(artifact?.acceptance?.status, 'supported');
   assert.equal(dependent?.nodeState, 'skipped');
-  assert.equal(existsSync(join(root, '.agent', 'worktrees', 'dependent')), false);
+  assert.equal(dependent?.worktreePath ? existsSync(dependent.worktreePath) : true, false);
 
   const acceptanceEvents = readRuntimeEvents(report.parentRunDir).filter((e) => e.type === 'orchestration.acceptance');
   assert.equal(acceptanceEvents.length, 1);

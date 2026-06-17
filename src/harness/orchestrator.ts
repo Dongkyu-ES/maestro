@@ -470,6 +470,8 @@ export async function runTaskGraph(options: {
     type: 'orchestration.started',
     payload: { goal: options.goal, node_count: options.nodes.length, kind: 'dag' },
   });
+  const runTok = parentRunId.replace(/^graph-/, '').replace(/-/g, '').slice(0, 8);
+  const wtKey = (id: string) => `${id}-${runTok}`;
 
   const state = new Map<string, NodeState | 'pending'>(options.nodes.map((n) => [n.id, 'pending']));
   const results = new Map<string, GraphNodeResult>();
@@ -487,8 +489,8 @@ export async function runTaskGraph(options: {
         state.set(n.id, 'skipped');
         const skipped: GraphNodeResult = {
           workerId: n.id,
-          branch: `wt/${n.id}`,
-          worktreePath: worktreePathFor(root, n.id),
+          branch: `wt/${wtKey(n.id)}`,
+          worktreePath: worktreePathFor(root, wtKey(n.id)),
           runDir: null,
           state: 'failed',
           verifierStatus: null,
@@ -521,7 +523,7 @@ export async function runTaskGraph(options: {
     });
 
     // Serial worktree create (git index lock), then concurrent slices for this wave.
-    const prepared = ready.map((n) => ({ node: n, ...createWorktree(root, n.id) }));
+    const prepared = ready.map((n) => ({ node: n, ...createWorktree(root, wtKey(n.id)) }));
     for (const { node } of prepared) {
       appendRuntimeEvent(parentRunDir, {
         runId: parentRunId,
