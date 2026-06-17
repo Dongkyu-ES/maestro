@@ -581,6 +581,22 @@ async function startForEvidence(run: { id: string }, dir: string): Promise<void>
   }
 }
 
+async function createCollectedApplyRun(title: string): Promise<{ dir: string; run: { id: string }; runDir: string }> {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask(title, dir);
+  const run = createRun(task.id, { mode: 'multi', maxWorkers: 1 }, dir);
+  await startForEvidence(run, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const order = readFileSync(join(runDir, 'work-orders', 'worker-001.yaml'), 'utf8');
+  const ws = order.match(/isolated_workspace: "([^"]+)"/)![1];
+  writeFileSync(join(ws, 'proposal.txt'), 'proposal');
+  writeFileSync(join(runDir, 'worker-outputs', 'worker-001.md'), '# Worker Output\n\n## Files Changed\n- proposal.txt\n');
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'pass');
+  return { dir, run, runDir };
+}
+
 async function approveShellMutation(run: { id: string }, dir: string, command: string): Promise<void> {
   await startRun(run.id, { command, timeoutMs: 5000 }, dir);
   const approval = listApprovals(dir).find(
@@ -1307,6 +1323,57 @@ test('apply proposal creates approval-gated patch bundle', async () => {
   assert.equal(approval.type, 'apply_proposal');
   assert.equal(approval.status, 'requested');
   assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, 'apply-proposal', 'worker-001.patch')), true);
+});
+
+test('proposeApply accepts verifier-backed completed ledger', async () => {
+  const { dir, run } = await createCollectedApplyRun('verifier-backed apply task');
+
+  const approval = proposeApply(run.id, dir);
+
+  assert.equal(approval.type, 'apply_proposal');
+  assert.equal(approval.status, 'requested');
+});
+
+test('proposeApply rejects forged passing run.yaml when runtime ledger is tampered', async () => {
+  const { dir, run, runDir } = await createCollectedApplyRun('tampered ledger apply task');
+  const events = readRuntimeEvents(runDir);
+  assert.equal(events.length >= 3, true);
+  events[1].payload = { ...events[1].payload, forged: true };
+  events[1].payload_sha256 = payloadHash(events[1].payload);
+  writeFileSync(join(runDir, 'events.jsonl'), `${events.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+  assert.throws(() => proposeApply(run.id, dir), /ledger failed validation: broken event hash chain/);
+});
+
+test('proposeApply rejects passing run.yaml without verifier-backed ledger completion', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('ledger incomplete apply task', dir);
+  const run = createRun(task.id, { mode: 'multi', maxWorkers: 1 }, dir);
+  await startForEvidence(run, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const runYamlPath = join(runDir, 'run.yaml');
+  let runYaml = readFileSync(runYamlPath, 'utf8');
+  runYaml = runYaml.replace(/^status:.*$/m, 'status: "completed"');
+  runYaml = /^decision:/m.test(runYaml)
+    ? runYaml.replace(/^decision:.*$/m, 'decision: "pass"')
+    : `${runYaml}decision: "pass"\n`;
+  writeFileSync(runYamlPath, runYaml);
+  appendRuntimeEvent(runDir, {
+    runId: run.id,
+    source: 'runtime-manager',
+    type: 'verifier.completed',
+    payload: { status: 'blocked' },
+    artifactRefs: ['events.jsonl'],
+  });
+  appendRuntimeEvent(runDir, {
+    runId: run.id,
+    source: 'runtime-manager',
+    type: 'run.failed',
+    payload: { decision: 'blocked', status: 'failed' },
+  });
+
+  assert.throws(() => proposeApply(run.id, dir), /no verifier-backed completion/);
 });
 
 test('multi mode scheduler launches workers in bounded parallel and records scheduler evidence', async () => {

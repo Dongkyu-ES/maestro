@@ -2970,6 +2970,30 @@ export function proposeApply(runId: string, cwd = process.cwd()): ApprovalRecord
   const root = projectRoot(cwd);
   const runDir = runPath(runId, cwd);
   const run = readYaml(join(runDir, 'run.yaml')) as unknown as RunMeta;
+  const events = readRuntimeEvents(runDir);
+  try {
+    validateRuntimeLedger(events);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(
+      `run ${runId} is not eligible for apply: ledger failed validation: ${msg}`,
+    );
+  }
+  const lifecycleEvents = events
+    .map((event, index) => ({ event, index }))
+    .filter(({ event }) => event.type === 'run.completed' || event.type === 'run.failed');
+  const lastLifecycle = lifecycleEvents.at(-1);
+  const verifierCompleted = lastLifecycle
+    ? events
+        .slice(0, lastLifecycle.index)
+        .filter((event) => event.type === 'verifier.completed')
+        .at(-1)
+    : undefined;
+  if (
+    lastLifecycle?.event.type !== 'run.completed' ||
+    verifierCompleted?.payload.status !== 'supported'
+  )
+    throw new Error(`run ${runId} is not eligible for apply: no verifier-backed completion in the ledger`);
   if (run.status !== 'completed' || run.decision !== 'pass')
     throw new Error(`run ${runId} is not eligible for apply proposal; collect a passing run first`);
   if (run.mode === 'multi') {
