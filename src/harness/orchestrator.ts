@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -230,5 +230,232 @@ export async function runParallelWorkers(options: {
     ledgerHead: createRuntimeLedgerHeadBinding(readRuntimeEvents(parentRunDir)),
   };
   writeFileSync(join(parentRunDir, 'orchestration-report.json'), `${JSON.stringify(report, null, 2)}\n`);
+  return report;
+}
+
+// ---- M11.4: verifier-reconciled merge ----
+
+export interface ReconcileResult {
+  reconId: string;
+  reconWorktree: string;
+  branch: string;
+  merged: string[];
+  quarantined: Array<{ workerId: string; reason: string }>;
+}
+
+function tryGit(root: string, args: string[]): { ok: boolean; output: string } {
+  try {
+    return { ok: true, output: execFileSync('git', args, { cwd: root, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }) };
+  } catch (err) {
+    const e = err as { stdout?: string; stderr?: string; message?: string };
+    return { ok: false, output: String(e.stdout || '') + String(e.stderr || e.message || '') };
+  }
+}
+
+// Merge each supported worker's REAL changes (from its worktree branch — not the redacted
+// evidence patch) into a fresh reconciliation worktree, in dependency order. A worker that
+// conflicts, or whose merge breaks the verify command, is QUARANTINED (reverted) rather
+// than force-merged. Conservative by design: any verifier regression → quarantine.
+export function reconcileWorkers(options: {
+  root: string;
+  reconId: string;
+  order: Array<{ workerId: string; branch: string; worktreePath: string }>;
+  verifyCmd?: string;
+  parentRunDir?: string;
+}): ReconcileResult {
+  const root = resolve(options.root);
+  if (!WORKER_ID_RE.test(options.reconId)) throw new Error(`invalid reconId: ${options.reconId}`);
+  const branch = `wt/${options.reconId}`;
+  const reconWorktree = worktreePathFor(root, options.reconId);
+  git(root, ['worktree', 'add', reconWorktree, '-b', branch, 'HEAD']);
+
+  const merged: string[] = [];
+  const quarantined: Array<{ workerId: string; reason: string }> = [];
+  const emit = (type: string, payload: Record<string, unknown>) => {
+    if (options.parentRunDir) appendRuntimeEvent(options.parentRunDir, { runId: options.reconId, source: 'harness', type, payload });
+  };
+
+  for (const w of options.order) {
+    // Commit the worker's REAL changes onto its branch so it is mergeable. Exclude the
+    // .agent evidence dir so reconciliation merges work product, not run ledgers.
+    git(w.worktreePath, ['add', '-A', '--', '.', ':(exclude).agent']);
+    const committed = tryGit(w.worktreePath, ['commit', '-m', `worker ${w.workerId}`]);
+    if (!committed.ok) {
+      quarantined.push({ workerId: w.workerId, reason: 'no changes to merge' });
+      emit('orchestration.conflict.quarantined', { worker_id: w.workerId, reason: 'no changes' });
+      continue;
+    }
+    const preSha = git(reconWorktree, ['rev-parse', 'HEAD']).trim();
+    const mergeRes = tryGit(reconWorktree, ['merge', '--no-edit', w.branch]);
+    if (!mergeRes.ok) {
+      tryGit(reconWorktree, ['merge', '--abort']);
+      quarantined.push({ workerId: w.workerId, reason: 'merge conflict' });
+      emit('orchestration.conflict.quarantined', { worker_id: w.workerId, reason: 'merge conflict' });
+      continue;
+    }
+    if (options.verifyCmd) {
+      const r = spawnSync('/bin/sh', ['-c', options.verifyCmd], { cwd: reconWorktree, encoding: 'utf8', timeout: 120000 });
+      if ((r.status ?? 1) !== 0) {
+        git(reconWorktree, ['reset', '--hard', preSha]); // undo this worker's merge
+        quarantined.push({ workerId: w.workerId, reason: `verify failed (exit ${r.status ?? 'null'})` });
+        emit('orchestration.conflict.quarantined', { worker_id: w.workerId, reason: 'verify failed' });
+        continue;
+      }
+    }
+    merged.push(w.workerId);
+    emit('orchestration.merged', { worker_id: w.workerId });
+  }
+  return { reconId: options.reconId, reconWorktree, branch, merged, quarantined };
+}
+
+// ---- M11.3: dependency DAG (verifier-gated) + M11.5 spawn caps ----
+
+export interface GraphNode {
+  id: string;
+  goal: string;
+  deps?: string[];
+  executor?: HarnessExecutor;
+}
+
+export type NodeState = 'supported' | 'blocked' | 'failed' | 'skipped';
+
+export interface GraphNodeResult extends WorkerResult {
+  deps: string[];
+  nodeState: NodeState;
+  skippedReason?: string;
+}
+
+export interface GraphReport {
+  schema_version: 1;
+  parentRunId: string;
+  parentRunDir: string;
+  goal?: string;
+  nodes: GraphNodeResult[];
+  supportedCount: number;
+  waves: number;
+  ledgerHead: RuntimeLedgerHeadBinding;
+}
+
+// Reject cycles and dangling deps before spawning anything (deterministic, no LLM).
+function validateGraph(nodes: GraphNode[], maxNodes: number): void {
+  if (nodes.length > maxNodes) throw new Error(`graph exceeds maxNodes (${nodes.length} > ${maxNodes})`);
+  const ids = new Set<string>();
+  for (const n of nodes) {
+    if (!WORKER_ID_RE.test(n.id)) throw new Error(`invalid node id: ${n.id}`);
+    if (ids.has(n.id)) throw new Error(`duplicate node id: ${n.id}`);
+    ids.add(n.id);
+  }
+  for (const n of nodes) for (const d of n.deps ?? []) if (!ids.has(d)) throw new Error(`node ${n.id} depends on unknown node ${d}`);
+  // Kahn's algorithm: if any node remains, there is a cycle.
+  const indeg = new Map(nodes.map((n) => [n.id, (n.deps ?? []).length]));
+  const queue = nodes.filter((n) => (n.deps ?? []).length === 0).map((n) => n.id);
+  let seen = 0;
+  while (queue.length) {
+    const id = queue.shift() as string;
+    seen += 1;
+    for (const n of nodes) if ((n.deps ?? []).includes(id)) {
+      indeg.set(n.id, (indeg.get(n.id) as number) - 1);
+      if (indeg.get(n.id) === 0) queue.push(n.id);
+    }
+  }
+  if (seen !== nodes.length) throw new Error('graph has a cycle');
+}
+
+// Run a dependency DAG: a node starts only once every dep is verifier-`supported` (the
+// DH-hardened s12 `can_start` — gated on the verifier verdict, not a self-report status).
+// Nodes whose deps did not reach `supported` are skipped, never silently run.
+export async function runTaskGraph(options: {
+  root: string;
+  goal?: string;
+  nodes: GraphNode[];
+  concurrency?: number;
+  maxNodes?: number;
+}): Promise<GraphReport> {
+  const root = resolve(options.root);
+  const maxNodes = options.maxNodes ?? 32;
+  validateGraph(options.nodes, maxNodes);
+
+  const parentRunId = `graph-${randomUUID()}`;
+  const parentRunDir = join(root, '.agent', 'runs', parentRunId);
+  mkdirSync(parentRunDir, { recursive: true });
+  appendRuntimeEvent(parentRunDir, {
+    runId: parentRunId,
+    source: 'harness',
+    type: 'orchestration.started',
+    payload: { goal: options.goal, node_count: options.nodes.length, kind: 'dag' },
+  });
+
+  const state = new Map<string, NodeState | 'pending'>(options.nodes.map((n) => [n.id, 'pending']));
+  const results = new Map<string, GraphNodeResult>();
+  let waves = 0;
+
+  const isSupported = (id: string) => state.get(id) === 'supported';
+  const depsResolved = (n: GraphNode) => (n.deps ?? []).every((d) => state.get(d) !== 'pending');
+
+  for (;;) {
+    // Skip nodes whose deps are all resolved but not all supported (upstream failed).
+    for (const n of options.nodes) {
+      if (state.get(n.id) !== 'pending') continue;
+      if (depsResolved(n) && !(n.deps ?? []).every(isSupported)) {
+        const bad = (n.deps ?? []).filter((d) => !isSupported(d));
+        state.set(n.id, 'skipped');
+        const skipped: GraphNodeResult = {
+          workerId: n.id, branch: `wt/${n.id}`, worktreePath: worktreePathFor(root, n.id), runDir: null,
+          state: 'failed', verifierStatus: null, diffRef: null, diffSha256: null, outputRef: null,
+          deps: n.deps ?? [], nodeState: 'skipped', skippedReason: `unsupported deps: ${bad.join(', ')}`,
+        };
+        results.set(n.id, skipped);
+        appendRuntimeEvent(parentRunDir, {
+          runId: parentRunId, source: 'harness', type: 'orchestration.skipped',
+          payload: { node_id: n.id, reason: skipped.skippedReason },
+        });
+      }
+    }
+
+    const ready = options.nodes.filter((n) => state.get(n.id) === 'pending' && (n.deps ?? []).every(isSupported));
+    if (ready.length === 0) break;
+    waves += 1;
+    appendRuntimeEvent(parentRunDir, {
+      runId: parentRunId, source: 'harness', type: 'orchestration.stage.advanced',
+      payload: { wave: waves, node_ids: ready.map((n) => n.id) },
+    });
+
+    // Serial worktree create (git index lock), then concurrent slices for this wave.
+    const prepared = ready.map((n) => ({ node: n, ...createWorktree(root, n.id) }));
+    for (const { node } of prepared) {
+      appendRuntimeEvent(parentRunDir, {
+        runId: parentRunId, source: 'harness', type: 'orchestration.spawned',
+        payload: { node_id: node.id, deps: node.deps ?? [], goal: node.goal },
+      });
+    }
+    const waveResults = await mapWithConcurrency(prepared, options.concurrency ?? 4, async ({ node, branch, worktreePath }) => {
+      const r = await runWorkerSlice({ worktreePath, branch, workerId: node.id, goal: node.goal, executor: node.executor });
+      const nodeState: NodeState = r.state === 'completed' && r.verifierStatus === 'supported' ? 'supported' : r.state === 'failed' ? 'failed' : 'blocked';
+      const nr: GraphNodeResult = { ...r, deps: node.deps ?? [], nodeState };
+      appendRuntimeEvent(parentRunDir, {
+        runId: parentRunId, source: 'harness', type: 'orchestration.joined',
+        payload: { node_id: node.id, node_state: nodeState, verifier_status: r.verifierStatus, output_ref: r.outputRef },
+        artifactRefs: r.runDir ? [join(r.worktreePath, r.runDir, 'harness-run-report.json')] : [],
+      });
+      return nr;
+    });
+    for (const nr of waveResults) {
+      state.set(nr.workerId, nr.nodeState);
+      results.set(nr.workerId, nr);
+    }
+  }
+
+  const ordered = options.nodes.map((n) => results.get(n.id) as GraphNodeResult).filter(Boolean);
+  const supportedCount = ordered.filter((r) => r.nodeState === 'supported').length;
+  appendRuntimeEvent(parentRunDir, {
+    runId: parentRunId, source: 'harness', type: 'orchestration.fanin',
+    payload: { node_count: ordered.length, supported_count: supportedCount, waves },
+  });
+  const report: GraphReport = {
+    schema_version: 1, parentRunId, parentRunDir, goal: options.goal,
+    nodes: ordered, supportedCount, waves,
+    ledgerHead: createRuntimeLedgerHeadBinding(readRuntimeEvents(parentRunDir)),
+  };
+  writeFileSync(join(parentRunDir, 'graph-report.json'), `${JSON.stringify(report, null, 2)}\n`);
   return report;
 }
