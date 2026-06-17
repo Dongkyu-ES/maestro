@@ -56,6 +56,7 @@ import {
   reviewProvenanceSignature,
   sha256Text,
 } from './util.js';
+import { createOrchestratorServer } from './harness/orchestrator-server.js';
 import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -148,7 +149,8 @@ function usage(): string {
   agent worktrees cleanup
   agent maintenance reconcile-runs
   agent quality gate [--write]
-  agent web [--host 127.0.0.1] [--port 4317] [--unsafe-host]`;
+  agent web [--host 127.0.0.1] [--port 4317] [--unsafe-host]
+  agent orchestrate serve [--host 127.0.0.1] [--port 4319] [--auth-token TOKEN] [--unsafe-host]`;
 }
 
 async function main() {
@@ -649,6 +651,19 @@ async function main() {
       const report = runProductGate(process.cwd(), { write: has('--write') });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'orchestrate' && sub === 'serve') {
+      const host = arg('--host', '127.0.0.1')!;
+      const unsafeHost = has('--unsafe-host');
+      if (!['127.0.0.1', 'localhost'].includes(host) && !unsafeHost)
+        throw new Error('orchestrate serve binds loopback only; pass --unsafe-host with --auth-token to accept remote spawn risk');
+      const authToken = arg('--auth-token') || process.env.AGENT_ORCH_TOKEN;
+      if (unsafeHost && !authToken)
+        throw new Error('--unsafe-host requires --auth-token or AGENT_ORCH_TOKEN (the server spawns local executors)');
+      const port = Number(arg('--port', '4319'));
+      const server = createOrchestratorServer({ root: process.cwd(), host, authToken });
+      server.listen(port, host, () => console.log(`orchestrator listening at http://${host}:${port}  (POST /graph, GET /health)`));
       return;
     }
     if (cmd === 'web') {
