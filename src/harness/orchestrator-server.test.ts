@@ -157,6 +157,36 @@ test('SERVER: async job routes a DAG, settles done, and streams ledger events ov
   }
 });
 
+test('SERVER: a restarted daemon recovers a finished job from disk (ledger SSOT)', async () => {
+  const root = tmpRepo();
+  const reg = fakeRegistry();
+  const s1 = createOrchestratorServer({ root, registry: reg });
+  const p1 = await listen(s1);
+  let jobId: string;
+  try {
+    const submit = await post(p1, '/graph', { nodes: [{ id: 'x', goal: 'write x.txt', executor: 'codex' }] });
+    jobId = submit.json.jobId;
+    const job = await pollJob(p1, jobId);
+    assert.equal(job.status, 'done');
+  } finally {
+    s1.close();
+  }
+  // Fresh server, empty in-memory job map, same root → recovers from the persisted outcome.
+  const s2 = createOrchestratorServer({ root, registry: reg });
+  const p2 = await listen(s2);
+  try {
+    const recovered = await get(p2, `/jobs/${jobId}`);
+    assert.equal(recovered.status, 200);
+    assert.equal(recovered.json.status, 'done');
+    assert.equal(recovered.json.recovered, true);
+    assert.equal(recovered.json.result.graph.supportedCount, 1);
+    const unknown = await get(p2, '/jobs/graph-does-not-exist');
+    assert.equal(unknown.status, 404);
+  } finally {
+    s2.close();
+  }
+});
+
 test('SERVER: /health is open; /graph requires the auth token when configured', async () => {
   const root = tmpRepo();
   const server = createOrchestratorServer({ root, registry: fakeRegistry(), authToken: 'secret' });

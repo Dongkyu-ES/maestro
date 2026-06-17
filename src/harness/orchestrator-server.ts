@@ -1,6 +1,7 @@
 import { randomUUID, timingSafeEqual } from 'node:crypto';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer, type Server } from 'node:http';
-import { resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { readRuntimeEvents } from '../events/ledger.js';
 import { makeCliExecutor } from './compare.js';
 import type { HarnessExecutor } from './harness-run.js';
@@ -171,6 +172,19 @@ export function createOrchestratorServer(options: {
         const jobId = `graph-${randomUUID()}`;
         jobs.set(jobId, { status: 'running', submittedAt: new Date().toISOString() });
         const submitted = { ...body };
+        const settle = (job: Job) => {
+          jobs.set(jobId, job);
+          // Persist the outcome into the run dir (the ledger SSOT location) so a restarted
+          // daemon can recover job status from disk rather than 404 on a finished job.
+          try {
+            writeFileSync(
+              join(root, '.agent', 'runs', jobId, 'job-result.json'),
+              `${JSON.stringify({ jobId, ...job }, null, 2)}\n`,
+            );
+          } catch {
+            /* run dir may be absent on very early failure */
+          }
+        };
         void runSubmittedGraph({
           root,
           registry,
@@ -182,9 +196,9 @@ export function createOrchestratorServer(options: {
           maxNodes: submitted.maxNodes,
           runId: jobId,
         })
-          .then((result) => jobs.set(jobId, { ...(jobs.get(jobId) as Job), status: 'done', result }))
+          .then((result) => settle({ ...(jobs.get(jobId) as Job), status: 'done', result }))
           .catch((err) =>
-            jobs.set(jobId, {
+            settle({
               ...(jobs.get(jobId) as Job),
               status: 'error',
               error: err instanceof Error ? err.message : String(err),
@@ -196,8 +210,20 @@ export function createOrchestratorServer(options: {
       const jobMatch = url.pathname.match(/^\/jobs\/([\w-]+)$/);
       if (req.method === 'GET' && jobMatch) {
         const job = jobs.get(jobMatch[1]);
-        if (!job) return json(404, { error: 'unknown job' });
-        return json(200, { jobId: jobMatch[1], ...job });
+        if (job) return json(200, { jobId: jobMatch[1], ...job });
+        // Recovery: a restarted daemon has an empty in-memory map; read the persisted
+        // outcome from the run dir (ledger SSOT). A run dir with no result = still running.
+        const resultPath = join(root, '.agent', 'runs', jobMatch[1], 'job-result.json');
+        if (existsSync(resultPath)) {
+          try {
+            return json(200, { recovered: true, ...JSON.parse(readFileSync(resultPath, 'utf8')) });
+          } catch {
+            /* fall through */
+          }
+        }
+        if (existsSync(join(root, '.agent', 'runs', jobMatch[1])))
+          return json(200, { jobId: jobMatch[1], status: 'running', recovered: true });
+        return json(404, { error: 'unknown job' });
       }
 
       const eventsMatch = url.pathname.match(/^\/runs\/([\w-]+)\/events$/);
