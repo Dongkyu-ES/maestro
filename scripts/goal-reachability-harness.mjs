@@ -60,6 +60,31 @@ function latestProductGate() {
   }
 }
 
+function latestFullTargetVerification() {
+  const dir = join(root, '.agent', 'runs');
+  if (!existsSync(dir)) return null;
+  const files = readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => {
+      const file = join(dir, entry.name, 'full-target-verification.json');
+      if (!existsSync(file)) return null;
+      return {
+        file: `.agent/runs/${entry.name}/full-target-verification.json`,
+        path: file,
+        mtimeMs: statSync(file).mtimeMs,
+      };
+    })
+    .filter(Boolean)
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+  if (!files.length) return null;
+  const latest = files.at(-1);
+  try {
+    return { file: latest.file, mtimeMs: latest.mtimeMs, json: readJson(latest.path) };
+  } catch (error) {
+    return { file: latest.file, error: error instanceof Error ? error.message : String(error) };
+  }
+}
+
 function commandResult(command, args) {
   const started = new Date().toISOString();
   const result = spawnSync(command, args, {
@@ -161,10 +186,29 @@ function validateStructure() {
   return issues;
 }
 
-function analyzeLatestGate(latest) {
+function analyzeFullTargetAuthority(latest) {
+  if (!latest) return { status: 'BLOCKED', reasons: ['no full-target-verification.json artifact found'] };
+  if (latest.error) return { status: 'BLOCKED', reasons: [`latest full-target verifier unreadable: ${latest.error}`] };
+  const report = latest.json || {};
+  if (report.decision !== 'PASS') return { status: 'BLOCKED', reasons: [`full-target verifier decision is ${report.decision || 'missing'}`] };
+  return { status: 'PASS', reasons: [] };
+}
+
+function analyzeLatestGate(latest, fullTargetVerification = latestFullTargetVerification()) {
   if (!latest) return { status: 'BLOCKED', reasons: ['no product gate artifact found'] };
   if (latest.error) return { status: 'BLOCKED', reasons: [`latest product gate unreadable: ${latest.error}`] };
   const gate = latest.json || {};
+  if (gate.completion_authority === 'revoked') {
+    const authority = analyzeFullTargetAuthority(fullTargetVerification);
+    if (authority.status === 'PASS') return { status: 'PASS', reasons: [] };
+    return {
+      status: 'BLOCKED',
+      reasons: [
+        'product gate is advisory (completion_authority=revoked); M7 full-target verifier authority required',
+        ...authority.reasons,
+      ],
+    };
+  }
   const reasons = [];
   if (gate.decision !== 'PASS') reasons.push(`Product Gate decision is ${gate.decision || 'missing'}`);
   if (Number(gate.completion_ceiling || 0) < 95) reasons.push(`completion ceiling is ${gate.completion_ceiling ?? 'missing'}`);
@@ -181,7 +225,8 @@ function analyzeLatestGate(latest) {
 function buildReport({ runAuthority = false, authorityResult = null } = {}) {
   const structureIssues = validateStructure();
   const latest = latestProductGate();
-  const latestGateAnalysis = analyzeLatestGate(latest);
+  const latestFullTarget = latestFullTargetVerification();
+  const latestGateAnalysis = analyzeLatestGate(latest, latestFullTarget);
   const harnessDecision = structureIssues.length ? 'FAIL' : 'PASS';
   const productGoalDecision = latestGateAnalysis.status;
   const authorityFailed = authorityResult && authorityResult.exit_code !== 0;
@@ -203,9 +248,18 @@ function buildReport({ runAuthority = false, authorityResult = null } = {}) {
           file: latest.file,
           decision: latest.json?.decision,
           completion_ceiling: latest.json?.completion_ceiling,
+          completion_authority: latest.json?.completion_authority,
           independent_review: latest.json?.independent_review,
           sha256: latest.error ? undefined : sha256Text(JSON.stringify(latest.json)),
           error: latest.error,
+        }
+      : null,
+    latest_full_target_verification: latestFullTarget
+      ? {
+          file: latestFullTarget.file,
+          decision: latestFullTarget.json?.decision,
+          sha256: latestFullTarget.error ? undefined : sha256Text(JSON.stringify(latestFullTarget.json)),
+          error: latestFullTarget.error,
         }
       : null,
     product_blockers: latestGateAnalysis.reasons,
@@ -223,6 +277,7 @@ function buildReport({ runAuthority = false, authorityResult = null } = {}) {
       `- harness_decision: ${report.harness_decision}`,
       `- product_goal_decision: ${report.product_goal_decision}`,
       `- latest_product_gate: ${report.latest_product_gate?.file || 'missing'}`,
+      `- latest_full_target_verification: ${report.latest_full_target_verification?.file || 'missing'}`,
       '',
       '## Structure Issues',
       ...(structureIssues.length ? structureIssues.map((item) => `- ${item}`) : ['- none']),
@@ -252,8 +307,22 @@ function selfTest() {
     const blocked = analyzeLatestGate({ file: 'x', json: { decision: 'FAIL', completion_ceiling: 60, independent_review: false } });
     assert(blocked.status === 'BLOCKED', 'FAIL gate must block');
     assert(blocked.reasons.some((reason) => reason.includes('Product Gate decision')), 'blocked report must cite gate decision');
-    const pass = analyzeLatestGate({ file: 'x', json: { decision: 'PASS', completion_ceiling: 95, independent_review: true } });
-    assert(pass.status === 'PASS', 'PASS gate should pass minimal gate analysis');
+    const legacyPass = analyzeLatestGate({ file: 'x', json: { decision: 'PASS', completion_ceiling: 95, independent_review: true } }, null);
+    assert(legacyPass.status === 'PASS', 'legacy PASS gate should pass minimal gate analysis');
+    const revokedWithoutAuthority = analyzeLatestGate(
+      { file: 'x', json: { completion_authority: 'revoked', decision: 'PASS', completion_ceiling: 95, independent_review: true } },
+      null,
+    );
+    assert(revokedWithoutAuthority.status === 'BLOCKED', 'revoked Product Gate without M7 authority must block');
+    assert(
+      revokedWithoutAuthority.reasons.some((reason) => reason.includes('M7 full-target verifier authority required')),
+      'revoked Product Gate blocker must cite M7 authority requirement',
+    );
+    const revokedWithAuthority = analyzeLatestGate(
+      { file: 'x', json: { completion_authority: 'revoked', decision: 'PASS', completion_ceiling: 95, independent_review: true } },
+      { file: 'm7', json: { decision: 'PASS' } },
+    );
+    assert(revokedWithAuthority.status === 'PASS', 'revoked Product Gate should pass only with M7 verifier PASS');
     writeFileSync(join(tmp, 'ok'), 'ok');
     return { decision: 'PASS', tmp };
   } finally {

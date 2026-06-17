@@ -2,7 +2,7 @@
 
 ## Domain Summary
 
-This harness exists because repeated ultragoal/divide-and-conquer runs produced many completed sub-goals while still failing the repository's real completion authority. The failure was not insufficient effort. The failure was a control-system bug: staged work closed on local artifacts, checkpoints, or tests before the top-level Product Gate, independent review provenance, and critical review blockers were proven current.
+This harness exists because repeated ultragoal/divide-and-conquer runs produced many completed sub-goals while still failing the repository's real completion authority. The failure was not insufficient effort. The failure was a control-system bug: staged work closed on local artifacts, checkpoints, or tests before the top-level M7 full-target verifier, independent review provenance, and critical review blockers were proven current.
 
 The harness treats a goal as a small product with a user-visible acceptance contract: every stage must show how it moves the final authority, and no stage may close if it leaves an unresolved CRITICAL/HIGH blocker that can invalidate the final Product Gate.
 
@@ -21,7 +21,7 @@ Make goal execution reach the repository's final authority instead of merely com
 
 A run is complete only when all are true:
 1. the goal contract's final authority command passes;
-2. Product Gate reports `decision: PASS` when the goal concerns product completion;
+2. the M7 full-target verifier reports a recomputable PASS (`full-target-verification.json` / `gate.full_target.verified`) when the goal concerns product completion; the Product Gate is advisory diagnostics only and is NOT a completion authority;
 3. independent review/custody requirements are either satisfied or explicitly outside the goal contract;
 4. no unresolved CRITICAL/HIGH review blocker remains;
 5. all stage handoff files exist and cite current evidence.
@@ -88,7 +88,7 @@ A run is complete only when all are true:
 
 - If the final authority command fails, the goal is `BLOCKED`, even if all stages are checked off.
 - If a CRITICAL/HIGH review issue is unresolved, the goal is `BLOCKED`.
-- If Product Gate is required and reports non-PASS or cannot run, the goal is `BLOCKED`.
+- If M7 full-target verification is required and reports non-PASS or cannot run, the goal is `BLOCKED`.
 - If independent review custody is required but missing, the goal is `BLOCKED`.
 - A stage may not be marked complete by docs, checkpoints, lint, or tests alone unless the goal contract explicitly says those are the final authority.
 - The only allowed partial status is `PROGRESS_WITH_BLOCKERS`, never `complete`.
@@ -120,10 +120,10 @@ _workspace/goal-reachability/
 ### Normal Flow
 - Request: reach a product-completion goal.
 - Expected outputs: contract, stage map, stage evidence, stage critique, final report.
-- Expected final output: PASS only after Product Gate PASS and no unresolved CRITICAL/HIGH blockers.
+- Expected final output: PASS only after M7 full-target verifier PASS and no unresolved CRITICAL/HIGH blockers.
 
 ### Failure Flow
-- Failure point: Product Gate fails or latest review contains CRITICAL/HIGH blockers.
+- Failure point: M7 full-target verifier fails or latest review contains CRITICAL/HIGH blockers.
 - Expected behavior: final report decision is BLOCKED and names exact blockers.
 - Forbidden behavior: claiming completion because ultragoal checkpoints or tests passed.
 
