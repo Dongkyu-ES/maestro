@@ -650,6 +650,9 @@ async function main() {
     if (cmd === 'quality' && sub === 'gate') {
       reconcileRuns();
       const report = runProductGate(process.cwd(), { write: has('--write') });
+      console.log(
+        'ADVISORY ONLY: this gate cannot mark a run or milestone complete. Completion authority = M7 ledger/diff verifier.',
+      );
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
       return;

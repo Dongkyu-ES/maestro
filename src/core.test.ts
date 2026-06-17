@@ -439,6 +439,34 @@ function buildGateRepo(): string {
     join(dir, 'scripts/operator-browser-e2e.mjs'),
     "#!/usr/bin/env node\nconsole.log('OPERATOR_BROWSER_E2E_PASS')\n",
   );
+  writeFileSync(
+    join(dir, 'scripts/live-integration-smoke.mjs'),
+    `#!/usr/bin/env node
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const root = process.cwd();
+mkdirSync(join(root, '.agent'), { recursive: true });
+writeFileSync(
+  join(root, '.agent', 'live-integration-smoke.json'),
+  JSON.stringify(
+    {
+      status: 'PASS',
+      root,
+      run_id: 'run-gate-repo-fixture',
+      exit_code: 0,
+      decision: 'pass',
+      natural_language_ignored: true,
+      ui_permission_boundary: true,
+      created_at: '2026-06-01T00:00:00.000Z',
+    },
+    null,
+    2,
+  ),
+);
+console.log('LIVE_INTEGRATION_SMOKE_PASS root=' + root + ' run=run-gate-repo-fixture');
+`,
+  );
 
   const hardGatePath = join(dir, 'docs/milestones/HARD_COMPLETION_GATES.md');
   writeFileSync(
@@ -2330,9 +2358,15 @@ test('hard completion ceiling requires independent review and reconciliation art
   const report = (await import('./product-gate.js')).runProductGate(dir);
   assert.equal(report.decision, 'PASS');
   assert.equal(report.completion_ceiling, 95);
+  assert.equal(report.completion_authority, 'revoked');
+  assert.match(report.authority_note, /Advisory diagnostics only/);
   assert.equal(report.independence_locally_reachable, true);
   assert.equal(report.independence_blocker_class, 'none');
-  assert.match(report.completion_label, /completion candidate/);
+  assert.equal(
+    report.completion_label,
+    'Advisory diagnostics pass — NOT a completion verdict; completion is owned by the M7 ledger verifier',
+  );
+  assert.doesNotMatch(report.completion_label, /completion candidate/i);
   assert.equal(
     report.checks.some((check) => check.name === 'Hard Completion Ceiling Gate' && check.status === 'PASS'),
     true,
@@ -2341,6 +2375,26 @@ test('hard completion ceiling requires independent review and reconciliation art
     report.result_reality_delta.some((row) => /Hard completion ceiling/.test(row.target) && row.status === 'PASS'),
     true,
   );
+});
+
+test('old product gate can no longer green a run', async () => {
+  const dir = buildGateRepo();
+  const report = (await import('./product-gate.js')).runProductGate(dir);
+
+  assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
+  assert.equal(report.completion_ceiling, 95);
+  assert.equal(report.completion_authority, 'revoked');
+  assert.equal(
+    report.completion_label,
+    'Advisory diagnostics pass — NOT a completion verdict; completion is owned by the M7 ledger verifier',
+  );
+  assert.doesNotMatch(report.completion_label, /completion candidate/i);
+
+  const completionPresentation = [report.completion_label, report.authority_note].join('\n');
+  assert.match(completionPresentation, /Advisory diagnostics/i);
+  assert.match(completionPresentation, /NOT a completion verdict/i);
+  assert.match(completionPresentation, /decided exclusively by the M7 ledger\/diff verifier/i);
+  assert.doesNotMatch(completionPresentation, /PRD-scoped completion candidate|mark a run.*complete|mark a milestone.*complete/i);
 });
 
 test('hand-authored review gate without a valid provenance signature cannot lift the ceiling', async () => {

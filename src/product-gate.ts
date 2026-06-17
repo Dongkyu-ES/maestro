@@ -34,6 +34,8 @@ export interface ProductGateReport {
   schema_version: number;
   generated_at: string;
   decision: 'PASS' | 'FAIL';
+  completion_authority: 'revoked';
+  authority_note: string;
   scope: string;
   completion_ceiling: number;
   completion_label: string;
@@ -918,7 +920,7 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
   const decision = checks.every((check) => check.status === 'PASS') ? 'PASS' : 'FAIL';
   const completionCeiling = hardGatesAllPass ? 95 : Math.min(declaredHardCeiling ?? 60, 60);
   const completionLabel = hardGatesAllPass
-    ? 'PRD-scoped completion candidate'
+    ? 'Advisory diagnostics pass — NOT a completion verdict; completion is owned by the M7 ledger verifier'
     : 'Prototype / control-plane scaffold with hard blockers; 90/95 claims forbidden';
   const externalCustodyAvailable = Boolean(reviewProvenanceKey() && reviewCustodyKey());
   const independenceLocallyReachable = externalCustodyAvailable;
@@ -933,6 +935,9 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     schema_version: 1,
     generated_at: nowIso(),
     decision,
+    completion_authority: 'revoked',
+    authority_note:
+      'Advisory diagnostics only. Run/milestone completion is decided exclusively by the M7 ledger/diff verifier (runVerifier) over the hash-chained ledger, never by this gate.',
     scope: 'PRD-scoped local v0-v2 product; no 90/95 claim allowed unless Hard Completion Ceiling Gate passes.',
     completion_ceiling: completionCeiling,
     completion_label: completionLabel,
