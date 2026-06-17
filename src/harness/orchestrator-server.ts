@@ -60,13 +60,29 @@ function routeNode(
   node: SubmittedNode,
   registry: ExecutorRegistry,
 ): { kind: ExecutorKind; executor: HarnessExecutor | undefined } {
-  const kind =
-    node.executor && registry.has(node.executor)
-      ? (node.executor as ExecutorKind)
-      : node.purpose && PURPOSE_MAP[node.purpose]
-        ? PURPOSE_MAP[node.purpose]
-        : 'codex';
+  const explicitKind = node.executor?.trim();
+  if (explicitKind) {
+    if (!registry.has(explicitKind)) throw new Error(`unknown executor: ${node.executor}`);
+    return { kind: explicitKind, executor: registry.resolve(explicitKind) };
+  }
+  const kind = node.purpose && PURPOSE_MAP[node.purpose] ? PURPOSE_MAP[node.purpose] : 'codex';
   return { kind, executor: registry.resolve(kind) };
+}
+
+function routeSubmittedNodes(nodes: SubmittedNode[], registry: ExecutorRegistry) {
+  const routed: GraphNode[] = [];
+  const routing: Array<{ id: string; kind: ExecutorKind }> = [];
+  for (const n of nodes) {
+    const route = routeNode(n, registry);
+    routed.push({
+      id: n.id,
+      goal: n.goal,
+      deps: n.deps,
+      executor: route.executor,
+    });
+    routing.push({ id: n.id, kind: route.kind });
+  }
+  return { routed, routing };
 }
 
 export async function runSubmittedGraph(options: {
@@ -80,13 +96,7 @@ export async function runSubmittedGraph(options: {
   maxNodes?: number;
   runId?: string;
 }) {
-  const routed: GraphNode[] = options.nodes.map((n) => ({
-    id: n.id,
-    goal: n.goal,
-    deps: n.deps,
-    executor: routeNode(n, options.registry).executor,
-  }));
-  const routing = options.nodes.map((n) => ({ id: n.id, kind: routeNode(n, options.registry).kind }));
+  const { routed, routing } = routeSubmittedNodes(options.nodes, options.registry);
   const graph = await runTaskGraph({
     root: options.root,
     goal: options.goal,
@@ -120,12 +130,14 @@ export function createOrchestratorServer(options: {
   root: string;
   registry?: ExecutorRegistry;
   authToken?: string;
+  reconcileVerifyCmd?: string;
   host?: string;
 }): Server {
   const root = resolve(options.root);
   const registry = options.registry ?? defaultExecutorRegistry();
   const host = options.host ?? '127.0.0.1';
   const authToken = options.authToken ?? process.env.AGENT_ORCH_TOKEN ?? '';
+  const reconcileVerifyCmd = options.reconcileVerifyCmd;
 
   // In-memory job projection over the ledger SSOT: a graph runs in the background and its
   // result is referenced by jobId == parentRunId, so /jobs/:id and the SSE event stream
@@ -140,7 +152,6 @@ export function createOrchestratorServer(options: {
       res.end(JSON.stringify(body));
     };
     const authed = () => {
-      if (!authToken) return true;
       const provided = String(req.headers['x-agent-auth'] || url.searchParams.get('auth') || '');
       return constantTimeEqual(provided, authToken);
     };
@@ -148,25 +159,38 @@ export function createOrchestratorServer(options: {
       if (req.method === 'GET' && url.pathname === '/health')
         return json(200, { ok: true, kinds: ['codex', 'claude', 'agy'] });
 
-      if (!authed()) return json(401, { error: 'invalid auth token' });
-
       if (req.method === 'POST' && url.pathname === '/graph') {
+        if (!authToken)
+          return json(401, {
+            error: 'graph submission requires an auth token; start orchestrate serve with --auth-token or AGENT_ORCH_TOKEN',
+          });
+        if (!authed()) return json(401, { error: 'invalid auth token' });
         const chunks: Buffer[] = [];
         for await (const c of req) chunks.push(Buffer.from(c));
         let body: {
           goal?: string;
           nodes?: SubmittedNode[];
           reconcile?: boolean;
-          verifyCmd?: string;
           concurrency?: number;
           maxNodes?: number;
         };
         try {
-          body = JSON.parse(Buffer.concat(chunks).toString() || '{}');
+          const parsed = JSON.parse(Buffer.concat(chunks).toString() || '{}') as Record<string, unknown>;
+          if (parsed && typeof parsed === 'object' && 'verifyCmd' in parsed)
+            return json(400, {
+              error:
+                'verifyCmd is not accepted from requests; configure it at serve start via --verify-cmd / AGENT_ORCH_VERIFY_CMD',
+            });
+          body = parsed;
         } catch {
           return json(400, { error: 'invalid JSON body' });
         }
         if (!Array.isArray(body.nodes) || body.nodes.length === 0) return json(400, { error: 'nodes[] required' });
+        try {
+          routeSubmittedNodes(body.nodes, registry);
+        } catch (err) {
+          return json(400, { error: err instanceof Error ? err.message : String(err) });
+        }
         // Async: return a jobId immediately; the graph runs in the background so long
         // fan-outs don't hold the connection. Poll /jobs/:id, stream /runs/:id/events.
         const jobId = `graph-${randomUUID()}`;
@@ -191,7 +215,7 @@ export function createOrchestratorServer(options: {
           goal: submitted.goal,
           nodes: submitted.nodes as SubmittedNode[],
           reconcile: submitted.reconcile === true,
-          reconcileVerifyCmd: submitted.verifyCmd,
+          reconcileVerifyCmd,
           concurrency: submitted.concurrency,
           maxNodes: submitted.maxNodes,
           runId: jobId,

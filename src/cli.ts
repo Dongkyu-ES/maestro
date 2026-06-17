@@ -150,7 +150,7 @@ function usage(): string {
   agent maintenance reconcile-runs
   agent quality gate [--write]
   agent web [--host 127.0.0.1] [--port 4317] [--unsafe-host]
-  agent orchestrate serve [--host 127.0.0.1] [--port 4319] [--auth-token TOKEN] [--unsafe-host]
+  agent orchestrate serve [--host 127.0.0.1] [--port 4319] [--auth-token TOKEN] [--verify-cmd CMD] [--unsafe-host]
   agent orchestrate run --file <graph.json> [--reconcile] [--verify-cmd CMD] [--concurrency N]`;
 }
 
@@ -677,15 +677,16 @@ async function main() {
       return;
     }
     if (cmd === 'orchestrate' && sub === 'serve') {
-      const host = arg('--host', '127.0.0.1')!;
+      const host = arg('--host', '127.0.0.1') ?? '127.0.0.1';
       const unsafeHost = has('--unsafe-host');
       if (!['127.0.0.1', 'localhost'].includes(host) && !unsafeHost)
         throw new Error('orchestrate serve binds loopback only; pass --unsafe-host with --auth-token to accept remote spawn risk');
       const authToken = arg('--auth-token') || process.env.AGENT_ORCH_TOKEN;
+      const reconcileVerifyCmd = arg('--verify-cmd') || process.env.AGENT_ORCH_VERIFY_CMD;
       if (unsafeHost && !authToken)
         throw new Error('--unsafe-host requires --auth-token or AGENT_ORCH_TOKEN (the server spawns local executors)');
       const port = Number(arg('--port', '4319'));
-      const server = createOrchestratorServer({ root: process.cwd(), host, authToken });
+      const server = createOrchestratorServer({ root: process.cwd(), host, authToken, reconcileVerifyCmd });
       server.listen(port, host, () => console.log(`orchestrator listening at http://${host}:${port}  (POST /graph, GET /health)`));
       return;
     }
