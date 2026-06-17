@@ -6,7 +6,7 @@ import { basename, join, resolve } from 'node:path';
 import { appendRuntimeEvent, createRuntimeLedgerHeadBinding, readRuntimeEvents } from '../events/ledger.js';
 import { runCodexExec } from '../runtime/codex-exec-runner.js';
 import { redact } from '../util.js';
-import { runHarnessSlice, type HarnessRunReport } from './harness-run.js';
+import { type HarnessExecutor, runHarnessSlice, type HarnessRunReport } from './harness-run.js';
 
 export type ExecutorErrorClass = 'auth' | 'transient' | 'fatal';
 
@@ -309,6 +309,7 @@ export async function runClosedLoop(options: {
   maxIters?: number;
   stall?: number;
   executorBin?: string;
+  executor?: HarnessExecutor;
   verifyCmd?: string;
   transientRetryBudget?: number;
 }): Promise<LoopReport> {
@@ -349,6 +350,7 @@ export async function runClosedLoop(options: {
           root,
           goal: buildIterationGoal({ goal: options.goal, strategy, previousUnmet }),
           executorBin: options.executorBin,
+          executor: options.executor,
           runId: `${runId}-iter-${index}`,
         }),
       );
@@ -485,6 +487,7 @@ ${strategyResult.tool_to_create?.purpose}
 Then continue with strategy:
 ${strategy}`,
               executorBin: options.executorBin,
+              executor: options.executor,
               runId: `${runId}-tool-${index}`,
             }),
           );

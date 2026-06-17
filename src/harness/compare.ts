@@ -62,6 +62,35 @@ export async function runRawCliLane(options: {
   };
 }
 
+// DH loop lane: the SAME CLI as executor, but gated by the full closed loop — isolated
+// critic + verify-cmd exit gate + stall/escalation. The critic stays on codex (an
+// independent second model), which is legitimate: verifier != worker.
+export async function runDhLoopLane(options: {
+  root: string;
+  laneName: string;
+  goal: string;
+  acceptanceContract: string;
+  executor?: HarnessExecutor;
+  verifyCmd?: string;
+  maxIters?: number;
+}): Promise<LaneResult> {
+  const loop = await runClosedLoop({
+    root: options.root,
+    goal: options.goal,
+    acceptanceContract: options.acceptanceContract,
+    executor: options.executor,
+    verifyCmd: options.verifyCmd,
+    maxIters: options.maxIters ?? 2,
+  });
+  const runDir = abs(options.root, loop.runDir);
+  return {
+    name: options.laneName,
+    description: 'dh loop: executor + isolated codex critic + verify-cmd gate + stall/escalation',
+    runDir,
+    metrics: computeRunMetrics({ root: options.root, runDir }),
+  };
+}
+
 // DH lane: drive the SAME CLI (via executor) through the harness slice — hash-chained
 // ledger + diff verifier + redaction.
 export async function runDhSliceLane(options: {

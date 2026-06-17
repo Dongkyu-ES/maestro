@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { nowIso, redact } from '../util.js';
 
@@ -169,7 +169,19 @@ export function runCodexExec(options: {
       clearInterval(cancelTimer);
       if (stdoutBuffer.trim()) consumeLine(stdoutBuffer);
       const exitCode = cancelled ? 130 : (code ?? (timedOut ? 124 : 1));
-      writeFileSync(join(options.runDir, 'codex-events.jsonl'), `${redact(rawLines.join('\n'))}\n`);
+      // This runs in a child-process event callback: an uncaught throw here crashes the
+      // whole process and bypasses the caller's try/catch. Ensure the dir exists and
+      // never throw out of the handler — capture a write failure into the result instead.
+      let writeError = '';
+      const safeWrite = (name: string, data: string) => {
+        try {
+          mkdirSync(options.runDir, { recursive: true });
+          writeFileSync(join(options.runDir, name), data);
+        } catch (err) {
+          writeError += `${name}: ${err instanceof Error ? err.message : String(err)}\n`;
+        }
+      };
+      safeWrite('codex-events.jsonl', `${redact(rawLines.join('\n'))}\n`);
       const result: CodexExecResult = {
         label,
         cwd: options.cwd,
@@ -190,9 +202,10 @@ export function runCodexExec(options: {
       // Write the same ProcessLog-shaped evidence the shell executor produces, so
       // the existing collect/review/normalize pipeline treats this as a real run
       // and uses the real exit code.
-      writeFileSync(join(options.runDir, `${label}.process.json`), JSON.stringify(result, null, 2));
-      writeFileSync(join(options.runDir, `${label}.stdout.log`), result.stdout);
-      writeFileSync(join(options.runDir, `${label}.stderr.log`), result.stderr);
+      safeWrite(`${label}.process.json`, JSON.stringify(result, null, 2));
+      safeWrite(`${label}.stdout.log`, result.stdout);
+      safeWrite(`${label}.stderr.log`, result.stderr);
+      if (writeError) result.stderr = `${result.stderr}\n[evidence write failed]\n${writeError}`;
       resolve(result);
     });
   });

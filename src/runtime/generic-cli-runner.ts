@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { nowIso, redact } from '../util.js';
 import type { CodexExecResult } from './codex-exec-runner.js';
@@ -30,7 +30,11 @@ export function runGenericCli(
     // Close stdin (EOF): headless agent CLIs (e.g. agy -p) block waiting on stdin if it
     // stays an open pipe, which manifests as a hang/timeout rather than an error.
     const child = spawn(spec.bin, args, { cwd: options.cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-    writeFileSync(join(options.runDir, `${label}.pid`), String(child.pid || ''));
+    try {
+      writeFileSync(join(options.runDir, `${label}.pid`), String(child.pid || ''));
+    } catch {
+      /* runDir may be missing; the close handler re-creates it */
+    }
     let timer: NodeJS.Timeout | undefined;
     let timedOut = false;
     if (options.timeoutMs) {
@@ -69,9 +73,23 @@ export function runGenericCli(
         stdout: redact(stdout),
         stderr: redact(stderr),
       };
-      writeFileSync(join(options.runDir, `${label}.process.json`), JSON.stringify(result, null, 2));
-      writeFileSync(join(options.runDir, `${label}.stdout.log`), result.stdout);
-      writeFileSync(join(options.runDir, `${label}.stderr.log`), result.stderr);
+      // Never throw out of this child-process callback (it would crash the process and
+      // bypass the caller's try/catch). An executor with shell access can even delete
+      // its own runDir mid-run, so re-create it and capture any write failure.
+      let writeError = '';
+      for (const [name, data] of [
+        [`${label}.process.json`, JSON.stringify(result, null, 2)],
+        [`${label}.stdout.log`, result.stdout],
+        [`${label}.stderr.log`, result.stderr],
+      ] as const) {
+        try {
+          mkdirSync(options.runDir, { recursive: true });
+          writeFileSync(join(options.runDir, name), data);
+        } catch (err) {
+          writeError += `${name}: ${err instanceof Error ? err.message : String(err)}\n`;
+        }
+      }
+      if (writeError) result.stderr = `${result.stderr}\n[evidence write failed]\n${writeError}`;
       resolve(result);
     });
   });
