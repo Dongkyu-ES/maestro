@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { appendRuntimeEvent, readRuntimeEvents, validateRuntimeLedger } from '../events/ledger.js';
+import { renderSkillRun } from '../view.js';
 import { makeCliExecutor } from './compare.js';
 import type { HarnessExecutor } from './harness-run.js';
 import { runTaskGraph } from './orchestrator.js';
@@ -634,6 +635,28 @@ test('projectSkillRun flags a tampered report (UI cannot show green when the gat
   const projected = projectSkillRun({ root, runId });
   assert.equal(projected.authoritativeCompletion, 'failed'); // recompute ignores the tampered field
   assert.equal(projected.contradiction, true);
+});
+
+test('renderSkillRun surfaces authoritative completion and a contradiction panel on a tampered report', async () => {
+  const root = tmpRepo();
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }));
+  const runId = 'skill-render-tamper';
+
+  await runOrchestratorSkill(spec, { what: 'render tamper', root, runId });
+
+  const honestHtml = renderSkillRun(runId, root);
+  assert.match(honestHtml, /Authoritative completion/);
+  assert.doesNotMatch(honestHtml, /CONTRADICTION/);
+
+  const reportPath = join(root, '.agent', 'skill-runs', runId, 'skill-run-report.json');
+  const stored = JSON.parse(readFileSync(reportPath, 'utf8')) as Record<string, unknown>;
+  stored.completion = 'passed';
+  writeFileSync(reportPath, JSON.stringify(stored, null, 2));
+
+  const tamperedHtml = renderSkillRun(runId, root);
+  assert.match(tamperedHtml, /CONTRADICTION/);
+  // The surface shows the authoritative failed verdict, never the tampered green.
+  assert.match(tamperedHtml, /Completion: <strong class="warning">failed/);
 });
 
 function briefExecutor(briefContent: string): HarnessExecutor {

@@ -64,7 +64,7 @@ import {
   reviewProvenanceSignature,
   sha256Text,
 } from './util.js';
-import { renderHtml, renderReviewGate, renderRun } from './view.js';
+import { renderHtml, renderReviewGate, renderRun, renderSkillRun } from './view.js';
 
 function arg(name: string, fallback?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -914,6 +914,7 @@ async function serveWeb(): Promise<void> {
       requirePageAuth();
       res.setHeader('content-type', 'text/html; charset=utf-8');
       if (url.pathname.startsWith('/run/')) res.end(renderRun(decodeURIComponent(url.pathname.slice(5))));
+      else if (url.pathname.startsWith('/skill/')) res.end(renderSkillRun(decodeURIComponent(url.pathname.slice(7))));
       else if (url.pathname === '/review-gate') res.end(renderReviewGate(process.cwd()));
       else if (url.pathname === '/') res.end(renderHtml(process.cwd(), csrfToken));
       else {

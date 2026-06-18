@@ -1,6 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { listApprovals, listFilesRecursive, listProjects, loadIndex, runtimeTruthForRun } from './core.js';
+import { projectSkillRun } from './harness/orchestrator-skill.js';
 import { AGENT_DIR, isSecretPath, projectRoot, type RunMeta, readYaml, redact, safeJoin } from './util.js';
 
 export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''): string {
@@ -268,6 +269,27 @@ export function renderRun(runId: string, cwd = process.cwd()): string {
   return page(
     runId,
     `<a href="/">← back</a><h1>${esc(runId)}</h1><section class="panel"><h2>Run result</h2><p>Status: <strong>${esc(String(meta.status))}</strong> · Decision: <strong>${esc(String(meta.decision || 'not collected'))}</strong> · Mode: ${esc(String(meta.mode))} · Task: ${esc(String(meta.task_id))}</p><p><a href="/api/runs/${attr(runId)}/events">Event stream (SSE)</a></p><h3>Execution evidence</h3><pre>${esc(processSummary)}</pre></section>${staleActiveNotice}${approvalNotice}${evidenceTrust}${operatorOutputs}${closedLoop}<section class="panel"><h2>Raw artifacts</h2><p>내부 파일은 접어 둔다. 먼저 위의 실행 결과를 본다.</p>${rawArtifacts}</section>`,
+  );
+}
+export function renderSkillRun(runId: string, cwd = process.cwd()): string {
+  if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(runId) || runId.includes('..'))
+    throw new Error(`invalid skill run id: ${runId}`);
+  const p = projectSkillRun({ root: projectRoot(cwd), runId });
+  const authClass = p.authoritativeCompletion === 'passed' ? 'ok' : 'warning';
+  const contradiction = p.contradiction
+    ? `<div class="notice danger"><strong>CONTRADICTION — do not trust the stored report.</strong><p>The stored report claims completion <code>${esc(p.reportCompletion)}</code>, but the authoritative recompute from the hash-chained ledger + content-addressed execute evidence says <code>${esc(p.authoritativeCompletion)}</code>${p.ledgerValid ? '' : ' (lifecycle ledger FAILED validation)'}. Trust the recompute. Reason: ${esc(p.reason)}</p></div>`
+    : '';
+  const phaseRows = p.phases
+    .map((ph) => `<tr><td><code>${esc(ph.phase)}</code></td><td><span class="pill ${esc(ph.nodeState)}">${esc(ph.label)}</span></td></tr>`)
+    .join('');
+  return page(
+    `skill ${runId}`,
+    `<a href="/">← back</a><h1>${esc(p.skillId)} <small>${esc(runId)}</small></h1>${contradiction}` +
+      `<section class="panel hero"><h2>Authoritative completion</h2>` +
+      `<p>Recomputed from the hash-chained ledger + content-addressed execute evidence — never the stored report field.</p>` +
+      `<p>Completion: <strong class="${authClass}">${esc(p.authoritativeCompletion)}</strong> · Ledger: <strong class="${p.ledgerValid ? 'ok' : 'warning'}">${p.ledgerValid ? 'valid' : 'INVALID'}</strong></p>` +
+      `<small>Stored report field (display-only, non-authoritative): ${esc(p.reportCompletion)} · review node state: ${esc(p.displayCompletion)}</small></section>` +
+      `<section class="panel"><h2>Phases</h2><table><thead><tr><th>phase</th><th>node state</th></tr></thead><tbody>${phaseRows}</tbody></table></section>`,
   );
 }
 function readClosedLoopJson(runDir: string): ClosedLoopJson | undefined {
