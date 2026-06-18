@@ -113,6 +113,8 @@ async function runWorkerSlice(options: {
   executorLabel?: string;
   timeoutMs?: number;
   inputRefs?: EvidenceRef[];
+  /** Absolute path to the PROJECT memory fabric, injected read-only into the worker's context. */
+  fabricAgentDir?: string;
 }): Promise<WorkerResult> {
   const base = {
     workerId: options.workerId,
@@ -127,6 +129,9 @@ async function runWorkerSlice(options: {
       executor: options.executor,
       executorLabel: options.executorLabel,
       timeoutMs: options.timeoutMs,
+      // Read the project fabric (absolute) into context, but never stamp it from a worktree-local
+      // verification — only the owning run (collectRun / harness run) earns memory freshness.
+      fabricAgentDir: options.fabricAgentDir,
     });
     const { diffSha256 } = readDiffSha(options.worktreePath, slice.runDir);
     return {
@@ -173,6 +178,7 @@ export async function runIsolatedWorker(options: {
     executorLabel: options.executorLabel,
     timeoutMs: options.timeoutMs,
     inputRefs: options.inputRefs,
+    fabricAgentDir: join(root, '.agent'),
   });
 }
 
@@ -201,7 +207,13 @@ async function mapWithConcurrency<T, R>(
 // callers that just need N isolated results in parallel (e.g. the skill execute fan-out) use this.
 export async function runWorkersConcurrently(options: {
   root: string;
-  workers: { workerId: string; goal: string; executor?: HarnessExecutor; executorLabel?: string; inputRefs?: EvidenceRef[] }[];
+  workers: {
+    workerId: string;
+    goal: string;
+    executor?: HarnessExecutor;
+    executorLabel?: string;
+    inputRefs?: EvidenceRef[];
+  }[];
   concurrency?: number;
 }): Promise<WorkerResult[]> {
   const root = resolve(options.root);
@@ -215,6 +227,7 @@ export async function runWorkersConcurrently(options: {
       executor: spec.executor,
       executorLabel: spec.executorLabel,
       inputRefs: spec.inputRefs,
+      fabricAgentDir: join(root, '.agent'),
     }),
   );
 }
@@ -262,6 +275,7 @@ export async function runParallelWorkers(options: {
         workerId: spec.workerId,
         goal: spec.goal,
         executor: spec.executor,
+        fabricAgentDir: join(root, '.agent'),
       });
       appendRuntimeEvent(parentRunDir, {
         runId: parentRunId,
@@ -590,6 +604,7 @@ export async function runTaskGraph(options: {
           workerId: node.id,
           goal: node.goal,
           executor: node.executor,
+          fabricAgentDir: join(root, '.agent'),
         });
         const acceptance = node.accept
           ? (() => {

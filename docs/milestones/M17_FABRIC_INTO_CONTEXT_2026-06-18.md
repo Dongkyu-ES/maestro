@@ -72,8 +72,20 @@ run that *created* a fact to the verifier that *confirmed* it, not just within a
 fact citing a foreign event is left untouched (no blanket freshening); a blocked/tampered run stamps
 nothing (the `decision === 'pass'` gate).
 
+## Follow-up landed: fabric read path extended to daemon/skill workers
+
+Orchestrator workers now read the project fabric too. Because a worker runs in an isolated worktree
+that does not contain `.agent/memory` (gitignored), `fabricAgentDir` is passed as the **absolute**
+project `.agent` path, and `runHarnessSlice` resolves absolute-or-relative via `isAbsolute()`. Read
+and stamp were **decoupled**: a new `stampFabricOnVerify` flag gates the stamp; the four worker call
+sites (`runIsolatedWorker`, `runWorkersConcurrently`, `runParallelWorkers`, `runTaskGraph`) pass
+`fabricAgentDir` **read-only**, so a worktree-local verification can never freshen project memory —
+only `warden harness run` (and `collectRun`'s own path) stamp. Tested: a worker reads the project
+fabric from inside its worktree; a concurrent fan-out leaves `fabric.json` byte-for-byte unchanged
+(independent critic verdict: ACCEPT — the stamp is structurally closed from worktrees).
+
 ## Honest residue
 
-- Only `warden harness run` enables the fabric **read** path so far; the daemon (`/graph`) and the
-  skill execute phases don't pass `fabricAgentDir` yet, so stored facts aren't injected into those
-  contexts. Extending it there is mechanical follow-up, deferred to keep blast radius small.
+- The producer that *creates* facts (`m8-boundary-evidence`) and the daemon/skill READ path are now
+  wired; the remaining gap is breadth — e.g. no size/entry cap on `readMemoryFabric` (fine at today's
+  ~12 KB) and the pre-existing non-atomic `writeMemoryFabric` window. Both are noted, neither blocks.

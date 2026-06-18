@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join, relative } from 'node:path';
 import { parse as parseQuery } from 'node:querystring';
@@ -354,6 +363,7 @@ async function main() {
         // Load this project's memory fabric into context (gate #4 admits only provenanced+fresh
         // facts). No-op when the fabric is empty, so this is safe to enable by default.
         fabricAgentDir: '.agent',
+        stampFabricOnVerify: true,
       });
       console.log(JSON.stringify(report, null, 2));
       if (report.state !== 'completed') process.exitCode = 2;

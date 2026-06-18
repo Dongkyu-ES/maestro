@@ -6,8 +6,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { readRuntimeEvents } from '../events/ledger.js';
+import { appendMemoryFact } from '../memory/fabric.js';
 import { makeCliExecutor } from './compare.js';
-import { reconcileWorkers, runParallelWorkers, runTaskGraph } from './orchestrator.js';
+import { reconcileWorkers, runIsolatedWorker, runParallelWorkers, runTaskGraph } from './orchestrator.js';
 
 function tmpRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'orchestrator-'));
@@ -44,6 +45,57 @@ process.exit(0);
   );
   return bin;
 }
+
+test('WORKERS read the PROJECT memory fabric into context from inside an isolated worktree', async () => {
+  const root = tmpRepo();
+  // A fact stored in the project fabric (NOT in the worktree, which is a fresh checkout).
+  appendMemoryFact(join(root, '.agent'), {
+    id: 'mem-proj',
+    layer: 'vertical_project',
+    key: 'build_cmd',
+    value: 'npm run build',
+    source_event_ids: ['e1'],
+    artifact_refs: [],
+  });
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+
+  const result = await runIsolatedWorker({ root, workerId: 'reader', goal: 'write out.txt', executor });
+
+  // The worker, running in worktreePath != root, still pulled the project fabric (absolute path)
+  // into its composed context — projected through gate #4 as [unverified] (no verification stamp).
+  const context = readFileSync(join(result.worktreePath, result.runDir as string, 'context.md'), 'utf8');
+  assert.match(context, /build_cmd: npm run build/);
+  assert.match(context, /\[unverified\]/);
+});
+
+test('FAN-OUT workers never write the project fabric (read-only; stamp stays closed from worktrees)', async () => {
+  const root = tmpRepo();
+  const fabricPath = join(root, '.agent', 'memory', 'fabric.json');
+  appendMemoryFact(join(root, '.agent'), {
+    id: 'mem-proj',
+    layer: 'vertical_project',
+    key: 'k',
+    value: 'v',
+    source_event_ids: ['e1'],
+    artifact_refs: [],
+  });
+  const before = readFileSync(fabricPath, 'utf8');
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+
+  await runParallelWorkers({
+    root,
+    goal: 'fan out over project memory',
+    workers: [
+      { workerId: 'w1', goal: 'write w1.txt', executor },
+      { workerId: 'w2', goal: 'write w2.txt', executor },
+    ],
+    concurrency: 2,
+  });
+
+  // The decoupling holds: workers read the fabric but cannot stamp it (no stampFabricOnVerify), so
+  // a concurrent fan-out leaves the project fabric byte-for-byte unchanged.
+  assert.equal(readFileSync(fabricPath, 'utf8'), before);
+});
 
 test('FAN-OUT: parallel workers run in isolated worktrees; ledger records refs + per-worker verdicts', async () => {
   const root = tmpRepo();

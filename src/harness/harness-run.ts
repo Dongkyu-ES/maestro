@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { isAbsolute, join, relative } from 'node:path';
 import {
   appendRuntimeEvent,
   createRuntimeLedgerHeadBinding,
@@ -61,10 +61,17 @@ export interface HarnessRunOptions {
   memory?: MemoryEntry[];
   /**
    * Opt-in: load stored facts from this agent dir's memory fabric, project them through gate #4,
-   * and include the confirmed ones in context. When set, the run also stamps `last_verified_at` on
-   * any fabric fact grounded entirely in this run's verified events once the run completes.
+   * and include the confirmed ones in context. May be absolute (e.g. a worker reading the PROJECT
+   * fabric from inside an isolated worktree) or relative to `root`. Read-only by itself; set
+   * `stampFabricOnVerify` to also write recency back.
    */
   fabricAgentDir?: string;
+  /**
+   * When true (and `fabricAgentDir` is set), stamp `last_verified_at` on fabric facts grounded
+   * entirely in this run's verified events once the run completes. Left false for isolated workers,
+   * which must not freshen the project's memory from a worktree-local verification.
+   */
+  stampFabricOnVerify?: boolean;
   providerProfile?: string;
   freshnessWindowMs?: number;
 }
@@ -466,8 +473,14 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
   const hooks = options.hooks || [];
   const runDir = runDirFor(root, runId);
   // Production read path for the memory fabric: load stored facts and project them through gate #4.
-  // gatingViewFromFact runs here, in a real run, not just in tests.
-  const fabricMemory = options.fabricAgentDir ? loadGatedMemoryFromFabric(join(root, options.fabricAgentDir)) : [];
+  // gatingViewFromFact runs here, in a real run, not just in tests. The dir may be absolute (a
+  // worker reading the project fabric from inside a worktree) or relative to root.
+  const fabricDir = options.fabricAgentDir
+    ? isAbsolute(options.fabricAgentDir)
+      ? options.fabricAgentDir
+      : join(root, options.fabricAgentDir)
+    : undefined;
+  const fabricMemory = fabricDir ? loadGatedMemoryFromFabric(fabricDir) : [];
   const effectiveMemory =
     options.memory !== undefined || fabricMemory.length > 0 ? [...(options.memory ?? []), ...fabricMemory] : undefined;
   const useComposedContext = options.baseRules !== undefined || effectiveMemory !== undefined;
@@ -694,12 +707,12 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
   // LEDGER-INTEGRITY verifier over this run's events, not on the diff-completion above: a run with a
   // tampered/invalid ledger stamps nothing, even if it produced a diff. A fact's recency is thus
   // earned only from recomputable ledger integrity, never from "a diff happened".
-  if (options.fabricAgentDir && state === 'completed') {
+  if (fabricDir && options.stampFabricOnVerify && state === 'completed') {
     const runEvents = readRuntimeEvents(runDir);
     const ledgerVerdict = runVerifier({ type: 'ledger', root: runDir, events: runEvents });
     if (ledgerVerdict.status === 'supported') {
       markFactsVerifiedByEvents(
-        join(root, options.fabricAgentDir),
+        fabricDir,
         runEvents.map((event) => event.event_id),
         new Date().toISOString(),
       );
