@@ -87,6 +87,41 @@ function handoffExecutor(options: { executeWrites: boolean }): HarnessExecutor {
   };
 }
 
+function addAcceptanceExecutor(options: { implementation: string }): HarnessExecutor {
+  return async (opts) => {
+    if (opts.prompt.includes('research')) {
+      writeFileSync(join(opts.cwd, 'research.txt'), 'research\n');
+    } else if (opts.prompt.includes('execute')) {
+      writeFileSync(join(opts.cwd, 'add.mjs'), options.implementation);
+    } else if (opts.prompt.includes('review')) {
+      writeFileSync(join(opts.cwd, 'review.txt'), 'review\n');
+    }
+    return codexResult({ cwd: opts.cwd, label: opts.label });
+  };
+}
+
+function addAcceptanceSpec(executor: HarnessExecutor): OrchestratorSkillSpec {
+  return {
+    id: 'research-execute-review',
+    phases: {
+      research: { goalTemplate: 'research {what}', executor, acceptArtifact: 'research.txt' },
+      execute: { goalTemplate: 'execute {what}', executor, acceptArtifact: 'add.mjs' },
+      review: { goalTemplate: 'review {what}', executor, acceptArtifact: 'review.txt' },
+    },
+    acceptance: {
+      command: ['node', 'accept.test.mjs'],
+      testFiles: [
+        {
+          path: 'accept.test.mjs',
+          content: `import { add } from './add.mjs';
+if (add(1, 2) !== 3 || add(-4, 9) !== 5) process.exit(1);
+`,
+        },
+      ],
+    },
+  };
+}
+
 test('storePhaseArtifact stores a sha256 verified round-trip artifact', () => {
   const root = mkdtempSync(join(tmpdir(), 'orchestrator-skill-evidence-'));
   const sourceFile = join(root, 'research-output.txt');
@@ -293,6 +328,36 @@ test('runOrchestratorSkill passes accepted artifacts between phases through inpu
     readFileSync(join(root, '.agent', 'skill-runs', runId, 'artifacts', 'execute', 'execute.txt'), 'utf8'),
     /RESEARCH_OUTPUT/,
   );
+});
+
+test('runOrchestratorSkill passes declared acceptance against clean execute evidence', async () => {
+  const root = tmpRepo();
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }));
+
+  const report = await runOrchestratorSkill(spec, { what: 'accepted add work', root, runId: 'skill-acceptance-pass' });
+
+  assert.equal(report.phases.find((phase) => phase.phase === 'execute')?.nodeState, 'supported');
+  assert.equal(report.acceptance?.ran, true);
+  assert.equal(report.acceptance?.passed, true);
+  assert.equal(report.acceptance?.exitCode, 0);
+  assert.equal(report.acceptance?.command.join(' '), 'node accept.test.mjs');
+  assert.equal(typeof report.acceptance?.outputSha256, 'string');
+  assert.equal(report.completion, 'passed');
+});
+
+test('runOrchestratorSkill fails completion when clean acceptance rejects forged execute evidence', async () => {
+  const root = tmpRepo();
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }));
+
+  const report = await runOrchestratorSkill(spec, { what: 'forged add work', root, runId: 'skill-acceptance-fail' });
+
+  assert.equal(report.phases.find((phase) => phase.phase === 'execute')?.nodeState, 'supported');
+  assert.equal(report.phases.find((phase) => phase.phase === 'review')?.nodeState, 'supported');
+  assert.equal(report.acceptance?.ran, true);
+  assert.equal(report.acceptance?.passed, false);
+  assert.equal(report.acceptance?.exitCode, 1);
+  assert.equal(report.completion, 'failed');
+  assert.equal(report.completionDisplay, 'supported');
 });
 
 test('runOrchestratorSkill gates review when execute does not produce its accepted artifact', async () => {

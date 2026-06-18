@@ -1,6 +1,8 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { RuntimeLedgerHeadBinding } from '../events/ledger.js';
 import type { HarnessExecutor } from './harness-run.js';
 
@@ -13,7 +15,7 @@ export {
 } from './evidence-store.js';
 
 import type { PhaseId } from './evidence-store.js';
-import { storePhaseArtifact, type EvidenceRef } from './evidence-store.js';
+import { materializeEvidenceInto, storePhaseArtifact, type EvidenceRef } from './evidence-store.js';
 import { type GraphNode, type NodeState, runIsolatedWorker, type WorkerResult } from './orchestrator.js';
 
 export interface PhaseSpec {
@@ -28,6 +30,10 @@ export interface OrchestratorSkillSpec {
     research: PhaseSpec;
     execute: PhaseSpec;
     review: PhaseSpec;
+  };
+  acceptance?: {
+    command: string[];
+    testFiles?: { path: string; content: string }[];
   };
 }
 
@@ -45,12 +51,27 @@ export interface SkillRunReport {
   what: string;
   phases: PhaseResult[];
   ledgerHead: RuntimeLedgerHeadBinding;
+  acceptance?: AcceptanceResult;
   /**
-   * Display-only mirror of the review node's nodeState. This is NOT the
-   * authoritative completion verdict; the authoritative verdict is the
-   * verifier-gated review-node state recorded in the hash-chained ledger.
+   * Authoritative skill completion. When acceptance is declared, this verdict is
+   * bound to the recomputable clean-checkout acceptance result.
+   */
+  completion: 'passed' | 'failed' | 'skipped';
+  /**
+   * Display-only mirror of the review node's nodeState. When acceptance is
+   * declared, acceptance/completion is the authoritative recomputable gate.
    */
   completionDisplay: NodeState;
+}
+
+export interface AcceptanceResult {
+  ran: boolean;
+  passed: boolean;
+  exitCode: number | null;
+  command: string[];
+  outputSha256: string;
+  cleanDir: string;
+  reason: string;
 }
 
 function interpolateGoal(template: string, input: { what: string }): string {
@@ -104,6 +125,82 @@ function readWorkerLedgerHead(result: WorkerResult): RuntimeLedgerHeadBinding | 
   return report.ledgerHead;
 }
 
+function sha256Hex(content: string | Buffer): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+function completionFromReview(review: PhaseResult | undefined): 'passed' | 'failed' | 'skipped' {
+  if (review?.nodeState === 'supported') return 'passed';
+  if (review?.nodeState === 'skipped') return 'skipped';
+  return 'failed';
+}
+
+export function runAcceptanceCheck(opts: {
+  executeRefs: EvidenceRef[];
+  acceptance: NonNullable<OrchestratorSkillSpec['acceptance']>;
+}): AcceptanceResult {
+  const cleanDir = mkdtempSync(join(tmpdir(), 'orchestrator-skill-acceptance-'));
+  const command = opts.acceptance.command;
+
+  try {
+    for (const ref of opts.executeRefs) {
+      materializeEvidenceInto(ref, cleanDir);
+    }
+
+    for (const testFile of opts.acceptance.testFiles ?? []) {
+      const testPath = join(cleanDir, testFile.path);
+      mkdirSync(dirname(testPath), { recursive: true });
+      writeFileSync(testPath, testFile.content);
+    }
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      ran: false,
+      passed: false,
+      exitCode: null,
+      command,
+      outputSha256: sha256Hex(reason),
+      cleanDir,
+      reason,
+    };
+  }
+
+  try {
+    const result = spawnSync(command[0], command.slice(1), {
+      cwd: cleanDir,
+      encoding: 'utf8',
+      maxBuffer: 1024 * 1024 * 10,
+    });
+    const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
+    const reason = result.error
+      ? result.error.message
+      : result.status === 0
+        ? 'acceptance command passed'
+        : `acceptance command exited ${result.status ?? 'unknown'}`;
+
+    return {
+      ran: true,
+      passed: result.status === 0,
+      exitCode: result.status,
+      command,
+      outputSha256: sha256Hex(output),
+      cleanDir,
+      reason,
+    };
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    return {
+      ran: true,
+      passed: false,
+      exitCode: null,
+      command,
+      outputSha256: sha256Hex(reason),
+      cleanDir,
+      reason,
+    };
+  }
+}
+
 export async function runOrchestratorSkill(
   spec: OrchestratorSkillSpec,
   input: { what: string; root: string; runId?: string },
@@ -113,6 +210,7 @@ export async function runOrchestratorSkill(
   const goalsByPhase = new Map(nodes.map((node) => [node.id, node.goal]));
   const phases: PhaseResult[] = [];
   const inputRefs: EvidenceRef[] = [];
+  const executeRefs: EvidenceRef[] = [];
   let ledgerHead: RuntimeLedgerHeadBinding | undefined;
 
   for (const phase of PHASE_IDS) {
@@ -142,14 +240,14 @@ export async function runOrchestratorSkill(
     if (phaseResult.nodeState !== 'supported' || !spec.phases[phase].acceptArtifact) continue;
 
     try {
-      inputRefs.push(
-        storePhaseArtifact({
-          root: input.root,
-          skillRunId: runId,
-          phase,
-          sourceFile: join(result.worktreePath, spec.phases[phase].acceptArtifact),
-        }),
-      );
+      const ref = storePhaseArtifact({
+        root: input.root,
+        skillRunId: runId,
+        phase,
+        sourceFile: join(result.worktreePath, spec.phases[phase].acceptArtifact),
+      });
+      inputRefs.push(ref);
+      if (phase === 'execute') executeRefs.push(ref);
     } catch {
       phaseResult.nodeState = 'blocked';
     }
@@ -157,6 +255,18 @@ export async function runOrchestratorSkill(
 
   if (!ledgerHead) throw new Error('runOrchestratorSkill could not bind a worker ledger head');
   const review = phases.find((phase) => phase.phase === 'review');
+  const execute = phases.find((phase) => phase.phase === 'execute');
+  const acceptance =
+    spec.acceptance && execute?.nodeState === 'supported'
+      ? runAcceptanceCheck({ executeRefs, acceptance: spec.acceptance })
+      : undefined;
+  const completion = spec.acceptance
+    ? acceptance
+      ? acceptance.passed
+        ? 'passed'
+        : 'failed'
+      : 'skipped'
+    : completionFromReview(review);
 
   return {
     schema_version: 1,
@@ -164,6 +274,8 @@ export async function runOrchestratorSkill(
     what: input.what,
     phases,
     ledgerHead,
+    acceptance,
+    completion,
     completionDisplay: review?.nodeState ?? 'failed',
   };
 }
