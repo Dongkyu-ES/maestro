@@ -16,6 +16,7 @@ import { markFactsVerifiedByEvents } from '../memory/fabric.js';
 import { type CodexExecResult, runCodexExec } from '../runtime/codex-exec-runner.js';
 import { redact } from '../util.js';
 import { type BaseRuleSet, compileBaseRules } from './base-rules.js';
+import { type CommandAcceptanceSpec, runCommandAcceptance } from './command-acceptance.js';
 import {
   buildContextBundle as buildCanonicalContextBundle,
   type ContextBundle as CanonicalContextBundle,
@@ -72,6 +73,12 @@ export interface HarnessRunOptions {
    * which must not freshen the project's memory from a worktree-local verification.
    */
   stampFabricOnVerify?: boolean;
+  /**
+   * M7 opt-in task-correctness gate. When set, the run is `completed` only if a diff exists AND this
+   * command passes over a clean checkout of that diff (operator-provided test files override the
+   * executor's). Absent → behavior is unchanged (diff verifier alone decides).
+   */
+  acceptance?: CommandAcceptanceSpec;
   providerProfile?: string;
   freshnessWindowMs?: number;
 }
@@ -659,7 +666,28 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     artifactRefs: ['tool-execution-evidence.json', 'tool-git-status.txt'],
   });
 
-  let state: HarnessSliceState = verifier.status === 'supported' ? 'completed' : 'blocked';
+  // M7 broadening: an opt-in task-correctness gate. With an acceptance command declared, "a diff
+  // exists" (verifier supported) is necessary but NOT sufficient — the operator's command must pass
+  // over a CLEAN checkout of the run's diff (runCommandAcceptance), so a run cannot be completed by
+  // producing arbitrary changes that don't actually satisfy the task. Runs only when there is a diff.
+  let acceptancePassed = true;
+  if (options.acceptance && verifier.status === 'supported') {
+    const acceptance = runCommandAcceptance({ worktreePath: root, acceptance: options.acceptance });
+    acceptancePassed = acceptance.passed;
+    appendRuntimeEvent(runDir, {
+      runId,
+      source: 'harness',
+      type: 'acceptance.completed',
+      payload: {
+        ran: acceptance.ran,
+        passed: acceptance.passed,
+        exit_code: acceptance.exitCode,
+        command: acceptance.command,
+        reason: acceptance.reason,
+      },
+    });
+  }
+  let state: HarnessSliceState = verifier.status === 'supported' && acceptancePassed ? 'completed' : 'blocked';
   const beforeState = runHooks('BeforeStateTransition', hooks, {
     runId,
     runDir: relative(root, runDir).replaceAll('\\', '/'),

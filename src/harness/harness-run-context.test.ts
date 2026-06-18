@@ -60,6 +60,22 @@ fs.writeFileSync(path.join(cwd, 'target.txt'), 'after\\n');
 process.exit(0);
 `;
 
+// Writes add.mjs; correct (a+b) when the prompt says "correct", otherwise wrong (a-b). Either way a
+// real diff is produced, so the diff verifier is "supported" — only acceptance separates them.
+const ADD_FAKE_CODEX = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const cwd = args.includes('-C') ? args[args.indexOf('-C') + 1] : process.cwd();
+const prompt = args.at(-1) || '';
+const op = /correct/.test(prompt) ? '+' : '-';
+fs.writeFileSync(path.join(cwd, 'add.mjs'), 'export function add(a, b) { return a ' + op + ' b; }\\n');
+process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 't' }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }) + '\\n');
+process.exit(0);
+`;
+
 const promptRule: Rule = {
   id: 'rule.prompt',
   text: 'Always carry product-owned base rules into executor context.',
@@ -166,6 +182,37 @@ test('T7 fabricAgentDir loads stored facts into context (gate #4 in prod) and st
   // cites an external event the run never produced, so it must remain unstamped (no blanket stamp).
   const fact = readMemoryFabric(join(root, '.agent')).facts.find((f) => f.id === 'mem-fabric');
   assert.equal(fact?.last_verified_at, undefined);
+});
+
+test('M7 acceptance gate: a run completes only when the declared command passes over its diff', async () => {
+  const acceptance = {
+    command: ['node', 'accept.mjs'],
+    testFiles: [
+      { path: 'accept.mjs', content: "import { add } from './add.mjs';\nif (add(1, 2) !== 3) process.exit(1);\n" },
+    ],
+  };
+
+  // Correct implementation → diff verifier supported AND acceptance passes → completed.
+  const good = await runHarnessSlice({
+    root: tmpRepo(),
+    goal: 'implement add correctly',
+    executorBin: fakeCodex(ADD_FAKE_CODEX),
+    runId: 'accept-good',
+    acceptance,
+  });
+  assert.equal(good.state, 'completed');
+  assert.equal(good.verifier.status, 'supported');
+
+  // Wrong implementation → a real diff exists (verifier supported) but acceptance FAILS → blocked.
+  const bad = await runHarnessSlice({
+    root: tmpRepo(),
+    goal: 'implement add the wrong way',
+    executorBin: fakeCodex(ADD_FAKE_CODEX),
+    runId: 'accept-bad',
+    acceptance,
+  });
+  assert.equal(bad.verifier.status, 'supported');
+  assert.equal(bad.state, 'blocked');
 });
 
 test('T7 stale memory cannot forge inclusion as a confirmed fact', async () => {
