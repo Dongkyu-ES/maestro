@@ -8,6 +8,7 @@ import {
   type RuntimeLedgerHeadBinding,
   readRuntimeEvents,
 } from '../events/ledger.js';
+import { type EvidenceRef, materializeEvidenceInto } from './evidence-store.js';
 import { type HarnessExecutor, runHarnessSlice } from './harness-run.js';
 import { runVerifier } from './verifier.js';
 
@@ -97,6 +98,7 @@ async function runWorkerSlice(options: {
   goal: string;
   executor?: HarnessExecutor;
   timeoutMs?: number;
+  inputRefs?: EvidenceRef[];
 }): Promise<WorkerResult> {
   const base = {
     workerId: options.workerId,
@@ -104,6 +106,7 @@ async function runWorkerSlice(options: {
     worktreePath: options.worktreePath,
   };
   try {
+    for (const ref of options.inputRefs ?? []) materializeEvidenceInto(ref, options.worktreePath);
     const slice = await runHarnessSlice({
       root: options.worktreePath,
       goal: options.goal,
@@ -141,6 +144,7 @@ export async function runIsolatedWorker(options: {
   goal: string;
   executor?: HarnessExecutor;
   timeoutMs?: number;
+  inputRefs?: EvidenceRef[];
 }): Promise<WorkerResult> {
   const root = resolve(options.root);
   const { branch, worktreePath } = createWorktree(root, options.workerId);
@@ -151,6 +155,7 @@ export async function runIsolatedWorker(options: {
     goal: options.goal,
     executor: options.executor,
     timeoutMs: options.timeoutMs,
+    inputRefs: options.inputRefs,
   });
 }
 
@@ -470,7 +475,10 @@ export async function runTaskGraph(options: {
     type: 'orchestration.started',
     payload: { goal: options.goal, node_count: options.nodes.length, kind: 'dag' },
   });
-  const runTok = parentRunId.replace(/^graph-/, '').replace(/-/g, '').slice(0, 8);
+  const runTok = parentRunId
+    .replace(/^graph-/, '')
+    .replace(/-/g, '')
+    .slice(0, 8);
   const wtKey = (id: string) => `${id}-${runTok}`;
 
   const state = new Map<string, NodeState | 'pending'>(options.nodes.map((n) => [n.id, 'pending']));
