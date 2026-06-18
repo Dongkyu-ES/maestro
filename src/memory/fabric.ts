@@ -1,6 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { type MemoryWriteRecord, validateMemoryWrite } from './records.js';
+
+// Hard ceiling on the fabric file size. Beyond this the file is treated as corrupt/foreign and read
+// fails open (returns no facts) rather than risking an OOM on JSON.parse. ~16 MB is far above any
+// honest fabric (a fact is a few hundred bytes; the live fabric is ~12 KB).
+const MAX_FABRIC_BYTES = 16 * 1024 * 1024;
 
 export type MemoryLayer =
   | 'vertical_project'
@@ -50,12 +55,16 @@ export function memoryFabricPath(agentDir: string): string {
 export function readMemoryFabric(agentDir: string): MemoryFabricStore {
   const path = memoryFabricPath(agentDir);
   if (!existsSync(path)) return { schema_version: 1, facts: [] };
-  // Fail open on a malformed/foreign store: a corrupt fabric.json must not crash a run that merely
-  // wants to read memory (the read path is default-on for `warden harness run`). An unreadable
-  // fabric simply contributes no facts — the safe direction.
+  // Fail open on a malformed/foreign/oversized store: a corrupt fabric.json must not crash a run
+  // that merely wants to read memory (the read path is default-on for `warden harness run`). An
+  // unreadable fabric simply contributes no facts — the safe direction.
   try {
+    if (statSync(path).size > MAX_FABRIC_BYTES) return { schema_version: 1, facts: [] };
     const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<MemoryFabricStore>;
     if (!parsed || !Array.isArray(parsed.facts)) return { schema_version: 1, facts: [] };
+    // Full fidelity: this is the storage read, used by read-modify-write callers (appendMemoryFact,
+    // markFactsVerifiedByEvents). Bounding the fact COUNT here would silently truncate the store on
+    // every write — the consumption cap lives in loadGatedMemoryFromFabric instead.
     return { schema_version: 1, facts: parsed.facts };
   } catch {
     return { schema_version: 1, facts: [] };
@@ -64,7 +73,12 @@ export function readMemoryFabric(agentDir: string): MemoryFabricStore {
 export function writeMemoryFabric(agentDir: string, store: MemoryFabricStore): void {
   const path = memoryFabricPath(agentDir);
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, JSON.stringify(store, null, 2));
+  // Atomic publish: write a temp file then rename over the target, so a crash or a concurrent reader
+  // never observes a half-written fabric (rename is atomic within a filesystem). The pid suffix
+  // keeps two processes from colliding on the same temp path.
+  const tmp = `${path}.tmp.${process.pid}`;
+  writeFileSync(tmp, JSON.stringify(store, null, 2));
+  renameSync(tmp, path);
 }
 export function appendMemoryFact(
   agentDir: string,

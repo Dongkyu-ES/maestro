@@ -1,15 +1,17 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import test from 'node:test';
 import {
   appendFactFromWriteRecord,
   appendMemoryFact,
   factFromWriteRecord,
+  type MemoryFact,
   markFactsVerifiedByEvents,
   memoryFabricPath,
   readMemoryFabric,
+  writeMemoryFabric,
 } from './fabric.js';
 import type { MemoryWriteRecord } from './records.js';
 
@@ -33,6 +35,54 @@ function writeRecord(overrides: Partial<MemoryWriteRecord> = {}): MemoryWriteRec
     ...overrides,
   };
 }
+
+test('writeMemoryFabric publishes atomically and leaves no temp file behind', () => {
+  const agentDir = tmpAgentDir();
+  const fact: MemoryFact = {
+    schema_version: 1,
+    id: 'a',
+    layer: 'vertical_project',
+    key: 'k',
+    value: 'v',
+    source_event_ids: ['e1'],
+    artifact_refs: [],
+    created_at: '2026-06-01T00:00:00.000Z',
+  };
+  writeMemoryFabric(agentDir, { schema_version: 1, facts: [fact] });
+  assert.deepEqual(readMemoryFabric(agentDir).facts, [fact]);
+  // No `.tmp.<pid>` artifact lingers next to the published file.
+  const dir = dirname(memoryFabricPath(agentDir));
+  assert.equal(
+    readdirSync(dir).some((f) => f.includes('.tmp.')),
+    false,
+  );
+});
+
+test('readMemoryFabric is full fidelity: a large store survives read-modify-write without truncation', () => {
+  const agentDir = tmpAgentDir();
+  const facts: MemoryFact[] = Array.from({ length: 2050 }, (_, i) => ({
+    schema_version: 1,
+    id: `f${i}`,
+    layer: 'vertical_project',
+    key: 'k',
+    value: i,
+    source_event_ids: ['e'],
+    artifact_refs: [],
+    created_at: '2026-06-01T00:00:00.000Z',
+  }));
+  writeMemoryFabric(agentDir, { schema_version: 1, facts });
+  // Storage read returns ALL facts — the consumption cap belongs to the gate, not here.
+  assert.equal(readMemoryFabric(agentDir).facts.length, 2050);
+  // A read-modify-write (append) must not silently drop the older facts past any cap.
+  appendMemoryFact(agentDir, {
+    layer: 'vertical_project',
+    key: 'extra',
+    value: 'x',
+    source_event_ids: ['e'],
+    artifact_refs: [],
+  });
+  assert.equal(readMemoryFabric(agentDir).facts.length, 2051);
+});
 
 test('readMemoryFabric fails open on a malformed store (default-on read path must not crash a run)', () => {
   const agentDir = tmpAgentDir();

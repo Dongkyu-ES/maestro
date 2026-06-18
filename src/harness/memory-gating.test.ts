@@ -3,7 +3,7 @@ import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { appendMemoryFact, type MemoryFact, markFactsVerifiedByEvents } from '../memory/fabric.js';
+import { appendMemoryFact, type MemoryFact, markFactsVerifiedByEvents, writeMemoryFabric } from '../memory/fabric.js';
 import {
   assertNoStaleAsFact,
   buildMemoryContextSections,
@@ -129,6 +129,26 @@ test('loadGatedMemoryFromFabric: a stored fact is unverified until a verifier st
   markFactsVerifiedByEvents(agentDir, ['e1'], now);
   const after = loadGatedMemoryFromFabric(agentDir);
   assert.equal(classifyMemoryForInjection(after[0], { now, freshnessWindowMs }), 'confirmed_fact');
+});
+
+test('loadGatedMemoryFromFabric caps injected facts to the most recent (consumption bound, not storage)', () => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'fabric-cap-'));
+  const facts: MemoryFact[] = Array.from({ length: 2050 }, (_, i) => ({
+    schema_version: 1,
+    id: `f${i}`,
+    layer: 'vertical_project',
+    key: 'k',
+    value: i,
+    source_event_ids: ['e'],
+    artifact_refs: [],
+    created_at: '2026-06-01T00:00:00.000Z',
+  }));
+  writeMemoryFabric(agentDir, { schema_version: 1, facts });
+  const injected = loadGatedMemoryFromFabric(agentDir);
+  assert.equal(injected.length, 2000);
+  // Freshest kept (f2049), oldest dropped (f0..f49) — the underlying store still holds all 2050.
+  assert.equal(injected[injected.length - 1].id, 'f2049');
+  assert.equal(injected[0].id, 'f50');
 });
 
 test('T5 buildMemoryContextSections is deterministic', () => {

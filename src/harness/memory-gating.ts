@@ -43,13 +43,21 @@ export function gatingViewFromFact(fact: MemoryFact): MemoryEntry {
   };
 }
 
+// Bound how many facts a single run injects into context. The freshest facts (append order = end of
+// the store) are the most relevant to gate #4; keeping the most recent N caps context cost as the
+// store grows, without touching the full-fidelity stored fabric.
+const MAX_FABRIC_FACTS_INJECTED = 2000;
+
 /**
- * Load every stored fact from the canonical fabric and project it into the gate-#4 view. This is
- * the production read path that feeds the fabric into a run's context: the caller passes the result
- * as `memory`, and gate #4 then admits only the facts with provenance + recent verification.
+ * Load stored facts from the canonical fabric and project them into the gate-#4 view. This is the
+ * production read path that feeds the fabric into a run's context: the caller passes the result as
+ * `memory`, and gate #4 then admits only the facts with provenance + recent verification. Capped to
+ * the most recent facts to bound context cost — a consumption bound, never a storage truncation.
  */
 export function loadGatedMemoryFromFabric(agentDir: string): MemoryEntry[] {
-  return readMemoryFabric(agentDir).facts.map(gatingViewFromFact);
+  const facts = readMemoryFabric(agentDir).facts;
+  const recent = facts.length > MAX_FABRIC_FACTS_INJECTED ? facts.slice(-MAX_FABRIC_FACTS_INJECTED) : facts;
+  return recent.map(gatingViewFromFact);
 }
 
 export type InjectionLabel = 'confirmed_fact' | 'unverified' | 'stale' | 'excluded';
