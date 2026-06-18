@@ -1,5 +1,8 @@
+import type { RuntimeLedgerHeadBinding } from '../events/ledger.js';
 import type { HarnessExecutor } from './harness-run.js';
-import type { GraphNode } from './orchestrator.js';
+import { type GraphNode, type GraphNodeResult, type NodeState, runTaskGraph } from './orchestrator.js';
+
+type PhaseId = 'research' | 'execute' | 'review';
 
 export interface PhaseSpec {
   executor?: HarnessExecutor;
@@ -14,6 +17,28 @@ export interface OrchestratorSkillSpec {
     execute: PhaseSpec;
     review: PhaseSpec;
   };
+}
+
+export interface PhaseResult {
+  phase: PhaseId;
+  workerId: string;
+  nodeState: NodeState;
+  outputRef?: string;
+  skippedReason?: string;
+}
+
+export interface SkillRunReport {
+  schema_version: 1;
+  skillId: string;
+  what: string;
+  phases: PhaseResult[];
+  ledgerHead: RuntimeLedgerHeadBinding;
+  /**
+   * Display-only mirror of the review node's nodeState. This is NOT the
+   * authoritative completion verdict; the authoritative verdict is the
+   * verifier-gated review-node state recorded in the hash-chained ledger.
+   */
+  completionDisplay: NodeState;
 }
 
 function interpolateGoal(template: string, input: { what: string }): string {
@@ -41,4 +66,39 @@ export function compileSkillToGraphTemplate(spec: OrchestratorSkillSpec, input: 
       executor: spec.phases.review.executor,
     },
   ];
+}
+
+const PHASE_IDS: PhaseId[] = ['research', 'execute', 'review'];
+
+function toPhaseResult(node: GraphNodeResult, phase: PhaseId): PhaseResult {
+  return {
+    phase,
+    workerId: node.workerId,
+    nodeState: node.nodeState,
+    outputRef: node.outputRef ?? undefined,
+    skippedReason: node.skippedReason,
+  };
+}
+
+export async function runOrchestratorSkill(
+  spec: OrchestratorSkillSpec,
+  input: { what: string; root: string; runId?: string },
+): Promise<SkillRunReport> {
+  const nodes = compileSkillToGraphTemplate(spec, { what: input.what });
+  const report = await runTaskGraph({ root: input.root, nodes, goal: spec.id, runId: input.runId });
+  const resultsByWorkerId = new Map(report.nodes.map((node) => [node.workerId, node]));
+  const phases = PHASE_IDS.flatMap((phase) => {
+    const node = resultsByWorkerId.get(phase);
+    return node ? [toPhaseResult(node, phase)] : [];
+  });
+  const review = resultsByWorkerId.get('review');
+
+  return {
+    schema_version: 1,
+    skillId: spec.id,
+    what: input.what,
+    phases,
+    ledgerHead: report.ledgerHead,
+    completionDisplay: review?.nodeState ?? 'failed',
+  };
 }

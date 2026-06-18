@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import { makeCliExecutor } from './compare.js';
 import { runTaskGraph } from './orchestrator.js';
-import { compileSkillToGraphTemplate, type OrchestratorSkillSpec } from './orchestrator-skill.js';
+import { compileSkillToGraphTemplate, type OrchestratorSkillSpec, runOrchestratorSkill } from './orchestrator-skill.js';
 
 function tmpRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'orchestrator-skill-'));
@@ -134,4 +134,65 @@ test('compiled graph skips review when execute makes no observable change', asyn
   assert.equal(review?.nodeState, 'skipped');
   assert.match(review?.skippedReason ?? '', /unsupported deps: execute/);
   assert.equal(review?.worktreePath ? existsSync(review.worktreePath) : true, false);
+});
+
+test('runOrchestratorSkill returns refs-only phase report when all phases are supported', async () => {
+  const root = tmpRepo();
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+  const spec: OrchestratorSkillSpec = {
+    id: 'research-execute-review',
+    phases: {
+      research: { goalTemplate: 'research {what}: write research.txt', executor },
+      execute: { goalTemplate: 'execute {what}: write execute.txt', executor },
+      review: { goalTemplate: 'review {what}: write review.txt', executor },
+    },
+  };
+
+  const report = await runOrchestratorSkill(spec, { what: 'refs only work', root, runId: 'graph-skill-happy' });
+
+  assert.equal(report.schema_version, 1);
+  assert.equal(report.skillId, spec.id);
+  assert.equal(report.what, 'refs only work');
+  assert.deepEqual(
+    report.phases.map((p) => p.phase),
+    ['research', 'execute', 'review'],
+  );
+  assert.deepEqual(
+    report.phases.map((p) => p.nodeState),
+    ['supported', 'supported', 'supported'],
+  );
+  assert.equal(report.completionDisplay, 'supported');
+  assert.equal(report.ledgerHead.run_id, 'graph-skill-happy');
+
+  for (const phase of report.phases) {
+    assert.equal(typeof phase.outputRef, 'string');
+    assert.deepEqual(Object.keys(phase), ['phase', 'workerId', 'nodeState', 'outputRef', 'skippedReason']);
+  }
+});
+
+test('runOrchestratorSkill mirrors skipped review when execute is blocked', async () => {
+  const root = tmpRepo();
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+  const spec: OrchestratorSkillSpec = {
+    id: 'research-execute-review',
+    phases: {
+      research: { goalTemplate: 'research {what}: write research.txt', executor },
+      execute: { goalTemplate: 'execute {what} without observable file changes', executor },
+      review: { goalTemplate: 'review {what}: write review.txt', executor },
+    },
+  };
+
+  const report = await runOrchestratorSkill(spec, { what: 'phase-gated work', root, runId: 'graph-skill-gated' });
+
+  assert.equal(report.completionDisplay, 'skipped');
+  assert.notEqual(report.completionDisplay, 'supported');
+  assert.deepEqual(
+    report.phases.map((p) => p.phase),
+    ['research', 'execute', 'review'],
+  );
+  assert.deepEqual(
+    report.phases.map((p) => p.nodeState),
+    ['supported', 'blocked', 'skipped'],
+  );
+  assert.match(report.phases.find((p) => p.phase === 'review')?.skippedReason ?? '', /unsupported deps: execute/);
 });
