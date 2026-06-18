@@ -14,9 +14,11 @@ import {
   compileSkillToGraphTemplate,
   loadSkillSpecFromJson,
   materializeEvidenceInto,
+  type ExecuteCandidate,
   listSkillRunSummaries,
   type OrchestratorSkillSpec,
   projectSkillRun,
+  selectExecuteCandidateByAcceptance,
   recomputeCompletion,
   recomputeCompletionFromLedger,
   resolveEvidenceArtifact,
@@ -674,6 +676,51 @@ test('listSkillRunSummaries and the home page surface skill runs for discovery',
   const home = renderHtml(root);
   assert.match(home, /Skill runs \(orchestrator-as-skill\)/);
   assert.match(home, /\/skill\/skill-discovery/);
+});
+
+const candidateAcceptance = {
+  command: ['node', 'accept.test.mjs'],
+  testFiles: [
+    {
+      path: 'accept.test.mjs',
+      content: `import { add } from './add.mjs';
+if (add(1, 2) !== 3) process.exit(1);
+`,
+    },
+  ],
+};
+
+function makeCandidate(label: string, addBody: string): ExecuteCandidate {
+  const dir = mkdtempSync(join(tmpdir(), `cand-${label}-`));
+  const storePath = join(dir, 'add.mjs');
+  writeFileSync(storePath, addBody);
+  return { label, executeRefs: [{ phase: 'execute', relativePath: 'add.mjs', sha256: sha256Hex(addBody), storePath }] };
+}
+
+test('selectExecuteCandidateByAcceptance picks the winner by acceptance, not order or rank', () => {
+  const forged = makeCandidate('codex-forged', 'export function add(a,b){return a-b}\n');
+  const correct = makeCandidate('claude-correct', 'export function add(a,b){return a+b}\n');
+
+  // The CORRECT candidate is listed LAST — proving selection is by recomputable acceptance,
+  // not by order, model rank, or self-claim.
+  const selection = selectExecuteCandidateByAcceptance({ candidates: [forged, correct], acceptance: candidateAcceptance });
+
+  assert.equal(selection.winner, 'claude-correct');
+  assert.equal(selection.results.find((r) => r.label === 'codex-forged')?.passed, false);
+  assert.equal(selection.results.find((r) => r.label === 'claude-correct')?.passed, true);
+});
+
+test('selectExecuteCandidateByAcceptance returns no winner when no candidate passes acceptance', () => {
+  const sub = makeCandidate('a', 'export function add(a,b){return a-b}\n');
+  const mul = makeCandidate('b', 'export function add(a,b){return a*b}\n');
+
+  const selection = selectExecuteCandidateByAcceptance({ candidates: [sub, mul], acceptance: candidateAcceptance });
+
+  assert.equal(selection.winner, null);
+  assert.equal(
+    selection.results.every((r) => !r.passed),
+    true,
+  );
 });
 
 function briefExecutor(briefContent: string): HarnessExecutor {

@@ -290,6 +290,36 @@ function readExecuteRefsFromStore(root: string, runId: string): EvidenceRef[] {
   });
 }
 
+export interface ExecuteCandidate {
+  /** Executor identity, e.g. 'codex' | 'claude' | 'agy'. */
+  label: string;
+  /** That candidate's content-addressed execute evidence. */
+  executeRefs: EvidenceRef[];
+}
+
+export interface CandidateSelection {
+  /** Label of the first candidate whose acceptance passes, or null if none pass. */
+  winner: string | null;
+  results: { label: string; passed: boolean; reason: string }[];
+}
+
+/**
+ * Stage X synthesis primitive: run the SAME acceptance over each candidate's execute evidence
+ * in its own clean checkout, and pick the winner by the recomputable verifier verdict — never
+ * by model rank, output length, or a worker's self-claim. A candidate wins only if its evidence
+ * independently passes acceptance; if none pass, there is no winner (fail closed).
+ */
+export function selectExecuteCandidateByAcceptance(opts: {
+  candidates: ExecuteCandidate[];
+  acceptance: NonNullable<OrchestratorSkillSpec['acceptance']>;
+}): CandidateSelection {
+  const results = opts.candidates.map((candidate) => {
+    const acceptance = runAcceptanceCheck({ executeRefs: candidate.executeRefs, acceptance: opts.acceptance });
+    return { label: candidate.label, passed: acceptance.passed, reason: acceptance.reason };
+  });
+  return { winner: results.find((result) => result.passed)?.label ?? null, results };
+}
+
 export function recomputeCompletion(
   spec: OrchestratorSkillSpec,
   report: SkillRunReport,
