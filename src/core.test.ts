@@ -164,6 +164,28 @@ function writeMachineHardGateFixtures(dir: string): void {
     task_context_sha256: taskContextSha,
     stable_fields: { recommendation: 'old-guard' },
   });
+  // Third run (A/A/B): a second no-promotion run under the same conditions. Its field value matches
+  // `before`, and its own chained ledger (no promotion.loaded event) ledger-backs the no-promotion
+  // claim — proving the field is deterministic absent the promotion delta.
+  mkdirSync(join(dir, '.agent/runs/promo-baseline'), { recursive: true });
+  appendRuntimeEvent(join(dir, '.agent/runs/promo-baseline'), {
+    runId: 'promo-baseline',
+    source: 'runtime-manager',
+    type: 'goal.received',
+    payload: { goal: 'baseline no-promotion run' },
+  });
+  const baselineEventsRel = '.agent/runs/promo-baseline/events.jsonl';
+  const baselineEventsSha = hashTextForTest(readFileSync(join(dir, baselineEventsRel), 'utf8'));
+  const baselineLedgerHead = createRuntimeLedgerHeadBinding(readRuntimeEvents(join(dir, '.agent/runs/promo-baseline')));
+  const baselineRunSha = writeJsonArtifact(dir, '.agent/runs/promo-baseline/promotion-state.json', {
+    run_id: 'baseline',
+    task_context_sha256: taskContextSha,
+    runtime_events_path: baselineEventsRel,
+    runtime_events_sha256: baselineEventsSha,
+    runtime_event_count: baselineLedgerHead.event_count,
+    runtime_ledger_head_sha256: baselineLedgerHead.ledger_head_sha256,
+    stable_fields: { recommendation: 'old-guard' },
+  });
   const loadedPromotionSha = writeJsonArtifact(dir, '.agent/promotions/applied/agent_instruction/fixture.md', {
     instruction: 'new-guard',
   });
@@ -232,6 +254,8 @@ function writeMachineHardGateFixtures(dir: string): void {
     status: 'PASS',
     before_run_path: '.agent/runs/promo-before/promotion-state.json',
     before_run_sha256: beforeRunSha,
+    baseline_run_path: '.agent/runs/promo-baseline/promotion-state.json',
+    baseline_run_sha256: baselineRunSha,
     after_run_path: '.agent/runs/promo-after/promotion-state.json',
     after_run_sha256: afterRunSha,
     review_finding_path: '.agent/hard-gates/promotion/review-finding.json',
@@ -813,6 +837,80 @@ test('G008 promotion differential verifies three-run effect from raw artifacts',
 
   const report = verifyPromotionDifferential({ root: dir });
   assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
+  // The production promotion flow provides no baseline run, so it is honestly recorded as the
+  // weaker two-run mode — never silently labeled three-run.
+  assert.equal(report.determinism_mode, 'two-run-single-delta');
+  assert.equal(report.causal_claim, 'correlation-under-controlled-single-delta');
+});
+
+test('promotion differential records three-run mode when a stable baseline is provided', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  writeMachineHardGateFixtures(dir);
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
+  assert.equal(report.determinism_mode, 'three-run-controlled-single-delta');
+  assert.equal(report.checks.baseline_stability_when_declared, true);
+});
+
+test('promotion differential FAILs when a declared baseline drifts (run variance confounds the delta)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  writeMachineHardGateFixtures(dir);
+  // The baseline (no promotion) now disagrees with `before` on the changed field — the field is not
+  // deterministic absent the delta, so `after`'s change can't be attributed to the promotion.
+  const baselinePath = join(dir, '.agent/runs/promo-baseline/promotion-state.json');
+  const baseline = JSON.parse(readFileSync(baselinePath, 'utf8'));
+  baseline.stable_fields.recommendation = 'drifted';
+  writeFileSync(baselinePath, `${JSON.stringify(baseline, null, 2)}\n`);
+  const gatePath = join(dir, '.agent/hard-gates/promotion-learning.json');
+  const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+  gate.baseline_run_sha256 = hashTextForTest(readFileSync(baselinePath, 'utf8'));
+  writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}\n`);
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.baseline_stability_when_declared, false);
+});
+
+test('promotion differential rejects a baseline that re-uses the before run (one run counted twice)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  writeMachineHardGateFixtures(dir);
+  const gatePath = join(dir, '.agent/hard-gates/promotion-learning.json');
+  const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+  // Re-point the baseline at the `before` run — it is not an independent third run.
+  gate.baseline_run_path = gate.before_run_path;
+  gate.baseline_run_sha256 = gate.before_run_sha256;
+  writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}\n`);
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.baseline_stability_when_declared, false);
+});
+
+test('promotion differential rejects a baseline whose own ledger actually loaded a promotion', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  writeMachineHardGateFixtures(dir);
+  const baseDir = join(dir, '.agent/runs/promo-baseline');
+  // The baseline's ledger contains a promotion.loaded event — it is not a clean no-promotion run,
+  // even though its promotion-state.json omits the loaded-artifact field.
+  appendRuntimeEvent(baseDir, {
+    runId: 'promo-baseline',
+    source: 'runtime-manager',
+    type: 'promotion.loaded',
+    payload: { promotion_id: 'sneaky' },
+  });
+  const eventsRel = '.agent/runs/promo-baseline/events.jsonl';
+  const head = createRuntimeLedgerHeadBinding(readRuntimeEvents(baseDir));
+  const basePath = join(baseDir, 'promotion-state.json');
+  const base = JSON.parse(readFileSync(basePath, 'utf8'));
+  base.runtime_events_sha256 = hashTextForTest(readFileSync(join(dir, eventsRel), 'utf8'));
+  base.runtime_event_count = head.event_count;
+  base.runtime_ledger_head_sha256 = head.ledger_head_sha256;
+  writeFileSync(basePath, `${JSON.stringify(base, null, 2)}\n`);
+  const gatePath = join(dir, '.agent/hard-gates/promotion-learning.json');
+  const gate = JSON.parse(readFileSync(gatePath, 'utf8'));
+  gate.baseline_run_sha256 = hashTextForTest(readFileSync(basePath, 'utf8'));
+  writeFileSync(gatePath, `${JSON.stringify(gate, null, 2)}\n`);
+  const report = verifyPromotionDifferential({ root: dir });
+  assert.equal(report.decision, 'FAIL');
+  assert.equal(report.checks.baseline_stability_when_declared, false);
 });
 
 test('G011 promotion differential accepts explicit legacy prev-hash backfill when digests are rebound', () => {
