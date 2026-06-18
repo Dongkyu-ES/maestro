@@ -1,7 +1,7 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { listApprovals, listFilesRecursive, listProjects, loadIndex, runtimeTruthForRun } from './core.js';
-import { projectSkillRun } from './harness/orchestrator-skill.js';
+import { listSkillRunSummaries, projectSkillRun } from './harness/orchestrator-skill.js';
 import { AGENT_DIR, isSecretPath, projectRoot, type RunMeta, readYaml, redact, safeJoin } from './util.js';
 
 export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''): string {
@@ -10,6 +10,15 @@ export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''):
   const auth = authToken ? `<input type="hidden" name="auth" value="${attr(authToken)}">` : '';
   const hidden = csrf + auth;
   const activeRoot = projectRoot(cwd);
+  const skillRuns = listSkillRunSummaries(activeRoot);
+  const skillRunLane = skillRuns.length
+    ? skillRuns
+        .map(
+          (s) =>
+            `<article class="run-card"><header><a href="/skill/${attr(s.runId)}">${esc(s.runId)}</a><span class="pill">${esc(s.skillId)}</span></header><small>Open to recompute the authoritative completion from the ledger + execute evidence.</small></article>`,
+        )
+        .join('')
+    : '<p class="empty">No skill runs yet. Run <code>warden skill run &lt;spec.json&gt; --what "…"</code>.</p>';
   const projects = listProjects();
   const projectPanel = projects.length
     ? projects
@@ -68,7 +77,7 @@ export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''):
   };
   return page(
     'Warden',
-    `<header class="topbar"><div><h1>Warden</h1><p>Operator input on top. Agent work below.</p></div><nav class="top-actions"><a class="ghost" href="/review-gate">Review Gate 사용법</a><a class="ghost" href="/">Refresh</a></nav></header><main><section class="operator-zone"><div class="section-title"><span>01</span><div><h2>Your input / permissions</h2><p>여기는 네가 입력하거나 승인해야 진행되는 것만 둔다.</p></div></div><div class="operator-grid"><div class="panel"><h3>Projects</h3>${projectPanel}<form class="stack" method="POST" action="/api/projects">${hidden}<input name="path" placeholder="/absolute/path/to/project" required><button class="primary">Add / register project</button></form><small>The active project is where you launched <code>warden web</code>. Registering adds a project to the registry and initializes its <code>.agent/</code>.</small></div><div class="panel"><h3>Tool / permission boundary</h3><p><strong>Allowed without approval:</strong> git status/diff/log/show, ls/cat safe paths, task adapter execution.</p><p><strong>Approval required:</strong> shell mutation, package install, git commit/push, apply/merge proposal, network/unsafe host.</p><p><strong>Blocked by design:</strong> secret paths, path traversal, natural-language replies as shell commands.</p></div><div class="panel"><h3>Create Task</h3><form class="stack" method="POST" action="/api/tasks">${hidden}<input name="title" placeholder="해야 할 일을 한 줄로 적어라" required><button class="primary">Create Task</button></form></div><div class="panel urgent"><h3>Approval Queue</h3>${approvalPanel}</div></div><div class="panel"><h3>Task Board — choose what should run</h3>${taskPanel}</div></section><section class="agent-zone"><div class="section-title"><span>02</span><div><h2>Agent / LLM work</h2><p>에이전트가 수행 중인 것, 다음에 수행할 것, 끝난 증거를 아래에서 본다.</p></div></div><div class="lane"><h3>Running now</h3>${activeRuns.length ? activeRuns.map(runCard).join('') : '<p class="empty">Nothing running.</p>'}</div><div class="lane"><h3>Ready / waiting to run</h3>${waitingRuns.length ? waitingRuns.map(runCard).join('') : '<p class="empty">No run waiting. Create a run from a task above.</p>'}</div><div class="lane"><h3>Recent results</h3>${completedRuns.length ? completedRuns.map(runCard).join('') : '<p class="empty">No completed runs yet.</p>'}</div></section></main>`,
+    `<header class="topbar"><div><h1>Warden</h1><p>Operator input on top. Agent work below.</p></div><nav class="top-actions"><a class="ghost" href="/review-gate">Review Gate 사용법</a><a class="ghost" href="/">Refresh</a></nav></header><main><section class="operator-zone"><div class="section-title"><span>01</span><div><h2>Your input / permissions</h2><p>여기는 네가 입력하거나 승인해야 진행되는 것만 둔다.</p></div></div><div class="operator-grid"><div class="panel"><h3>Projects</h3>${projectPanel}<form class="stack" method="POST" action="/api/projects">${hidden}<input name="path" placeholder="/absolute/path/to/project" required><button class="primary">Add / register project</button></form><small>The active project is where you launched <code>warden web</code>. Registering adds a project to the registry and initializes its <code>.agent/</code>.</small></div><div class="panel"><h3>Tool / permission boundary</h3><p><strong>Allowed without approval:</strong> git status/diff/log/show, ls/cat safe paths, task adapter execution.</p><p><strong>Approval required:</strong> shell mutation, package install, git commit/push, apply/merge proposal, network/unsafe host.</p><p><strong>Blocked by design:</strong> secret paths, path traversal, natural-language replies as shell commands.</p></div><div class="panel"><h3>Create Task</h3><form class="stack" method="POST" action="/api/tasks">${hidden}<input name="title" placeholder="해야 할 일을 한 줄로 적어라" required><button class="primary">Create Task</button></form></div><div class="panel urgent"><h3>Approval Queue</h3>${approvalPanel}</div></div><div class="panel"><h3>Task Board — choose what should run</h3>${taskPanel}</div></section><section class="agent-zone"><div class="section-title"><span>02</span><div><h2>Agent / LLM work</h2><p>에이전트가 수행 중인 것, 다음에 수행할 것, 끝난 증거를 아래에서 본다.</p></div></div><div class="lane"><h3>Running now</h3>${activeRuns.length ? activeRuns.map(runCard).join('') : '<p class="empty">Nothing running.</p>'}</div><div class="lane"><h3>Ready / waiting to run</h3>${waitingRuns.length ? waitingRuns.map(runCard).join('') : '<p class="empty">No run waiting. Create a run from a task above.</p>'}</div><div class="lane"><h3>Recent results</h3>${completedRuns.length ? completedRuns.map(runCard).join('') : '<p class="empty">No completed runs yet.</p>'}</div><div class="lane"><h3>Skill runs (orchestrator-as-skill)</h3>${skillRunLane}</div></section></main>`,
   );
 }
 

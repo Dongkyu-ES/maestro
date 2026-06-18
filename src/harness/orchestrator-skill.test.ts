@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { appendRuntimeEvent, readRuntimeEvents, validateRuntimeLedger } from '../events/ledger.js';
-import { renderSkillRun } from '../view.js';
+import { renderHtml, renderSkillRun } from '../view.js';
 import { makeCliExecutor } from './compare.js';
 import type { HarnessExecutor } from './harness-run.js';
 import { runTaskGraph } from './orchestrator.js';
@@ -14,6 +14,7 @@ import {
   compileSkillToGraphTemplate,
   loadSkillSpecFromJson,
   materializeEvidenceInto,
+  listSkillRunSummaries,
   type OrchestratorSkillSpec,
   projectSkillRun,
   recomputeCompletion,
@@ -657,6 +658,22 @@ test('renderSkillRun surfaces authoritative completion and a contradiction panel
   assert.match(tamperedHtml, /CONTRADICTION/);
   // The surface shows the authoritative failed verdict, never the tampered green.
   assert.match(tamperedHtml, /Completion: <strong class="warning">failed/);
+});
+
+test('listSkillRunSummaries and the home page surface skill runs for discovery', async () => {
+  const root = tmpRepo();
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }));
+  await runOrchestratorSkill(spec, { what: 'discovery work', root, runId: 'skill-discovery' });
+
+  const summaries = listSkillRunSummaries(root);
+  assert.equal(
+    summaries.some((s) => s.runId === 'skill-discovery' && s.skillId === spec.id),
+    true,
+  );
+
+  const home = renderHtml(root);
+  assert.match(home, /Skill runs \(orchestrator-as-skill\)/);
+  assert.match(home, /\/skill\/skill-discovery/);
 });
 
 function briefExecutor(briefContent: string): HarnessExecutor {

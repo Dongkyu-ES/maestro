@@ -534,6 +534,33 @@ function toSerializableSpec(spec: OrchestratorSkillSpec): SerializableSkillSpec 
   };
 }
 
+export interface SkillRunSummary {
+  runId: string;
+  skillId: string;
+}
+
+/**
+ * Cheap discovery list for the operator home: runId + skillId only, read from each stored
+ * report. It deliberately asserts NO completion verdict — a home list must not show an
+ * unverified green. The authoritative verdict is recomputed on the /skill/<runId> detail page.
+ */
+export function listSkillRunSummaries(root: string): SkillRunSummary[] {
+  const base = join(root, '.agent', 'skill-runs');
+  if (!existsSync(base)) return [];
+  const summaries: SkillRunSummary[] = [];
+  for (const runId of readdirSync(base)) {
+    const reportPath = join(base, runId, 'skill-run-report.json');
+    if (!existsSync(reportPath)) continue;
+    try {
+      const report = JSON.parse(readFileSync(reportPath, 'utf8')) as SkillRunReport;
+      summaries.push({ runId: report.runId ?? runId, skillId: report.skillId ?? 'unknown' });
+    } catch {
+      // unreadable report — skip rather than crash the home page
+    }
+  }
+  return summaries.sort((a, b) => b.runId.localeCompare(a.runId));
+}
+
 export interface SkillRunProjection {
   runId: string;
   skillId: string;
