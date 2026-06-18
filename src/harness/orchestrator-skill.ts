@@ -22,7 +22,13 @@ export {
 
 import type { PhaseId } from './evidence-store.js';
 import { type EvidenceRef, materializeEvidenceInto, storePhaseArtifact } from './evidence-store.js';
-import { type GraphNode, type NodeState, runIsolatedWorker, type WorkerResult } from './orchestrator.js';
+import {
+  type GraphNode,
+  type NodeState,
+  removeWorktreeAndBranch,
+  runIsolatedWorker,
+  type WorkerResult,
+} from './orchestrator.js';
 
 export interface PhaseSpec {
   executor?: HarnessExecutor;
@@ -166,11 +172,19 @@ function isSupported(result: WorkerResult): boolean {
 function toPhaseResult(result: WorkerResult, phase: PhaseId): PhaseResult {
   return {
     phase,
-    workerId: result.workerId,
+    // Report the human-meaningful phase as the workerId; the run-namespaced worktree id is
+    // an internal isolation detail, not part of the operator-facing report.
+    workerId: phase,
     nodeState: isSupported(result) ? 'supported' : result.state === 'failed' ? 'failed' : 'blocked',
     outputRef: result.outputRef ?? undefined,
     skippedReason: undefined,
   };
+}
+
+// Per-run worktree id so back-to-back skill runs never collide on a fixed `wt/<phase>`
+// dir/branch. Kept well within WORKER_ID_RE's 64-char / [A-Za-z0-9_-] limit.
+function workerIdFor(runId: string, phase: PhaseId): string {
+  return `${phase}-${sha256Hex(runId).slice(0, 12)}`;
 }
 
 function readWorkerLedgerHead(result: WorkerResult): RuntimeLedgerHeadBinding | undefined {
@@ -405,6 +419,16 @@ export async function runOrchestratorSkill(
   const inputRefs: EvidenceRef[] = [];
   const executeRefs: EvidenceRef[] = [];
   let ledgerHead: RuntimeLedgerHeadBinding | undefined;
+  const createdWorkerIds: string[] = [];
+  const cleanupSkillWorktrees = () => {
+    for (const id of createdWorkerIds) {
+      try {
+        removeWorktreeAndBranch(input.root, id, { force: true });
+      } catch {
+        // best-effort: a leftover worktree must not fail the run or hide the verdict
+      }
+    }
+  };
 
   for (const phase of PHASE_IDS) {
     const priorUnsupported = phases.find((result) => result.nodeState !== 'supported');
@@ -419,9 +443,11 @@ export async function runOrchestratorSkill(
       continue;
     }
 
+    const workerId = workerIdFor(runId, phase);
+    createdWorkerIds.push(workerId);
     const result = await runIsolatedWorker({
       root: input.root,
-      workerId: phase,
+      workerId,
       goal: goalsByPhase.get(phase) ?? spec.phases[phase].goalTemplate,
       executor: spec.phases[phase].executor,
       inputRefs,
@@ -445,6 +471,10 @@ export async function runOrchestratorSkill(
       phaseResult.nodeState = 'blocked';
     }
   }
+
+  // Artifacts are already content-addressed into the evidence store; the per-phase worktrees
+  // are no longer needed. Remove them (and their wt/<id> branches) so re-runs don't collide.
+  cleanupSkillWorktrees();
 
   if (!ledgerHead) throw new Error('runOrchestratorSkill could not bind a worker ledger head');
   const review = phases.find((phase) => phase.phase === 'review');

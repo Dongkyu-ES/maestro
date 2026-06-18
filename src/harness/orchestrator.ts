@@ -78,6 +78,19 @@ export function removeWorktree(root: string, workerId: string, options: { force?
   git(root, ['worktree', 'remove', ...(options.force ? ['--force'] : []), worktreePath]);
 }
 
+// Remove a worker's worktree AND delete its `wt/<workerId>` branch, so a re-run that
+// reuses the same workerId does not collide on an existing dir/branch. Best-effort on the
+// branch (it may already be gone). The worktree removal still honors the uncommitted-changes
+// guard unless forced.
+export function removeWorktreeAndBranch(root: string, workerId: string, options: { force?: boolean } = {}): void {
+  removeWorktree(root, workerId, options);
+  try {
+    git(root, ['branch', '-D', `wt/${workerId}`]);
+  } catch {
+    // branch already deleted or never created — nothing to do
+  }
+}
+
 function readDiffSha(worktreePath: string, sliceRunDir: string): { diffSha256: string | null } {
   const path = join(worktreePath, sliceRunDir, 'tool-execution-evidence.json');
   if (!existsSync(path)) return { diffSha256: null };

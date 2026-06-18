@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -567,6 +567,33 @@ test('ledger recompute fails closed on a tampered lifecycle chain', async () => 
   writeFileSync(ledgerPath, `${lines.join('\n')}\n`);
 
   assert.throws(() => recomputeCompletionFromLedger(spec, { root, runId }), /payload hash mismatch|hash chain|sequence/i);
+});
+
+test('skill re-runs do not collide on fixed worktree names and clean up after themselves', async () => {
+  const root = tmpRepo();
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+  const spec: OrchestratorSkillSpec = {
+    id: 'research-execute-review',
+    phases: {
+      research: { goalTemplate: 'research {what}: write research.txt', executor },
+      execute: { goalTemplate: 'execute {what}: write execute.txt', executor },
+      review: { goalTemplate: 'review {what}: write review.txt', executor },
+    },
+  };
+
+  const first = await runOrchestratorSkill(spec, { what: 'rerun A', root, runId: 'rerun-A' });
+  // Second run with NO manual cleanup between — would collide on wt/<phase> before the fix.
+  const second = await runOrchestratorSkill(spec, { what: 'rerun B', root, runId: 'rerun-B' });
+
+  for (const report of [first, second]) {
+    assert.deepEqual(
+      report.phases.map((phase) => phase.nodeState),
+      ['supported', 'supported', 'supported'],
+    );
+  }
+  // Per-run worktrees are removed after each run, so none linger to collide with later runs.
+  const worktreesDir = join(root, '.agent', 'worktrees');
+  assert.equal(existsSync(worktreesDir) ? readdirSync(worktreesDir).length : 0, 0);
 });
 
 function briefExecutor(briefContent: string): HarnessExecutor {
