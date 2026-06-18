@@ -8,6 +8,7 @@ import {
   type RuntimeLedgerHeadBinding,
   readRuntimeEvents,
 } from '../events/ledger.js';
+import { runCommandAcceptance } from './command-acceptance.js';
 import { type EvidenceRef, materializeEvidenceInto } from './evidence-store.js';
 import { type HarnessExecutor, runHarnessSlice } from './harness-run.js';
 import { runVerifier } from './verifier.js';
@@ -445,10 +446,21 @@ export function reconcileWorkers(options: {
 
 // ---- M11.3: dependency DAG (verifier-gated) + M11.5 spawn caps ----
 
-export interface NodeAcceptance {
+/** Acceptance by a digest-bound artifact (cheap, request-safe). */
+export interface NodeArtifactAcceptance {
   artifactPath: string;
   sha256: string;
 }
+/**
+ * Acceptance by re-running a command over a CLEAN checkout of the node's diff (task-correctness, M7).
+ * This executes an operator-declared command, so it is for PROGRAMMATIC callers only — the daemon's
+ * request-supplied nodes never carry it (same boundary as the rejected request `verifyCmd`).
+ */
+export interface NodeCommandAcceptance {
+  command: string[];
+  testFiles?: { path: string; content: string }[];
+}
+export type NodeAcceptance = NodeArtifactAcceptance | NodeCommandAcceptance;
 
 export interface GraphNode {
   id: string;
@@ -608,27 +620,34 @@ export async function runTaskGraph(options: {
         });
         const acceptance = node.accept
           ? (() => {
-              const acc = runVerifier({
-                type: 'artifact',
-                root: worktreePath,
-                artifactRef: node.accept.artifactPath,
-                expectedSha256: node.accept.sha256,
-              });
-              const recorded = {
-                status: acc.status,
-                reason: acc.reason,
-                artifactPath: node.accept.artifactPath,
-              };
+              const accept = node.accept as NodeAcceptance;
+              let status: string;
+              let reason: string;
+              let target: string;
+              if ('command' in accept) {
+                // Task-correctness: the node is supported only if the command passes over a clean
+                // checkout of its diff — "a diff exists" is not enough.
+                const acc = runCommandAcceptance({ worktreePath, acceptance: accept });
+                status = acc.passed ? 'supported' : 'unproven';
+                reason = acc.reason;
+                target = `cmd:${accept.command.join(' ')}`;
+              } else {
+                const acc = runVerifier({
+                  type: 'artifact',
+                  root: worktreePath,
+                  artifactRef: accept.artifactPath,
+                  expectedSha256: accept.sha256,
+                });
+                status = acc.status;
+                reason = acc.reason;
+                target = accept.artifactPath;
+              }
+              const recorded = { status, reason, artifactPath: target };
               appendRuntimeEvent(parentRunDir, {
                 runId: parentRunId,
                 source: 'harness',
                 type: 'orchestration.acceptance',
-                payload: {
-                  node_id: node.id,
-                  status: recorded.status,
-                  artifact_path: recorded.artifactPath,
-                  reason: recorded.reason,
-                },
+                payload: { node_id: node.id, status, artifact_path: target, reason },
               });
               return recorded;
             })()

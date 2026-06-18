@@ -247,6 +247,39 @@ test('DAG: declared artifact acceptance supports a node and unlocks dependents',
   assert.equal(dependent?.worktreePath ? existsSync(join(dependent.worktreePath, 'dependent.txt')) : false, true);
 });
 
+test('DAG: command acceptance supports a node only when its test passes over the diff (task-correctness)', async () => {
+  const root = tmpRepo();
+  const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });
+  const accept = {
+    command: ['node', 'accept.mjs'],
+    testFiles: [
+      {
+        path: 'accept.mjs',
+        content:
+          "import { readFileSync } from 'node:fs';\nif (readFileSync('result.txt', 'utf8').trim() !== 'ok') process.exit(1);\n",
+      },
+    ],
+  };
+
+  const report = await runTaskGraph({
+    root,
+    concurrency: 2,
+    nodes: [
+      { id: 'good', goal: 'write result.txt CONTENT ok', executor, accept },
+      { id: 'bad', goal: 'write result.txt CONTENT bad', executor, accept },
+    ],
+  });
+
+  const good = report.nodes.find((n) => n.workerId === 'good');
+  const bad = report.nodes.find((n) => n.workerId === 'bad');
+  // Both produced a real diff (verifier supported), but only the correct one passes acceptance.
+  assert.equal(good?.verifierStatus, 'supported');
+  assert.equal(good?.nodeState, 'supported');
+  assert.equal(bad?.verifierStatus, 'supported');
+  assert.equal(bad?.nodeState, 'blocked');
+  assert.equal(bad?.acceptance?.status, 'unproven');
+});
+
 test('DAG: declared artifact acceptance blocks forged output and skips dependents', async () => {
   const root = tmpRepo();
   const executor = makeCliExecutor({ name: 'fake', bin: fakeCodex(), buildArgs: (p, cwd) => ['exec', '-C', cwd, p] });

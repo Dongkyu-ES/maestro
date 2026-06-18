@@ -325,7 +325,12 @@ function captureToolEvidence(options: {
   // in a diff (a committed .env, an inline key) would leak across the boundary. The
   // digest-bound `diff` verifier re-reads these files, so hash over the redacted bytes.
   const diffText = redact(git(options.root, ['diff', '--binary', '--', '.', excludeRunDir]));
-  const statusText = redact(git(options.root, ['status', '--porcelain', '--', '.', excludeRunDir]));
+  // `core.quotepath=false` keeps non-ASCII filenames literal (UTF-8) instead of octal-escaped, so
+  // changedFilesFromStatus and the digest-bound diff verifier both see the real path. (Names with
+  // embedded quotes/backslash/control chars are still C-quoted by porcelain v1 — a rarer residual.)
+  const statusText = redact(
+    git(options.root, ['-c', 'core.quotepath=false', 'status', '--porcelain', '--', '.', excludeRunDir]),
+  );
   writeFileSync(join(options.runDir, 'tool-git-diff.patch'), diffText);
   writeFileSync(join(options.runDir, 'tool-git-status.txt'), statusText);
   const changedFiles = changedFilesFromStatus(statusText);

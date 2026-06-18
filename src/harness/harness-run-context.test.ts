@@ -76,6 +76,19 @@ process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tok
 process.exit(0);
 `;
 
+// Writes a file with a non-ASCII name, to prove the evidence parser keeps it literal (UTF-8).
+const UNICODE_FAKE_CODEX = `#!/usr/bin/env node
+const fs = require('node:fs');
+const path = require('node:path');
+const args = process.argv.slice(2);
+const cwd = args.includes('-C') ? args[args.indexOf('-C') + 1] : process.cwd();
+fs.writeFileSync(path.join(cwd, 'caf\\u00e9-\\u00fcni.txt'), 'x\\n');
+process.stdout.write(JSON.stringify({ type: 'thread.started', thread_id: 't' }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'item.completed', item: { type: 'agent_message', text: 'done' } }) + '\\n');
+process.stdout.write(JSON.stringify({ type: 'turn.completed', usage: { input_tokens: 1, output_tokens: 1 } }) + '\\n');
+process.exit(0);
+`;
+
 const promptRule: Rule = {
   id: 'rule.prompt',
   text: 'Always carry product-owned base rules into executor context.',
@@ -213,6 +226,21 @@ test('M7 acceptance gate: a run completes only when the declared command passes 
   });
   assert.equal(bad.verifier.status, 'supported');
   assert.equal(bad.state, 'blocked');
+});
+
+test('evidence keeps a non-ASCII changed filename literal (no octal-escaping)', async () => {
+  const root = tmpRepo();
+  const report = await runHarnessSlice({
+    root,
+    goal: 'write a unicode-named file',
+    executorBin: fakeCodex(UNICODE_FAKE_CODEX),
+    runId: 'unicode-evidence',
+  });
+  assert.equal(report.state, 'completed');
+  const evidence = JSON.parse(
+    readFileSync(join(root, '.agent', 'runs', 'unicode-evidence', 'tool-execution-evidence.json'), 'utf8'),
+  ) as { changed_files: string[] };
+  assert.ok(evidence.changed_files.includes('café-üni.txt'), `got ${JSON.stringify(evidence.changed_files)}`);
 });
 
 test('T7 stale memory cannot forge inclusion as a confirmed fact', async () => {
