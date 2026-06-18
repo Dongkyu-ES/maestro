@@ -1108,6 +1108,41 @@ test('U1 forgery: a test-neutering iteration cannot launder — the graded test 
   assert.equal(rc.completion, 'failed');
 });
 
+test('U1: a refinement run where NO iteration produces a gradeable artifact is blocked (not a crash, not passed)', async () => {
+  const root = tmpRepo();
+  // Execute never writes the acceptArtifact (add.mjs); research/review still produce theirs.
+  const noArtifactExecutor: HarnessExecutor = async (o) => {
+    if (o.prompt.includes('research')) writeFileSync(join(o.cwd, 'research.txt'), 'research\n');
+    else if (o.prompt.includes('review')) writeFileSync(join(o.cwd, 'review.txt'), 'review\n');
+    // execute: deliberately writes nothing the acceptArtifact picks up.
+    return codexResult({ cwd: o.cwd, label: o.label });
+  };
+  const spec = refineSpec(noArtifactExecutor, 2);
+  const report = await runOrchestratorSkill(spec, { what: 'no artifact', root, runId: 'refine-blocked' });
+
+  const execute = report.phases.find((p) => p.phase === 'execute');
+  assert.equal(execute?.nodeState, 'blocked');
+  assert.match(execute?.skippedReason ?? '', /no execute iteration produced gradeable evidence/);
+  assert.deepEqual(execute?.iterations?.map((i) => i.passed), [false, false]);
+  assert.notEqual(report.completion, 'passed');
+  // Recompute over an empty canonical execute store is skipped — never a silent pass.
+  const rc = recomputeCompletionFromLedger(spec, { root, runId: 'refine-blocked' });
+  assert.equal(rc.completion, 'skipped');
+});
+
+test('U1: immediate pass — first attempt passes with maxRefineIterations>1, no second iteration runs', async () => {
+  const root = tmpRepo();
+  const spec = refineSpec(refiningExecutor({ firstAttempt: ADD_FIXED, refineAttempt: ADD_BROKEN }), 3);
+  const report = await runOrchestratorSkill(spec, { what: 'first try wins', root, runId: 'refine-immediate' });
+
+  assert.equal(report.completion, 'passed');
+  const execute = report.phases.find((p) => p.phase === 'execute');
+  // Loop breaks at the first passing acceptance — exactly one iteration recorded, and it passed.
+  assert.deepEqual(execute?.iterations?.map((i) => i.passed), [true]);
+  const rc = recomputeCompletionFromLedger(spec, { root, runId: 'refine-immediate' });
+  assert.equal(rc.completion, 'passed');
+});
+
 test('U1 forgery: a forged report.completion=passed on an exhausted refinement run still recomputes to failed', async () => {
   const root = tmpRepo();
   const spec = refineSpec(refiningExecutor({ firstAttempt: ADD_BROKEN, refineAttempt: ADD_BROKEN }), 2);
