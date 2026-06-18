@@ -138,12 +138,17 @@ function sha256(value: Buffer | string): string {
 function adapterForLabel(label: string): string {
   if (label === 'claude') return 'claude_code';
   if (label === 'agy') return 'agy';
+  // Direct-provider executors (anthropic-direct / openai-direct) are PRODUCT-owned single-turn
+  // apply loops, not native sessions — map them to an adapter id that is deliberately NOT in the
+  // native-session set, so the run is honestly labeled native-harness-assisted = false.
+  if (label.endsWith('-direct')) return 'direct_provider';
   return 'codex_cli';
 }
 
 function eventSourceForLabel(label: string): RuntimeEventSource {
   if (label === 'claude') return 'claude-adapter';
   if (label === 'agy') return 'agy-adapter';
+  if (label.endsWith('-direct')) return 'direct-adapter';
   return 'codex-adapter';
 }
 
@@ -353,6 +358,12 @@ function buildRunObservation(options: {
   executorLabel: string;
   executor: CodexExecResult;
 }): RunObservation {
+  // A direct-provider run is a single stateless API turn whose edits the PRODUCT applies. It
+  // provably consumes no native surface: it never loads the repo's CLAUDE.md/AGENTS.md, and its
+  // transcript is model-generated prose, not a native loop reporting surface usage. Counting either
+  // would mislabel a product-owned run as native-harness-assisted, so the direct observation omits
+  // them — making `native-harness-assisted = false` authoritative regardless of repo contents.
+  const isDirect = options.executorLabel.endsWith('-direct');
   return {
     adapter: adapterForLabel(options.executorLabel),
     readPaths: [
@@ -360,11 +371,13 @@ function buildRunObservation(options: {
       options.executor.cwd,
       join(options.runDir, 'context.md'),
       join(options.runDir, 'executor.process.json'),
-      ...existingInstructionPaths(options.root, options.runDir),
+      ...(isDirect ? [] : existingInstructionPaths(options.root, options.runDir)),
     ],
-    transcript: [options.executor.stdout, options.executor.stderr, options.executor.last_message]
-      .filter((text) => text.length > 0)
-      .join('\n'),
+    transcript: isDirect
+      ? ''
+      : [options.executor.stdout, options.executor.stderr, options.executor.last_message]
+          .filter((text) => text.length > 0)
+          .join('\n'),
     sessionIds: options.executor.session_id ? [options.executor.session_id] : [],
   };
 }

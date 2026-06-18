@@ -10,6 +10,7 @@ export type RuntimeEventSource =
   | 'claude-adapter'
   | 'omx-adapter'
   | 'agy-adapter'
+  | 'direct-adapter'
   | 'shell-adapter'
   | 'permission-broker'
   | 'harness'
@@ -180,7 +181,8 @@ export function assertEvidenceBoundToLedgerHead(
 ): void {
   const current = createRuntimeLedgerHeadBinding(events);
   if (binding.run_id !== current.run_id) throw new Error('evidence bound to different run ledger');
-  if (binding.event_count !== current.event_count) throw new Error('stale evidence event count does not match ledger head');
+  if (binding.event_count !== current.event_count)
+    throw new Error('stale evidence event count does not match ledger head');
   if (binding.ledger_head_sha256 !== current.ledger_head_sha256) throw new Error('stale evidence ledger head mismatch');
 }
 

@@ -48,9 +48,10 @@ import { readRuntimeEvents } from './events/ledger.js';
 import { readClosedLoopAcceptanceFile, runClosedLoop } from './harness/closed-loop.js';
 import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
 import { verifyContextProvenance } from './harness/context-provenance.js';
+import { anthropicDirectTransport, makeDirectProviderExecutor } from './harness/direct-provider.js';
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
-import { runHarnessSlice } from './harness/harness-run.js';
+import { type HarnessExecutor, runHarnessSlice } from './harness/harness-run.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/native-evidence.js';
 import { createOrchestratorServer, defaultExecutorRegistry, runSubmittedGraph } from './harness/orchestrator-server.js';
@@ -166,7 +167,7 @@ function usage(): string {
   warden run create|start|collect|cancel|latest
   warden run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
   warden run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
-  warden harness run <goal> [--executor codex|claude|agy] [--executor-bin <path>]
+  warden harness run <goal> [--executor codex|claude|agy|anthropic-direct] [--executor-bin <path>] [--model M]
   warden loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]
   warden runtime projection
   warden context verify --run <run-id>
@@ -350,14 +351,27 @@ async function main() {
         .join(' ')
         .trim();
       if (!goal)
-        throw new Error('usage: warden harness run <goal> [--executor codex|claude|agy] [--executor-bin <path>]');
+        throw new Error(
+          'usage: warden harness run <goal> [--executor codex|claude|agy|anthropic-direct] [--executor-bin <path>]',
+        );
       const executorKind = arg('--executor') ?? 'codex';
-      const registry = defaultExecutorRegistry();
-      if (!registry.has(executorKind)) throw new Error(`unknown executor: ${executorKind} (use codex|claude|agy)`);
+      let executor: HarnessExecutor | undefined;
+      if (executorKind === 'anthropic-direct') {
+        // Stage D: optional direct-provider executor (product-owned single turn; not native-assisted).
+        executor = makeDirectProviderExecutor({
+          name: 'anthropic-direct',
+          transport: anthropicDirectTransport({ model: arg('--model') }),
+        });
+      } else {
+        const registry = defaultExecutorRegistry();
+        if (!registry.has(executorKind))
+          throw new Error(`unknown executor: ${executorKind} (use codex|claude|agy|anthropic-direct)`);
+        executor = registry.resolve(executorKind); // undefined for codex → native runCodexExec default
+      }
       const report = await runHarnessSlice({
         root: process.cwd(),
         goal,
-        executor: registry.resolve(executorKind), // undefined for codex → native runCodexExec default
+        executor,
         executorLabel: executorKind,
         executorBin: arg('--executor-bin'),
         // Load this project's memory fabric into context (gate #4 admits only provenanced+fresh
