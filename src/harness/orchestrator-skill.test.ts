@@ -990,3 +990,138 @@ test('renderSkillRun flags an exited-without-verdict launch as a stuck launch, n
   assert.match(html, /Exited without a verdict|no recomputable evidence/i);
   assert.doesNotMatch(html, /Authoritative completion/);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// U1 — verifier-gated refinement loop (REVKA_BORROW_UPGRADE_PLAN.md §3 U1 / §6)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const ADD_BROKEN = 'export function add(a,b){return a-b}\n'; // add(1,2) = -1 ≠ 3 → acceptance fails
+const ADD_FIXED = 'export function add(a,b){return a+b}\n'; // passes the pinned accept.test.mjs
+
+/**
+ * Execute writes a different `add.mjs` on the first attempt vs. refinement iterations (detected by
+ * the "Refinement iteration" note runExecuteRefinement injects into the goal). Lets a test drive a
+ * fail-then-fix, an always-fail, a prose-only "FIXED", or a test-neutering attempt.
+ */
+function refiningExecutor(opts: {
+  firstAttempt: string;
+  refineAttempt: string;
+  alsoWriteOnExecute?: { path: string; content: string };
+  executeLastMessage?: string;
+}): HarnessExecutor {
+  return async (o) => {
+    if (o.prompt.includes('research')) {
+      writeFileSync(join(o.cwd, 'research.txt'), 'research\n');
+    } else if (o.prompt.includes('execute')) {
+      const refine = o.prompt.includes('Refinement iteration');
+      writeFileSync(join(o.cwd, 'add.mjs'), refine ? opts.refineAttempt : opts.firstAttempt);
+      if (opts.alsoWriteOnExecute) {
+        writeFileSync(join(o.cwd, opts.alsoWriteOnExecute.path), opts.alsoWriteOnExecute.content);
+      }
+      return codexResult({ cwd: o.cwd, label: o.label, lastMessage: opts.executeLastMessage });
+    } else if (o.prompt.includes('review')) {
+      writeFileSync(join(o.cwd, 'review.txt'), 'review\n');
+    }
+    return codexResult({ cwd: o.cwd, label: o.label });
+  };
+}
+
+function refineSpec(executor: HarnessExecutor, maxRefineIterations: number): OrchestratorSkillSpec {
+  return { ...addAcceptanceSpec(executor), maxRefineIterations };
+}
+
+test('U1: refinement recovers — iter 1 fails acceptance, iter 2 passes; winner is the passing iter', async () => {
+  const root = tmpRepo();
+  const spec = refineSpec(refiningExecutor({ firstAttempt: ADD_BROKEN, refineAttempt: ADD_FIXED }), 2);
+  const report = await runOrchestratorSkill(spec, { what: 'refine recover', root, runId: 'refine-pass' });
+
+  assert.equal(report.completion, 'passed');
+  const execute = report.phases.find((p) => p.phase === 'execute');
+  assert.equal(execute?.nodeState, 'supported');
+  assert.deepEqual(
+    execute?.iterations?.map((i) => i.passed),
+    [false, true],
+    'records one failing then one passing iteration',
+  );
+  // Authoritative: recompute re-runs acceptance over the promoted (iter-2) content-addressed evidence.
+  const rc = recomputeCompletionFromLedger(spec, { root, runId: 'refine-pass' });
+  assert.equal(rc.completion, 'passed');
+  assert.equal(rc.ledgerValid, true);
+});
+
+test('U1: exhaustion is an honest failed — all iterations fail acceptance, recompute = failed (not skipped)', async () => {
+  const root = tmpRepo();
+  const spec = refineSpec(refiningExecutor({ firstAttempt: ADD_BROKEN, refineAttempt: ADD_BROKEN }), 2);
+  const report = await runOrchestratorSkill(spec, { what: 'never fixes', root, runId: 'refine-exhaust' });
+
+  assert.equal(report.completion, 'failed');
+  const execute = report.phases.find((p) => p.phase === 'execute');
+  assert.deepEqual(execute?.iterations?.map((i) => i.passed), [false, false]);
+  const rc = recomputeCompletionFromLedger(spec, { root, runId: 'refine-exhaust' });
+  assert.equal(rc.completion, 'failed');
+});
+
+test('U1: maxRefineIterations=1 stays on the single-shot path (no iterations recorded) and is unchanged', async () => {
+  const root = tmpRepo();
+  const spec = refineSpec(refiningExecutor({ firstAttempt: ADD_FIXED, refineAttempt: ADD_FIXED }), 1);
+  const report = await runOrchestratorSkill(spec, { what: 'single shot', root, runId: 'refine-one' });
+
+  assert.equal(report.completion, 'passed');
+  const execute = report.phases.find((p) => p.phase === 'execute');
+  assert.equal(execute?.iterations, undefined, 'maxRefineIterations=1 does not enter the refinement loop');
+});
+
+test('U1 forgery: prose "FIXED — all tests pass" while code stays broken still recomputes to failed', async () => {
+  const root = tmpRepo();
+  // The executor NEVER fixes add.mjs (broken on every iteration) but claims success in its message.
+  const spec = refineSpec(
+    refiningExecutor({
+      firstAttempt: ADD_BROKEN,
+      refineAttempt: ADD_BROKEN,
+      executeLastMessage: 'FIXED — all tests pass',
+    }),
+    3,
+  );
+  const report = await runOrchestratorSkill(spec, { what: 'lying executor', root, runId: 'refine-prose' });
+  assert.equal(report.completion, 'failed', 'executor prose can never advance completion');
+  const rc = recomputeCompletionFromLedger(spec, { root, runId: 'refine-prose' });
+  assert.equal(rc.completion, 'failed');
+});
+
+test('U1 forgery: a test-neutering iteration cannot launder — the graded test is pinned, not executor evidence', async () => {
+  const root = tmpRepo();
+  // On refinement the executor leaves add.mjs broken but tries to neuter the grader by writing a
+  // trivially-passing accept.test.mjs into its worktree. Only `add.mjs` (acceptArtifact) is stored
+  // as evidence, and runAcceptanceCheck overlays the operator-pinned accept.test.mjs LAST — so the
+  // executor's tampered test never grades anything.
+  const spec = refineSpec(
+    refiningExecutor({
+      firstAttempt: ADD_BROKEN,
+      refineAttempt: ADD_BROKEN,
+      alsoWriteOnExecute: { path: 'accept.test.mjs', content: 'process.exit(0)\n' },
+    }),
+    2,
+  );
+  const report = await runOrchestratorSkill(spec, { what: 'tamper the test', root, runId: 'refine-tamper' });
+  assert.equal(report.completion, 'failed', 'a neutered test in executor output cannot pass the pinned grader');
+  const rc = recomputeCompletionFromLedger(spec, { root, runId: 'refine-tamper' });
+  assert.equal(rc.completion, 'failed');
+});
+
+test('U1 forgery: a forged report.completion=passed on an exhausted refinement run still recomputes to failed', async () => {
+  const root = tmpRepo();
+  const spec = refineSpec(refiningExecutor({ firstAttempt: ADD_BROKEN, refineAttempt: ADD_BROKEN }), 2);
+  await runOrchestratorSkill(spec, { what: 'forge the report', root, runId: 'refine-forge' });
+
+  // Tamper the display-only report field to claim success.
+  const reportPath = join(skillRunDir(root, 'refine-forge'), 'skill-run-report.json');
+  const forged = JSON.parse(readFileSync(reportPath, 'utf8'));
+  forged.completion = 'passed';
+  forged.completionDisplay = 'supported';
+  writeFileSync(reportPath, JSON.stringify(forged, null, 2));
+
+  // The recomputable authority re-runs acceptance over the promoted (failing) evidence and ignores
+  // the forged field entirely.
+  const rc = recomputeCompletionFromLedger(spec, { root, runId: 'refine-forge' });
+  assert.equal(rc.completion, 'failed');
+});

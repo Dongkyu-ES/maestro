@@ -69,6 +69,17 @@ export interface OrchestratorSkillSpec {
    * execute evidence, so review/handoff/recompute are unchanged.
    */
   executeCandidates?: ExecuteCandidateExecutor[];
+  /**
+   * U1 verifier-gated refinement loop (default 1 = single-shot, byte-identical to no refinement).
+   * When > 1 AND `acceptance` is declared AND `executeCandidates` is unset, the execute phase runs
+   * up to N bounded iterations: iteration k+1 runs ONLY if iteration k's acceptance failed, with
+   * iteration k's verifier-failure output handed in as an immutable EvidenceRef. The winner is the
+   * iteration whose acceptance passes (chosen by RE-RUNNING acceptance over each iteration's
+   * isolated evidence — never by rank/self-claim), promoted to the canonical execute store. The
+   * loop's only continue/stop signal is `runAcceptanceCheck.passed`; no critic/model score is ever
+   * consulted. See REVKA_BORROW_UPGRADE_PLAN.md §3 U1 / §6.
+   */
+  maxRefineIterations?: number;
 }
 
 export interface SkillSpecJson {
@@ -84,6 +95,15 @@ export interface SkillSpecJson {
   };
   /** Stage-X fan-out: executor names to race for the execute phase (winner by acceptance). */
   executeCandidates?: string[];
+  /** U1: bounded verifier-gated refinement iterations for the execute phase (default 1). */
+  maxRefineIterations?: number;
+}
+
+/** One execute refinement attempt — recorded for observability; the verdict is never derived from it. */
+export interface RefineIterationResult {
+  iteration: number;
+  passed: boolean;
+  reason: string;
 }
 
 export interface PhaseResult {
@@ -92,6 +112,8 @@ export interface PhaseResult {
   nodeState: NodeState;
   outputRef?: string;
   skippedReason?: string;
+  /** U1: per-iteration acceptance results when the execute phase ran the refinement loop. */
+  iterations?: RefineIterationResult[];
 }
 
 export interface SkillRunReport {
@@ -161,6 +183,7 @@ export function loadSkillSpecFromJson(
     },
     acceptance: json.acceptance,
     executeCandidates,
+    maxRefineIterations: json.maxRefineIterations,
   };
 }
 
@@ -556,6 +579,144 @@ async function runExecuteFanOut(opts: {
   };
 }
 
+/**
+ * U1 — verifier-gated refinement loop. Run the execute phase up to `maxIterations` times with ONE
+ * executor. Iteration k+1 runs ONLY if iteration k's acceptance failed; it receives iteration k's
+ * verifier-failure as an immutable EvidenceRef (refs-not-raw) plus a goal note. Each iteration's
+ * artifact is stored under its own isolated namespace; the winner is selected by RE-RUNNING
+ * acceptance over each iteration's evidence (`selectExecuteCandidateByAcceptance` — by verifier,
+ * never by rank/self-claim) and promoted to the canonical execute store, so review/recompute are
+ * identical to single-shot. The ONLY continue/stop signal is `runAcceptanceCheck.passed`.
+ *
+ * Anti-overfit (critic panel §6.1): the failure feedback is SCRUBBED — only the pinned command and
+ * its exit reason are handed back, never raw stderr or test names. The graded target is the
+ * operator `testFiles`, which `runAcceptanceCheck` overlays AFTER the executor evidence, so an
+ * iteration cannot neuter the test it is graded by. A test-neutering iteration therefore still
+ * recomputes to `failed` (proven by the forgery fixture).
+ */
+async function runExecuteRefinement(opts: {
+  root: string;
+  runId: string;
+  goal: string;
+  acceptArtifact?: string;
+  executor?: HarnessExecutor;
+  executorLabel?: string;
+  acceptance: NonNullable<OrchestratorSkillSpec['acceptance']>;
+  inputRefs: EvidenceRef[];
+  createdWorkerIds: string[];
+  maxIterations: number;
+}): Promise<{ phaseResult: PhaseResult; winnerRef?: EvidenceRef; ledgerHead?: RuntimeLedgerHeadBinding }> {
+  const candidates: ExecuteCandidate[] = [];
+  const storedByLabel = new Map<string, EvidenceRef>();
+  const iterations: RefineIterationResult[] = [];
+  let ledgerHead: RuntimeLedgerHeadBinding | undefined;
+  let failureContextRef: EvidenceRef | undefined;
+
+  for (let k = 1; k <= opts.maxIterations; k++) {
+    const workerId = `${workerIdFor(opts.runId, 'execute')}-iter-${k}`.slice(0, 63);
+    opts.createdWorkerIds.push(workerId);
+    const goal =
+      k === 1
+        ? opts.goal
+        : `${opts.goal}\n\n## Refinement iteration ${k}\nThe previous attempt FAILED the pinned acceptance check. Fix ONLY the product code so the pinned acceptance passes. The graded test files are pinned by the operator and will be restored before grading — do NOT modify, stub, or delete them. The prior failure summary is attached as an input artifact.`;
+    const iterInputRefs = failureContextRef ? [...opts.inputRefs, failureContextRef] : opts.inputRefs;
+    const result = await runIsolatedWorker({
+      root: opts.root,
+      workerId,
+      goal,
+      executor: opts.executor,
+      executorLabel: opts.executorLabel,
+      inputRefs: iterInputRefs,
+    });
+    ledgerHead = readWorkerLedgerHead(result) ?? ledgerHead;
+
+    const label = `iter-${k}`;
+    if (!isSupported(result) || !opts.acceptArtifact) {
+      iterations.push({ iteration: k, passed: false, reason: 'executor did not produce a supported artifact' });
+      continue;
+    }
+    let ref: EvidenceRef;
+    try {
+      ref = storePhaseArtifact({
+        root: opts.root,
+        skillRunId: `${opts.runId}/iterations/${label}`,
+        phase: 'execute',
+        sourceFile: join(result.worktreePath, opts.acceptArtifact),
+      });
+    } catch {
+      iterations.push({ iteration: k, passed: false, reason: 'expected accept artifact missing' });
+      continue;
+    }
+    storedByLabel.set(label, ref);
+    candidates.push({ label, executeRefs: [ref] });
+
+    // The ONLY loop signal: re-run the recomputable acceptance over THIS iteration's evidence.
+    const acc = runAcceptanceCheck({ executeRefs: [ref], acceptance: opts.acceptance });
+    iterations.push({ iteration: k, passed: acc.passed, reason: acc.reason });
+    if (acc.passed) break;
+
+    // Scrubbed failure feedback: command + exit reason only (no raw stderr / test names).
+    const failDir = mkdtempSync(join(tmpdir(), 'orchestrator-skill-refine-fail-'));
+    const failFile = join(failDir, 'acceptance-failure.md');
+    writeFileSync(
+      failFile,
+      `# Acceptance failed (iteration ${k})\n\nCommand: \`${opts.acceptance.command.join(' ')}\`\nResult: ${acc.reason}\n\nFix the product code so this command exits 0. Do not modify the graded test files.\n`,
+    );
+    failureContextRef = storePhaseArtifact({
+      root: opts.root,
+      skillRunId: `${opts.runId}/iterations/${label}-failure`,
+      phase: 'execute',
+      sourceFile: failFile,
+    });
+  }
+
+  // Winner by RE-RUN over the isolated iteration evidence — never by rank/order/self-claim.
+  // On exhaustion (no iteration passed) the LAST attempt that produced evidence becomes canonical,
+  // so downstream acceptance/recompute re-run over real evidence and return an honest `failed`
+  // (never a `skipped` that hides the executor's failing output). Only a run where NO iteration
+  // produced any gradeable artifact is `blocked`.
+  const selection = selectExecuteCandidateByAcceptance({ candidates, acceptance: opts.acceptance });
+  const chosenLabel = selection.winner ?? (candidates.length ? candidates[candidates.length - 1].label : null);
+  if (!chosenLabel) {
+    return {
+      phaseResult: {
+        phase: 'execute',
+        workerId: 'execute',
+        nodeState: 'blocked',
+        outputRef: undefined,
+        skippedReason: `no execute iteration produced gradeable evidence after ${opts.maxIterations} attempt(s)`,
+        iterations,
+      },
+      ledgerHead,
+    };
+  }
+
+  const chosenStored = storedByLabel.get(chosenLabel);
+  if (!chosenStored) throw new Error('refinement winner selected without stored evidence');
+  // Promote the chosen iteration to the canonical execute store path read by review/recompute.
+  const winnerRef = storePhaseArtifact({
+    root: opts.root,
+    skillRunId: opts.runId,
+    phase: 'execute',
+    sourceFile: chosenStored.storePath,
+  });
+  return {
+    phaseResult: {
+      phase: 'execute',
+      workerId: 'execute',
+      // The executor produced gradeable evidence; acceptance (re-run downstream and by recompute) is
+      // the authoritative gate. A non-passing exhaustion promotes the last attempt and recomputes to
+      // `failed`, identical in meaning to a single-shot acceptance failure.
+      nodeState: 'supported',
+      outputRef: `agent://execute+${winnerRef.sha256}`,
+      skippedReason: undefined,
+      iterations,
+    },
+    winnerRef,
+    ledgerHead,
+  };
+}
+
 export async function runOrchestratorSkill(
   spec: OrchestratorSkillSpec,
   input: { what: string; root: string; runId?: string },
@@ -607,6 +768,33 @@ export async function runOrchestratorSkill(
       if (fan.winnerRef) {
         inputRefs.push(fan.winnerRef);
         executeRefs.push(fan.winnerRef);
+      }
+      continue;
+    }
+
+    if (
+      phase === 'execute' &&
+      (spec.maxRefineIterations ?? 1) > 1 &&
+      spec.acceptance &&
+      !spec.executeCandidates?.length
+    ) {
+      const refined = await runExecuteRefinement({
+        root: input.root,
+        runId,
+        goal: goalsByPhase.get('execute') ?? spec.phases.execute.goalTemplate,
+        acceptArtifact: spec.phases.execute.acceptArtifact,
+        executor: spec.phases.execute.executor,
+        executorLabel: spec.phases.execute.executorLabel,
+        acceptance: spec.acceptance,
+        inputRefs,
+        createdWorkerIds,
+        maxIterations: spec.maxRefineIterations ?? 1,
+      });
+      ledgerHead = refined.ledgerHead ?? ledgerHead;
+      phases.push(refined.phaseResult);
+      if (refined.winnerRef) {
+        inputRefs.push(refined.winnerRef);
+        executeRefs.push(refined.winnerRef);
       }
       continue;
     }
@@ -689,6 +877,7 @@ interface SerializableSkillSpec {
   id: string;
   acceptance?: OrchestratorSkillSpec['acceptance'];
   phases: Record<PhaseId, { goalTemplate: string; acceptArtifact?: string }>;
+  maxRefineIterations?: number;
 }
 
 function toSerializableSpec(spec: OrchestratorSkillSpec): SerializableSkillSpec {
@@ -700,6 +889,7 @@ function toSerializableSpec(spec: OrchestratorSkillSpec): SerializableSkillSpec 
     id: spec.id,
     acceptance: spec.acceptance,
     phases: { research: phase('research'), execute: phase('execute'), review: phase('review') },
+    maxRefineIterations: spec.maxRefineIterations,
   };
 }
 
