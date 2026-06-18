@@ -44,6 +44,12 @@ export interface PhaseSpecJson {
   acceptArtifact?: string;
 }
 
+export interface ExecuteCandidateExecutor {
+  label: string;
+  executor?: HarnessExecutor;
+  executorLabel?: string;
+}
+
 export interface OrchestratorSkillSpec {
   id: string;
   phases: {
@@ -55,6 +61,13 @@ export interface OrchestratorSkillSpec {
     command: string[];
     testFiles?: { path: string; content: string }[];
   };
+  /**
+   * Optional stage-X fan-out for the execute phase: run each candidate executor in its own
+   * worktree, then select the winner by RE-RUNNING `acceptance` over its evidence — never by
+   * rank/order/self-claim. Requires `acceptance`. The winner's evidence becomes the canonical
+   * execute evidence, so review/handoff/recompute are unchanged.
+   */
+  executeCandidates?: ExecuteCandidateExecutor[];
 }
 
 export interface SkillSpecJson {
@@ -68,6 +81,8 @@ export interface SkillSpecJson {
     command: string[];
     testFiles?: { path: string; content: string }[];
   };
+  /** Stage-X fan-out: executor names to race for the execute phase (winner by acceptance). */
+  executeCandidates?: string[];
 }
 
 export interface PhaseResult {
@@ -132,6 +147,10 @@ export function loadSkillSpecFromJson(
   executors: Record<string, HarnessExecutor | undefined>,
 ): OrchestratorSkillSpec {
   if (!json.phases) throw new Error('missing phases');
+  const executeCandidates = json.executeCandidates?.map((name) => {
+    if (!(name in executors)) throw new Error(`unknown executor: ${name}`);
+    return { label: name, executor: executors[name], executorLabel: name };
+  });
   return {
     id: json.id,
     phases: {
@@ -140,6 +159,7 @@ export function loadSkillSpecFromJson(
       review: phaseFromJson('review', json.phases.review, executors),
     },
     acceptance: json.acceptance,
+    executeCandidates,
   };
 }
 
@@ -441,6 +461,95 @@ function emitLifecycleProjection(opts: {
   });
 }
 
+function executeCandidateWorkerId(runId: string, candidate: ExecuteCandidateExecutor): string {
+  const slug = (candidate.executorLabel ?? candidate.label).replace(/[^A-Za-z0-9]+/g, '-');
+  return `${workerIdFor(runId, 'execute')}-${slug}`.slice(0, 63);
+}
+
+/**
+ * Stage-X execute fan-out: run each candidate executor in its own worktree, store each one's
+ * artifact under a per-candidate evidence namespace, then pick the winner by re-running the
+ * declared acceptance over each candidate's evidence (selectExecuteCandidateByAcceptance — by
+ * verifier, never by rank). The winner is promoted to the canonical execute store path so the
+ * rest of the run (review handoff, final acceptance, recompute) is identical to single-executor.
+ */
+async function runExecuteFanOut(opts: {
+  root: string;
+  runId: string;
+  goal: string;
+  acceptArtifact?: string;
+  candidates: ExecuteCandidateExecutor[];
+  acceptance: NonNullable<OrchestratorSkillSpec['acceptance']>;
+  inputRefs: EvidenceRef[];
+  createdWorkerIds: string[];
+}): Promise<{ phaseResult: PhaseResult; winnerRef?: EvidenceRef; ledgerHead?: RuntimeLedgerHeadBinding }> {
+  const candidates: ExecuteCandidate[] = [];
+  const storedByLabel = new Map<string, EvidenceRef>();
+  let ledgerHead: RuntimeLedgerHeadBinding | undefined;
+
+  for (const candidate of opts.candidates) {
+    const workerId = executeCandidateWorkerId(opts.runId, candidate);
+    opts.createdWorkerIds.push(workerId);
+    const result = await runIsolatedWorker({
+      root: opts.root,
+      workerId,
+      goal: opts.goal,
+      executor: candidate.executor,
+      executorLabel: candidate.executorLabel,
+      inputRefs: opts.inputRefs,
+    });
+    ledgerHead = readWorkerLedgerHead(result) ?? ledgerHead;
+    if (!isSupported(result) || !opts.acceptArtifact) continue;
+    try {
+      const ref = storePhaseArtifact({
+        root: opts.root,
+        skillRunId: `${opts.runId}/candidates/${candidate.label}`,
+        phase: 'execute',
+        sourceFile: join(result.worktreePath, opts.acceptArtifact),
+      });
+      storedByLabel.set(candidate.label, ref);
+      candidates.push({ label: candidate.label, executeRefs: [ref] });
+    } catch {
+      // candidate did not produce the accepted artifact — it simply cannot win
+    }
+  }
+
+  const selection = selectExecuteCandidateByAcceptance({ candidates, acceptance: opts.acceptance });
+  if (!selection.winner) {
+    return {
+      phaseResult: {
+        phase: 'execute',
+        workerId: 'execute',
+        nodeState: 'blocked',
+        outputRef: undefined,
+        skippedReason: 'no execute candidate passed acceptance',
+      },
+      ledgerHead,
+    };
+  }
+
+  const winnerStored = storedByLabel.get(selection.winner);
+  if (!winnerStored) throw new Error('winner selected without stored evidence');
+  // Promote the winner to the canonical execute store path used by review/recompute.
+  const winnerRef = storePhaseArtifact({
+    root: opts.root,
+    skillRunId: opts.runId,
+    phase: 'execute',
+    sourceFile: winnerStored.storePath,
+  });
+  return {
+    phaseResult: {
+      phase: 'execute',
+      workerId: 'execute',
+      nodeState: 'supported',
+      outputRef: `agent://execute+${winnerRef.sha256}`,
+      skippedReason: undefined,
+    },
+    winnerRef,
+    ledgerHead,
+  };
+}
+
 export async function runOrchestratorSkill(
   spec: OrchestratorSkillSpec,
   input: { what: string; root: string; runId?: string },
@@ -473,6 +582,26 @@ export async function runOrchestratorSkill(
         outputRef: undefined,
         skippedReason: `unsupported deps: ${priorUnsupported.phase}`,
       });
+      continue;
+    }
+
+    if (phase === 'execute' && spec.executeCandidates?.length && spec.acceptance) {
+      const fan = await runExecuteFanOut({
+        root: input.root,
+        runId,
+        goal: goalsByPhase.get('execute') ?? spec.phases.execute.goalTemplate,
+        acceptArtifact: spec.phases.execute.acceptArtifact,
+        candidates: spec.executeCandidates,
+        acceptance: spec.acceptance,
+        inputRefs,
+        createdWorkerIds,
+      });
+      ledgerHead = fan.ledgerHead ?? ledgerHead;
+      phases.push(fan.phaseResult);
+      if (fan.winnerRef) {
+        inputRefs.push(fan.winnerRef);
+        executeRefs.push(fan.winnerRef);
+      }
       continue;
     }
 

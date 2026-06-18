@@ -747,6 +747,57 @@ test('selectExecuteCandidateByAcceptance picks the winner by acceptance, not ord
   assert.equal(selection.results.find((r) => r.label === 'claude-correct')?.passed, true);
 });
 
+function fanoutSpec(candidates: OrchestratorSkillSpec['executeCandidates']): OrchestratorSkillSpec {
+  const plain = addAcceptanceExecutor({ implementation: 'unused\n' });
+  return {
+    id: 'execute-fanout',
+    phases: {
+      research: { goalTemplate: 'research {what}', executor: plain, acceptArtifact: 'research.txt' },
+      execute: { goalTemplate: 'execute {what}', acceptArtifact: 'add.mjs' },
+      review: { goalTemplate: 'review {what}', executor: plain, acceptArtifact: 'review.txt' },
+    },
+    acceptance: candidateAcceptance,
+    executeCandidates: candidates,
+  };
+}
+
+test('runOrchestratorSkill fans out execute across candidates and promotes the acceptance winner', async () => {
+  const root = tmpRepo();
+  // forged listed FIRST, correct LAST → proves the winner is chosen by acceptance, not order.
+  const spec = fanoutSpec([
+    { label: 'forged', executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }), executorLabel: 'codex' },
+    { label: 'correct', executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }), executorLabel: 'claude' },
+  ]);
+
+  const report = await runOrchestratorSkill(spec, { what: 'fanout work', root, runId: 'fanout-pass' });
+
+  assert.equal(report.phases.find((p) => p.phase === 'execute')?.nodeState, 'supported');
+  assert.equal(report.phases.find((p) => p.phase === 'review')?.nodeState, 'supported');
+  assert.equal(report.completion, 'passed');
+  // The promoted canonical execute evidence is the CORRECT candidate's implementation.
+  const promoted = readFileSync(join(root, '.agent', 'skill-runs', 'fanout-pass', 'artifacts', 'execute', 'add.mjs'), 'utf8');
+  assert.match(promoted, /return a\+b/);
+  assert.equal(recomputeCompletionFromLedger(spec, { root, runId: 'fanout-pass' }).completion, 'passed');
+  // candidate + winner worktrees are cleaned up.
+  const worktreesDir = join(root, '.agent', 'worktrees');
+  assert.equal(existsSync(worktreesDir) ? readdirSync(worktreesDir).length : 0, 0);
+});
+
+test('runOrchestratorSkill blocks execute when no fan-out candidate passes acceptance', async () => {
+  const root = tmpRepo();
+  const spec = fanoutSpec([
+    { label: 'sub', executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }), executorLabel: 'codex' },
+    { label: 'mul', executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a*b}\n' }), executorLabel: 'claude' },
+  ]);
+
+  const report = await runOrchestratorSkill(spec, { what: 'fanout fail', root, runId: 'fanout-fail' });
+
+  assert.equal(report.phases.find((p) => p.phase === 'execute')?.nodeState, 'blocked');
+  assert.equal(report.phases.find((p) => p.phase === 'review')?.nodeState, 'skipped');
+  assert.match(report.phases.find((p) => p.phase === 'execute')?.skippedReason ?? '', /no execute candidate passed/);
+  assert.equal(report.completion, 'skipped');
+});
+
 test('selectExecuteCandidateByAcceptance returns no winner when no candidate passes acceptance', () => {
   const sub = makeCandidate('a', 'export function add(a,b){return a-b}\n');
   const mul = makeCandidate('b', 'export function add(a,b){return a*b}\n');
