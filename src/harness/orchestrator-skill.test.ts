@@ -9,7 +9,7 @@ import { appendRuntimeEvent, readRuntimeEvents, validateRuntimeLedger } from '..
 import { renderHtml, renderSkillRun } from '../view.js';
 import { makeCliExecutor } from './compare.js';
 import type { HarnessExecutor } from './harness-run.js';
-import { runTaskGraph } from './orchestrator.js';
+import { removeWorktreeAndBranch, runIsolatedWorker, runTaskGraph } from './orchestrator.js';
 import {
   compileSkillToGraphTemplate,
   loadSkillSpecFromJson,
@@ -178,6 +178,43 @@ if (add(1, 2) !== 3) process.exit(1);
   );
   assert.equal(report.acceptance?.passed, true);
   assert.equal(report.completion, 'passed');
+});
+
+test('loadSkillSpecFromJson preserves the executor label per phase', () => {
+  const exec = addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' });
+  const json: SkillSpecJson = {
+    id: 'labels',
+    phases: {
+      research: { executor: 'codex', goalTemplate: 'research {what}' },
+      execute: { executor: 'agy', goalTemplate: 'execute {what}' },
+      review: { executor: 'claude', goalTemplate: 'review {what}' },
+    },
+  };
+
+  const spec = loadSkillSpecFromJson(json, { codex: exec, claude: exec, agy: exec });
+
+  assert.equal(spec.phases.research.executorLabel, 'codex');
+  assert.equal(spec.phases.execute.executorLabel, 'agy');
+  assert.equal(spec.phases.review.executorLabel, 'claude');
+});
+
+test('runIsolatedWorker forwards executorLabel into honest per-phase evidence', async () => {
+  const root = tmpRepo();
+  const labelExec: HarnessExecutor = async (opts) => {
+    writeFileSync(join(opts.cwd, 'made.txt'), 'work\n');
+    return codexResult({ cwd: opts.cwd, label: opts.label });
+  };
+
+  const result = await runIsolatedWorker({ root, workerId: 'label-claude', goal: 'edit', executor: labelExec, executorLabel: 'claude' });
+
+  const runDir = result.runDir;
+  assert.ok(runDir);
+  const evidence = JSON.parse(
+    readFileSync(join(result.worktreePath, runDir, 'tool-execution-evidence.json'), 'utf8'),
+  ) as { executor: string };
+  assert.equal(evidence.executor, 'claude'); // skill-path phase evidence is honest, not hardcoded codex
+
+  removeWorktreeAndBranch(root, 'label-claude', { force: true });
 });
 
 test('loadSkillSpecFromJson rejects unknown executor names', () => {

@@ -110,6 +110,7 @@ async function runWorkerSlice(options: {
   workerId: string;
   goal: string;
   executor?: HarnessExecutor;
+  executorLabel?: string;
   timeoutMs?: number;
   inputRefs?: EvidenceRef[];
 }): Promise<WorkerResult> {
@@ -124,6 +125,7 @@ async function runWorkerSlice(options: {
       root: options.worktreePath,
       goal: options.goal,
       executor: options.executor,
+      executorLabel: options.executorLabel,
       timeoutMs: options.timeoutMs,
     });
     const { diffSha256 } = readDiffSha(options.worktreePath, slice.runDir);
@@ -156,6 +158,7 @@ export async function runIsolatedWorker(options: {
   workerId: string;
   goal: string;
   executor?: HarnessExecutor;
+  executorLabel?: string;
   timeoutMs?: number;
   inputRefs?: EvidenceRef[];
 }): Promise<WorkerResult> {
@@ -167,6 +170,7 @@ export async function runIsolatedWorker(options: {
     workerId: options.workerId,
     goal: options.goal,
     executor: options.executor,
+    executorLabel: options.executorLabel,
     timeoutMs: options.timeoutMs,
     inputRefs: options.inputRefs,
   });

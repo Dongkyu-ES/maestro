@@ -32,6 +32,8 @@ import {
 
 export interface PhaseSpec {
   executor?: HarnessExecutor;
+  /** Executor identity for honest per-phase evidence labeling (e.g. 'codex' | 'claude' | 'agy'). */
+  executorLabel?: string;
   goalTemplate: string;
   acceptArtifact?: string;
 }
@@ -119,6 +121,7 @@ function phaseFromJson(
   if (!(phase.executor in executors)) throw new Error(`unknown executor: ${phase.executor}`);
   return {
     executor: executors[phase.executor],
+    executorLabel: phase.executor,
     goalTemplate: phase.goalTemplate,
     acceptArtifact: phase.acceptArtifact,
   };
@@ -480,6 +483,7 @@ export async function runOrchestratorSkill(
       workerId,
       goal: goalsByPhase.get(phase) ?? spec.phases[phase].goalTemplate,
       executor: spec.phases[phase].executor,
+      executorLabel: spec.phases[phase].executorLabel,
       inputRefs,
     });
     ledgerHead = readWorkerLedgerHead(result) ?? ledgerHead;
