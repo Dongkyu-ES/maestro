@@ -7,6 +7,14 @@ export type MemoryLayer =
   | 'sequential_handoff'
   | 'experiment_outcome'
   | 'module_learning';
+/**
+ * The single canonical stored memory fact. It is keyed by provenance (`source_event_ids` /
+ * `artifact_refs`) and verification recency (`last_verified_at`) — the model declared by
+ * evidence-contract's `MemoryContract`, with the ungrounded `driftRisk` label intentionally
+ * absent. `records.ts` `MemoryWriteRecord` is the write-time authority/merge record that yields a
+ * fact (it shares the same provenance fields); the memory-gating projection is derived from this
+ * type. There is one provenance model, three roles — not three vocabularies.
+ */
 export interface MemoryFact {
   schema_version: 1;
   id: string;
@@ -19,6 +27,11 @@ export interface MemoryFact {
   outcome?: 'success' | 'failure' | 'blocked';
   modules?: string[];
   created_at: string;
+  /**
+   * When this fact was last re-verified against reality. Verification recency (not an ungrounded
+   * drift guess) is half of the gate-#4 freshness decision; the other half is provenance.
+   */
+  last_verified_at?: string;
 }
 export interface MemoryFabricStore {
   schema_version: 1;

@@ -15,6 +15,12 @@ export type MemoryMergePolicy =
   | 'manual_resolution_required'
   | 'score_update';
 
+/**
+ * The write-time authority/merge record that yields a canonical `fabric.ts` `MemoryFact`. It shares
+ * the same provenance fields (`source_event_ids` / `artifact_refs`) as the stored fact — one
+ * provenance model, two roles (write authority here, stored fact in fabric, gating projection in
+ * memory-gating). No `driftRisk`: grounding is provenance + verification recency, never a guess.
+ */
 export interface MemoryWriteRecord {
   schema_version: 1;
   memory_id: string;

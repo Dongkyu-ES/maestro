@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import type { MemoryFact } from '../memory/fabric.js';
 import {
   assertNoStaleAsFact,
   buildMemoryContextSections,
   classifyMemoryForInjection,
+  gatingViewFromFact,
   type MemoryEntry,
 } from './memory-gating.js';
 
@@ -19,6 +21,7 @@ function makeEntry(overrides: Partial<MemoryEntry> = {}): MemoryEntry {
     source: 'unit-test',
     confidence: 'high',
     createdAt: '2026-06-01T00:00:00.000Z',
+    sourceEventIds: ['evt-1'],
     ...overrides,
   };
 }
@@ -27,7 +30,9 @@ test('T5 recently verified project_fact is injected as confirmed_fact', () => {
   const entry = makeEntry({ id: 'recent-project-fact', lastVerifiedAt: '2026-06-04T23:30:00.000Z' });
 
   assert.equal(classifyMemoryForInjection(entry, { now, freshnessWindowMs }), 'confirmed_fact');
-  assert.deepEqual(buildMemoryContextSections([entry], { now, freshnessWindowMs }).injectedFactIds, ['recent-project-fact']);
+  assert.deepEqual(buildMemoryContextSections([entry], { now, freshnessWindowMs }).injectedFactIds, [
+    'recent-project-fact',
+  ]);
 });
 
 test('T5 stale or unverified project_fact is labeled and rejected if forged as confirmed_fact', () => {
@@ -56,6 +61,48 @@ test('T5 rejected memory entry is always excluded', () => {
   const entry = makeEntry({ id: 'rejected-entry', category: 'rejected', lastVerifiedAt: '2026-06-04T23:30:00.000Z' });
 
   assert.equal(classifyMemoryForInjection(entry, { now, freshnessWindowMs }), 'excluded');
+});
+
+test('gate #4 provenance half: a recently verified fact with NO provenance is not confirmed_fact', () => {
+  // Recency alone is not enough — without ledger provenance the fact is ungrounded.
+  const recentButUngrounded = makeEntry({
+    id: 'ungrounded-fact',
+    sourceEventIds: [],
+    lastVerifiedAt: '2026-06-04T23:30:00.000Z',
+  });
+
+  assert.equal(classifyMemoryForInjection(recentButUngrounded, { now, freshnessWindowMs }), 'unverified');
+  assert.deepEqual(buildMemoryContextSections([recentButUngrounded], { now, freshnessWindowMs }).injectedFactIds, []);
+  assert.throws(
+    () =>
+      assertNoStaleAsFact([recentButUngrounded], { now, freshnessWindowMs, injectedFactIds: [recentButUngrounded.id] }),
+    /ungrounded-fact/,
+  );
+});
+
+test('gatingViewFromFact projects the canonical MemoryFact so the gate consumes one provenance model', () => {
+  const fact: MemoryFact = {
+    schema_version: 1,
+    id: 'fact-1',
+    layer: 'vertical_project',
+    key: 'build_cmd',
+    value: 'npm run build',
+    run_id: 'run-9',
+    source_event_ids: ['evt-a', 'evt-b'],
+    artifact_refs: [],
+    created_at: '2026-06-01T00:00:00.000Z',
+    last_verified_at: '2026-06-04T23:30:00.000Z',
+  };
+
+  const view = gatingViewFromFact(fact);
+  assert.deepEqual(view.sourceEventIds, ['evt-a', 'evt-b']);
+  assert.equal(view.lastVerifiedAt, '2026-06-04T23:30:00.000Z');
+  // Provenance + recency carried over → the canonical fact gates as a confirmed fact.
+  assert.equal(classifyMemoryForInjection(view, { now, freshnessWindowMs }), 'confirmed_fact');
+
+  // A blocked/failed outcome is not a durable fact: it projects as hypothesis (never confirmed).
+  const blocked = gatingViewFromFact({ ...fact, id: 'fact-2', outcome: 'blocked' });
+  assert.equal(classifyMemoryForInjection(blocked, { now, freshnessWindowMs }), 'unverified');
 });
 
 test('T5 buildMemoryContextSections is deterministic', () => {
