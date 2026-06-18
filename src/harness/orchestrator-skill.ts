@@ -1,3 +1,6 @@
+import { randomUUID } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { RuntimeLedgerHeadBinding } from '../events/ledger.js';
 import type { HarnessExecutor } from './harness-run.js';
 
@@ -10,7 +13,8 @@ export {
 } from './evidence-store.js';
 
 import type { PhaseId } from './evidence-store.js';
-import { type GraphNode, type GraphNodeResult, type NodeState, runTaskGraph } from './orchestrator.js';
+import { storePhaseArtifact, type EvidenceRef } from './evidence-store.js';
+import { type GraphNode, type NodeState, runIsolatedWorker, type WorkerResult } from './orchestrator.js';
 
 export interface PhaseSpec {
   executor?: HarnessExecutor;
@@ -78,35 +82,88 @@ export function compileSkillToGraphTemplate(spec: OrchestratorSkillSpec, input: 
 
 const PHASE_IDS: PhaseId[] = ['research', 'execute', 'review'];
 
-function toPhaseResult(node: GraphNodeResult, phase: PhaseId): PhaseResult {
+function isSupported(result: WorkerResult): boolean {
+  return result.state === 'completed' && result.verifierStatus === 'supported';
+}
+
+function toPhaseResult(result: WorkerResult, phase: PhaseId): PhaseResult {
   return {
     phase,
-    workerId: node.workerId,
-    nodeState: node.nodeState,
-    outputRef: node.outputRef ?? undefined,
-    skippedReason: node.skippedReason,
+    workerId: result.workerId,
+    nodeState: isSupported(result) ? 'supported' : result.state === 'failed' ? 'failed' : 'blocked',
+    outputRef: result.outputRef ?? undefined,
+    skippedReason: undefined,
   };
+}
+
+function readWorkerLedgerHead(result: WorkerResult): RuntimeLedgerHeadBinding | undefined {
+  if (!result.runDir) return undefined;
+  const reportPath = join(result.worktreePath, result.runDir, 'harness-run-report.json');
+  if (!existsSync(reportPath)) return undefined;
+  const report = JSON.parse(readFileSync(reportPath, 'utf8')) as { ledgerHead?: RuntimeLedgerHeadBinding };
+  return report.ledgerHead;
 }
 
 export async function runOrchestratorSkill(
   spec: OrchestratorSkillSpec,
   input: { what: string; root: string; runId?: string },
 ): Promise<SkillRunReport> {
+  const runId = input.runId ?? `skill-${randomUUID()}`;
   const nodes = compileSkillToGraphTemplate(spec, { what: input.what });
-  const report = await runTaskGraph({ root: input.root, nodes, goal: spec.id, runId: input.runId });
-  const resultsByWorkerId = new Map(report.nodes.map((node) => [node.workerId, node]));
-  const phases = PHASE_IDS.flatMap((phase) => {
-    const node = resultsByWorkerId.get(phase);
-    return node ? [toPhaseResult(node, phase)] : [];
-  });
-  const review = resultsByWorkerId.get('review');
+  const goalsByPhase = new Map(nodes.map((node) => [node.id, node.goal]));
+  const phases: PhaseResult[] = [];
+  const inputRefs: EvidenceRef[] = [];
+  let ledgerHead: RuntimeLedgerHeadBinding | undefined;
+
+  for (const phase of PHASE_IDS) {
+    const priorUnsupported = phases.find((result) => result.nodeState !== 'supported');
+    if (priorUnsupported) {
+      phases.push({
+        phase,
+        workerId: phase,
+        nodeState: 'skipped',
+        outputRef: undefined,
+        skippedReason: `unsupported deps: ${priorUnsupported.phase}`,
+      });
+      continue;
+    }
+
+    const result = await runIsolatedWorker({
+      root: input.root,
+      workerId: phase,
+      goal: goalsByPhase.get(phase) ?? spec.phases[phase].goalTemplate,
+      executor: spec.phases[phase].executor,
+      inputRefs,
+    });
+    ledgerHead = readWorkerLedgerHead(result) ?? ledgerHead;
+
+    const phaseResult = toPhaseResult(result, phase);
+    phases.push(phaseResult);
+    if (phaseResult.nodeState !== 'supported' || !spec.phases[phase].acceptArtifact) continue;
+
+    try {
+      inputRefs.push(
+        storePhaseArtifact({
+          root: input.root,
+          skillRunId: runId,
+          phase,
+          sourceFile: join(result.worktreePath, spec.phases[phase].acceptArtifact),
+        }),
+      );
+    } catch {
+      phaseResult.nodeState = 'blocked';
+    }
+  }
+
+  if (!ledgerHead) throw new Error('runOrchestratorSkill could not bind a worker ledger head');
+  const review = phases.find((phase) => phase.phase === 'review');
 
   return {
     schema_version: 1,
     skillId: spec.id,
     what: input.what,
     phases,
-    ledgerHead: report.ledgerHead,
+    ledgerHead,
     completionDisplay: review?.nodeState ?? 'failed',
   };
 }

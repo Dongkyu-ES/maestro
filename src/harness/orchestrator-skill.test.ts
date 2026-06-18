@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { makeCliExecutor } from './compare.js';
+import type { HarnessExecutor } from './harness-run.js';
 import { runTaskGraph } from './orchestrator.js';
 import {
   compileSkillToGraphTemplate,
@@ -52,6 +53,38 @@ process.exit(0);
 
 function sha256Hex(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex');
+}
+
+function codexResult(opts: { cwd: string; label?: string; lastMessage?: string }) {
+  return {
+    label: opts.label ?? 'fake',
+    cwd: opts.cwd,
+    command: 'fake executor',
+    started_at: new Date(0).toISOString(),
+    ended_at: new Date(0).toISOString(),
+    exit_code: 0,
+    signal: null,
+    timed_out: false,
+    cancelled: false,
+    last_message: opts.lastMessage ?? 'done',
+    event_count: 1,
+    stdout: '',
+    stderr: '',
+  };
+}
+
+function handoffExecutor(options: { executeWrites: boolean }): HarnessExecutor {
+  return async (opts) => {
+    if (opts.prompt.includes('research')) {
+      writeFileSync(join(opts.cwd, 'research.txt'), 'RESEARCH_OUTPUT');
+    } else if (opts.prompt.includes('execute')) {
+      const research = readFileSync(join(opts.cwd, 'research.txt'), 'utf8');
+      if (options.executeWrites) writeFileSync(join(opts.cwd, 'execute.txt'), `${research}+EXECUTED`);
+    } else if (opts.prompt.includes('review')) {
+      writeFileSync(join(opts.cwd, 'review.txt'), 'REVIEW_OUTPUT');
+    }
+    return codexResult({ cwd: opts.cwd, label: opts.label });
+  };
 }
 
 test('storePhaseArtifact stores a sha256 verified round-trip artifact', () => {
@@ -227,12 +260,61 @@ test('runOrchestratorSkill returns refs-only phase report when all phases are su
     ['supported', 'supported', 'supported'],
   );
   assert.equal(report.completionDisplay, 'supported');
-  assert.equal(report.ledgerHead.run_id, 'graph-skill-happy');
+  assert.equal(typeof report.ledgerHead.run_id, 'string');
+  assert.equal(report.ledgerHead.event_count > 0, true);
 
   for (const phase of report.phases) {
     assert.equal(typeof phase.outputRef, 'string');
     assert.deepEqual(Object.keys(phase), ['phase', 'workerId', 'nodeState', 'outputRef', 'skippedReason']);
   }
+});
+
+test('runOrchestratorSkill passes accepted artifacts between phases through inputRefs', async () => {
+  const root = tmpRepo();
+  const runId = 'skill-handoff';
+  const executor = handoffExecutor({ executeWrites: true });
+  const spec: OrchestratorSkillSpec = {
+    id: 'research-execute-review',
+    phases: {
+      research: { goalTemplate: 'research {what}', executor, acceptArtifact: 'research.txt' },
+      execute: { goalTemplate: 'execute {what}', executor, acceptArtifact: 'execute.txt' },
+      review: { goalTemplate: 'review {what}', executor, acceptArtifact: 'review.txt' },
+    },
+  };
+
+  const report = await runOrchestratorSkill(spec, { what: 'handoff work', root, runId });
+
+  assert.equal(report.completionDisplay, 'supported');
+  assert.deepEqual(
+    report.phases.map((phase) => phase.nodeState),
+    ['supported', 'supported', 'supported'],
+  );
+  assert.match(
+    readFileSync(join(root, '.agent', 'skill-runs', runId, 'artifacts', 'execute', 'execute.txt'), 'utf8'),
+    /RESEARCH_OUTPUT/,
+  );
+});
+
+test('runOrchestratorSkill gates review when execute does not produce its accepted artifact', async () => {
+  const root = tmpRepo();
+  const executor = handoffExecutor({ executeWrites: false });
+  const spec: OrchestratorSkillSpec = {
+    id: 'research-execute-review',
+    phases: {
+      research: { goalTemplate: 'research {what}', executor, acceptArtifact: 'research.txt' },
+      execute: { goalTemplate: 'execute {what}', executor, acceptArtifact: 'execute.txt' },
+      review: { goalTemplate: 'review {what}', executor, acceptArtifact: 'review.txt' },
+    },
+  };
+
+  const report = await runOrchestratorSkill(spec, { what: 'blocked handoff work', root, runId: 'skill-handoff-gated' });
+
+  assert.notEqual(report.completionDisplay, 'supported');
+  assert.deepEqual(
+    report.phases.map((phase) => phase.nodeState),
+    ['supported', 'blocked', 'skipped'],
+  );
+  assert.match(report.phases.find((phase) => phase.phase === 'review')?.skippedReason ?? '', /unsupported deps: execute/);
 });
 
 test('runOrchestratorSkill mirrors skipped review when execute is blocked', async () => {
