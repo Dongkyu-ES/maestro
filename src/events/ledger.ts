@@ -7,6 +7,7 @@ export type RuntimeEventSource =
   | 'web'
   | 'runtime-manager'
   | 'codex-adapter'
+  | 'claude-adapter'
   | 'omx-adapter'
   | 'agy-adapter'
   | 'shell-adapter'

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { readRuntimeEvents, validateRuntimeLedger } from '../events/ledger.js';
-import { runHarnessSlice } from './harness-run.js';
+import { type HarnessExecutor, runHarnessSlice } from './harness-run.js';
 
 function tmpRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'harness-run-'));
@@ -95,4 +95,51 @@ test('T1 harness slice blocks forged executor success when no git diff evidence 
   assert.equal(transition?.payload.state, 'blocked');
   assert.equal(transition?.payload.authority, 'verifier.completed');
   assert.equal(events.some((event) => event.type === 'run.blocked'), true);
+});
+
+function fakeExecutor(label: string): HarnessExecutor {
+  return async (opts) => {
+    writeFileSync(join(opts.cwd, 'target.txt'), `edited by ${label}\n`);
+    return {
+      label: opts.label ?? label,
+      cwd: opts.cwd,
+      command: `${label} -p`,
+      started_at: new Date(0).toISOString(),
+      ended_at: new Date(0).toISOString(),
+      exit_code: 0,
+      signal: null,
+      timed_out: false,
+      cancelled: false,
+      last_message: `${label} done`,
+      event_count: 1,
+      stdout: '',
+      stderr: '',
+      session_id: `${label}-session-1`,
+    };
+  };
+}
+
+test('T1 harness slice runs a non-codex executor (claude -p) and labels evidence honestly', async () => {
+  const root = tmpRepo();
+  const report = await runHarnessSlice({
+    root,
+    goal: 'edit target.txt with claude',
+    executor: fakeExecutor('claude'),
+    executorLabel: 'claude',
+    runId: 'claude-run',
+  });
+
+  assert.equal(report.state, 'completed');
+  assert.equal(report.nativeHarnessAssisted, true); // claude -p is a rented native loop too
+
+  const runDir = join(root, '.agent', 'runs', 'claude-run');
+  const evidence = JSON.parse(readFileSync(join(runDir, 'tool-execution-evidence.json'), 'utf8')) as { executor: string };
+  assert.equal(evidence.executor, 'claude'); // honest: not hardcoded to codex
+
+  const events = readRuntimeEvents(runDir);
+  validateRuntimeLedger(events);
+  assert.equal(
+    events.some((event) => event.type === 'executor.output.received' && event.source === 'claude-adapter'),
+    true,
+  );
 });

@@ -9,6 +9,7 @@ import {
   runtimeLedgerHeadHash,
   stableJson,
   validateRuntimeLedger,
+  type RuntimeEventSource,
   type RuntimeLedgerHeadBinding,
 } from '../events/ledger.js';
 import { runCodexExec, type CodexExecResult } from '../runtime/codex-exec-runner.js';
@@ -45,6 +46,9 @@ export interface HarnessRunOptions {
   contextExtras?: string;
   executorBin?: string;
   executor?: HarnessExecutor;
+  /** Identity of the executor actually driving this run (e.g. 'codex' | 'claude' | 'agy').
+   *  Recorded in the tool-execution evidence so a non-codex run is never mislabeled codex. */
+  executorLabel?: string;
   runId?: string;
   timeoutMs?: number;
   hooks?: HookHandler[];
@@ -70,7 +74,7 @@ export interface ContextBundle {
 export interface ToolExecutionEvidence {
   schema_version: 1;
   run_id: string;
-  executor: 'codex';
+  executor: string;
   evidence_kind: 'tool_execution';
   status: 'native-harness-assisted';
   generated_at: string;
@@ -108,6 +112,21 @@ const UNOWNED_SURFACES = [
 
 function sha256(value: Buffer | string): string {
   return createHash('sha256').update(value).digest('hex');
+}
+
+// Map an executor label to the native-session adapter id the surface detector recognizes, so a
+// claude/agy run is still correctly flagged native-harness-assisted (the rented loop owns the
+// session) instead of silently looking un-assisted.
+function adapterForLabel(label: string): string {
+  if (label === 'claude') return 'claude_code';
+  if (label === 'agy') return 'agy';
+  return 'codex_cli';
+}
+
+function eventSourceForLabel(label: string): RuntimeEventSource {
+  if (label === 'claude') return 'claude-adapter';
+  if (label === 'agy') return 'agy-adapter';
+  return 'codex-adapter';
 }
 
 function runDirFor(root: string, runId: string): string {
@@ -255,6 +274,7 @@ function captureToolEvidence(options: {
   runDir: string;
   runId: string;
   executor: CodexExecResult;
+  executorLabel: string;
   unownedSurfaces: string[];
 }): ToolExecutionEvidence {
   const runDirRef = relative(options.root, options.runDir).replaceAll('\\', '/');
@@ -279,7 +299,7 @@ function captureToolEvidence(options: {
   const evidence: ToolExecutionEvidence = {
     schema_version: 1,
     run_id: options.runId,
-    executor: 'codex',
+    executor: options.executorLabel,
     evidence_kind: 'tool_execution',
     status: 'native-harness-assisted',
     generated_at: new Date().toISOString(),
@@ -300,11 +320,17 @@ function existingInstructionPaths(root: string, runDir: string): string[] {
   return [join(root, 'AGENTS.md'), join(root, 'CLAUDE.md'), join(runDir, 'AGENTS.md'), join(runDir, 'CLAUDE.md')].filter((path) => existsSync(path));
 }
 
-function buildRunObservation(options: { root: string; runDir: string; executorBin?: string; executor: CodexExecResult }): RunObservation {
+function buildRunObservation(options: {
+  root: string;
+  runDir: string;
+  executorBin?: string;
+  executorLabel: string;
+  executor: CodexExecResult;
+}): RunObservation {
   return {
-    adapter: 'codex_cli',
+    adapter: adapterForLabel(options.executorLabel),
     readPaths: [
-      options.executorBin ?? 'codex',
+      options.executorBin ?? options.executorLabel,
       options.executor.cwd,
       join(options.runDir, 'context.md'),
       join(options.runDir, 'executor.process.json'),
@@ -468,6 +494,7 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     artifactRefs: ['context-bundle.json', 'context-provenance.json'],
   });
 
+  const executorLabel = options.executorLabel ?? 'codex';
   const runExec: HarnessExecutor = options.executor ?? ((o) => runCodexExec(o));
   const executor = await withExecutorBin(options.executorBin, () =>
     runExec({
@@ -480,7 +507,7 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
   );
   appendRuntimeEvent(runDir, {
     runId,
-    source: 'codex-adapter',
+    source: eventSourceForLabel(executorLabel),
     type: 'executor.output.received',
     payload: {
       exit_code: executor.exit_code,
@@ -490,7 +517,7 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     },
     artifactRefs: ['executor.process.json', 'executor.stdout.log', 'executor.stderr.log', 'codex-events.jsonl'],
   });
-  const observation = buildRunObservation({ root, runDir, executorBin: options.executorBin, executor });
+  const observation = buildRunObservation({ root, runDir, executorBin: options.executorBin, executorLabel, executor });
   const nativeLabel = deriveNativeHarnessAssisted(observation);
   assertLabelMatchesObservation(nativeLabel.nativeHarnessAssisted, observation);
 
@@ -532,7 +559,7 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     });
   }
 
-  const evidence = captureToolEvidence({ root, runDir, runId, executor, unownedSurfaces: nativeLabel.surfaces });
+  const evidence = captureToolEvidence({ root, runDir, runId, executor, executorLabel, unownedSurfaces: nativeLabel.surfaces });
   appendRuntimeEvent(runDir, {
     runId,
     source: 'harness',

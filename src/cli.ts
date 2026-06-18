@@ -130,7 +130,7 @@ function usage(): string {
   warden run create|start|collect|cancel|latest
   warden run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
   warden run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
-  warden harness run <goal> [--executor-bin <path>]
+  warden harness run <goal> [--executor codex|claude|agy] [--executor-bin <path>]
   warden loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]
   warden runtime projection
   warden context verify --run <run-id>
@@ -308,9 +308,22 @@ async function main() {
       return;
     }
     if (cmd === 'harness' && sub === 'run') {
-      const goal = rest.filter((item, index) => item !== '--executor-bin' && rest[index - 1] !== '--executor-bin').join(' ').trim();
-      if (!goal) throw new Error('usage: warden harness run <goal> [--executor-bin <path>]');
-      const report = await runHarnessSlice({ root: process.cwd(), goal, executorBin: arg('--executor-bin') });
+      const valueFlags = ['--executor-bin', '--executor'];
+      const goal = rest
+        .filter((item, index) => !valueFlags.includes(item) && !valueFlags.includes(rest[index - 1]))
+        .join(' ')
+        .trim();
+      if (!goal) throw new Error('usage: warden harness run <goal> [--executor codex|claude|agy] [--executor-bin <path>]');
+      const executorKind = arg('--executor') ?? 'codex';
+      const registry = defaultExecutorRegistry();
+      if (!registry.has(executorKind)) throw new Error(`unknown executor: ${executorKind} (use codex|claude|agy)`);
+      const report = await runHarnessSlice({
+        root: process.cwd(),
+        goal,
+        executor: registry.resolve(executorKind), // undefined for codex → native runCodexExec default
+        executorLabel: executorKind,
+        executorBin: arg('--executor-bin'),
+      });
       console.log(JSON.stringify(report, null, 2));
       if (report.state !== 'completed') process.exitCode = 2;
       return;
