@@ -27,6 +27,7 @@ import {
   type NodeState,
   removeWorktreeAndBranch,
   runIsolatedWorker,
+  runWorkersConcurrently,
   type WorkerResult,
 } from './orchestrator.js';
 
@@ -487,17 +488,22 @@ async function runExecuteFanOut(opts: {
   const storedByLabel = new Map<string, EvidenceRef>();
   let ledgerHead: RuntimeLedgerHeadBinding | undefined;
 
-  for (const candidate of opts.candidates) {
-    const workerId = executeCandidateWorkerId(opts.runId, candidate);
-    opts.createdWorkerIds.push(workerId);
-    const result = await runIsolatedWorker({
-      root: opts.root,
-      workerId,
-      goal: opts.goal,
-      executor: candidate.executor,
-      executorLabel: candidate.executorLabel,
-      inputRefs: opts.inputRefs,
-    });
+  // Worktrees created serially, candidate slices run CONCURRENTLY. Selection stays deterministic:
+  // the winner is the first candidate (in declared order) whose evidence passes acceptance,
+  // independent of which executor finishes first.
+  const workerSpecs = opts.candidates.map((candidate) => ({
+    workerId: executeCandidateWorkerId(opts.runId, candidate),
+    goal: opts.goal,
+    executor: candidate.executor,
+    executorLabel: candidate.executorLabel,
+    inputRefs: opts.inputRefs,
+  }));
+  for (const spec of workerSpecs) opts.createdWorkerIds.push(spec.workerId);
+  const results = await runWorkersConcurrently({ root: opts.root, workers: workerSpecs });
+
+  for (let i = 0; i < opts.candidates.length; i++) {
+    const candidate = opts.candidates[i];
+    const result = results[i];
     ledgerHead = readWorkerLedgerHead(result) ?? ledgerHead;
     if (!isSupported(result) || !opts.acceptArtifact) continue;
     try {

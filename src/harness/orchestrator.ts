@@ -196,6 +196,29 @@ async function mapWithConcurrency<T, R>(
   return results;
 }
 
+// Lean fan-out: create worktrees SERIALLY (git index lock), then run their slices CONCURRENTLY.
+// No parent run dir / events — callers that want ledgered orchestration use runParallelWorkers;
+// callers that just need N isolated results in parallel (e.g. the skill execute fan-out) use this.
+export async function runWorkersConcurrently(options: {
+  root: string;
+  workers: { workerId: string; goal: string; executor?: HarnessExecutor; executorLabel?: string; inputRefs?: EvidenceRef[] }[];
+  concurrency?: number;
+}): Promise<WorkerResult[]> {
+  const root = resolve(options.root);
+  const prepared = options.workers.map((spec) => ({ spec, ...createWorktree(root, spec.workerId) }));
+  return mapWithConcurrency(prepared, options.concurrency ?? 4, ({ spec, branch, worktreePath }) =>
+    runWorkerSlice({
+      worktreePath,
+      branch,
+      workerId: spec.workerId,
+      goal: spec.goal,
+      executor: spec.executor,
+      executorLabel: spec.executorLabel,
+      inputRefs: spec.inputRefs,
+    }),
+  );
+}
+
 // M11.2: fan a task out to parallel isolated workers. Worktrees are created serially
 // (avoids git index-lock contention), slices run concurrently. The parent ledger records
 // spawned/joined with output REFS + verifier verdicts only.
