@@ -3,7 +3,13 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import type { RuntimeLedgerHeadBinding } from '../events/ledger.js';
+import {
+  appendRuntimeEvent,
+  readRuntimeEvents,
+  type RuntimeLedgerHeadBinding,
+  runtimeLedgerHeadHash,
+  validateRuntimeLedger,
+} from '../events/ledger.js';
 import type { HarnessExecutor } from './harness-run.js';
 
 export {
@@ -251,6 +257,25 @@ export function runAcceptanceCheck(opts: {
   }
 }
 
+function skillRunDir(root: string, runId: string): string {
+  return join(root, '.agent', 'skill-runs', runId);
+}
+
+/**
+ * Read the content-addressed execute-phase evidence from the store. This is the
+ * recomputable anchor for completion: bytes are re-hashed here and re-run through
+ * acceptance, so the verdict never depends on a lifecycle projection event.
+ */
+function readExecuteRefsFromStore(root: string, runId: string): EvidenceRef[] {
+  const executeDir = join(skillRunDir(root, runId), 'artifacts', 'execute');
+  if (!existsSync(executeDir)) return [];
+  return readdirSync(executeDir).map((file): EvidenceRef => {
+    const storePath = join(executeDir, file);
+    const content = readFileSync(storePath);
+    return { phase: 'execute', relativePath: file, sha256: sha256Hex(content), storePath };
+  });
+}
+
 export function recomputeCompletion(
   spec: OrchestratorSkillSpec,
   report: SkillRunReport,
@@ -273,17 +298,7 @@ export function recomputeCompletion(
     };
   }
 
-  const executeDir = join(opts.root, '.agent', 'skill-runs', report.runId, 'artifacts', 'execute');
-  const executeRefs = readdirSync(executeDir).map((file): EvidenceRef => {
-    const storePath = join(executeDir, file);
-    const content = readFileSync(storePath);
-    return {
-      phase: 'execute',
-      relativePath: file,
-      sha256: sha256Hex(content),
-      storePath,
-    };
-  });
+  const executeRefs = readExecuteRefsFromStore(opts.root, report.runId);
   const acceptance = runAcceptanceCheck({ executeRefs, acceptance: spec.acceptance });
   const completion = acceptance.passed ? 'passed' : 'failed';
 
@@ -292,6 +307,91 @@ export function recomputeCompletion(
     matchesReport: completion === report.completion,
     reason: acceptance.reason,
   };
+}
+
+/**
+ * Authoritative, ledger-grounded recompute. It validates the skill lifecycle
+ * hash chain (tamper-evident) but derives the verdict ONLY from the
+ * content-addressed execute evidence re-run through acceptance. The
+ * `skill.completed` projection event — including any decision a forger appends to
+ * it — is never consulted. This is the recomputable completion authority; the
+ * SkillRunReport.completion field is display-only.
+ */
+export function recomputeCompletionFromLedger(
+  spec: OrchestratorSkillSpec,
+  opts: { root: string; runId: string },
+): { completion: 'passed' | 'failed' | 'skipped'; ledgerValid: true; reason: string } {
+  const events = readRuntimeEvents(skillRunDir(opts.root, opts.runId));
+  // Throws on any broken hash chain / non-contiguous sequence — fail closed.
+  validateRuntimeLedger(events);
+
+  if (!spec.acceptance) {
+    const reviewAdvanced = events
+      .filter((event) => event.type === 'phase.advanced' && event.payload.phase === 'review')
+      .at(-1);
+    const reviewState = reviewAdvanced?.payload.nodeState;
+    return {
+      completion: reviewState === 'supported' ? 'passed' : reviewState === 'skipped' ? 'skipped' : 'failed',
+      ledgerValid: true,
+      reason: 'no acceptance declared; derived from review-node verifier projection',
+    };
+  }
+
+  const executeRefs = readExecuteRefsFromStore(opts.root, opts.runId);
+  if (!executeRefs.length) {
+    return { completion: 'skipped', ledgerValid: true, reason: 'no execute evidence in store' };
+  }
+  const acceptance = runAcceptanceCheck({ executeRefs, acceptance: spec.acceptance });
+  return {
+    completion: acceptance.passed ? 'passed' : 'failed',
+    ledgerValid: true,
+    reason: acceptance.reason,
+  };
+}
+
+/**
+ * Append the skill lifecycle events as derived projections of the resolved phase
+ * results. `skill.completed` carries refs only ({ finalNodeId, verifierVerdictRef,
+ * ledgerHeadBeforeEvent }) and NO free-form decision/completion field, so it can
+ * never become a second completion authority.
+ */
+function emitLifecycleProjection(opts: {
+  root: string;
+  runId: string;
+  spec: OrchestratorSkillSpec;
+  phases: PhaseResult[];
+}): void {
+  const dir = skillRunDir(opts.root, opts.runId);
+  appendRuntimeEvent(dir, {
+    runId: opts.runId,
+    source: 'harness',
+    type: 'skill.started',
+    payload: { skillId: opts.spec.id },
+  });
+  for (const phase of opts.phases) {
+    appendRuntimeEvent(dir, {
+      runId: opts.runId,
+      source: 'harness',
+      type: 'phase.advanced',
+      payload: {
+        phase: phase.phase,
+        nodeState: phase.nodeState,
+        outputRef: phase.outputRef ?? null,
+        skippedReason: phase.skippedReason ?? null,
+      },
+    });
+  }
+  const ledgerHeadBeforeEvent = runtimeLedgerHeadHash(readRuntimeEvents(dir));
+  appendRuntimeEvent(dir, {
+    runId: opts.runId,
+    source: 'harness',
+    type: 'skill.completed',
+    payload: {
+      finalNodeId: 'review',
+      verifierVerdictRef: opts.spec.acceptance ? `skill-runs/${opts.runId}/artifacts/execute` : null,
+      ledgerHeadBeforeEvent,
+    },
+  });
 }
 
 export async function runOrchestratorSkill(
@@ -361,7 +461,7 @@ export async function runOrchestratorSkill(
       : 'skipped'
     : completionFromReview(review);
 
-  return {
+  const report: SkillRunReport = {
     schema_version: 1,
     skillId: spec.id,
     runId,
@@ -372,4 +472,13 @@ export async function runOrchestratorSkill(
     completion,
     completionDisplay: review?.nodeState ?? 'failed',
   };
+
+  // Lifecycle events are derived projections appended AFTER the verdict is fixed;
+  // they describe the run, they never decide it.
+  emitLifecycleProjection({ root: input.root, runId, spec, phases });
+  const reportPath = join(skillRunDir(input.root, runId), 'skill-run-report.json');
+  mkdirSync(dirname(reportPath), { recursive: true });
+  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+
+  return report;
 }

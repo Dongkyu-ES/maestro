@@ -45,7 +45,12 @@ import { runHarnessSlice } from './harness/harness-run.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/native-evidence.js';
 import { createOrchestratorServer, defaultExecutorRegistry, runSubmittedGraph } from './harness/orchestrator-server.js';
-import { loadSkillSpecFromJson, runOrchestratorSkill, type SkillSpecJson } from './harness/orchestrator-skill.js';
+import {
+  loadSkillSpecFromJson,
+  recomputeCompletionFromLedger,
+  runOrchestratorSkill,
+  type SkillSpecJson,
+} from './harness/orchestrator-skill.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import { runProviderConformance } from './harness/provider-normalization.js';
 import { verifySkillContracts } from './harness/skill-contracts.js';
@@ -654,7 +659,11 @@ async function main() {
       const spec = loadSkillSpecFromJson(json, executors);
       const report = await runOrchestratorSkill(spec, { what, root: process.cwd(), runId: arg('--run-id') });
       console.log(JSON.stringify(report, null, 2));
-      if (report.completion === 'failed') process.exitCode = 2;
+      const recomputed = recomputeCompletionFromLedger(spec, { root: process.cwd(), runId: report.runId });
+      console.log(
+        `AUTHORITATIVE (ledger recompute, report field is display-only): completion=${recomputed.completion} (${recomputed.reason})`,
+      );
+      if (recomputed.completion === 'failed') process.exitCode = 2;
       return;
     }
     if (cmd === 'worktrees' && sub === 'cleanup') {

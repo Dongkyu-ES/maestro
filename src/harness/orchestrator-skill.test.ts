@@ -5,6 +5,7 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { appendRuntimeEvent, readRuntimeEvents, validateRuntimeLedger } from '../events/ledger.js';
 import { makeCliExecutor } from './compare.js';
 import type { HarnessExecutor } from './harness-run.js';
 import { runTaskGraph } from './orchestrator.js';
@@ -14,6 +15,7 @@ import {
   materializeEvidenceInto,
   type OrchestratorSkillSpec,
   recomputeCompletion,
+  recomputeCompletionFromLedger,
   resolveEvidenceArtifact,
   runOrchestratorSkill,
   type SkillSpecJson,
@@ -487,4 +489,82 @@ test('runOrchestratorSkill mirrors skipped review when execute is blocked', asyn
     ['supported', 'blocked', 'skipped'],
   );
   assert.match(report.phases.find((p) => p.phase === 'review')?.skippedReason ?? '', /unsupported deps: execute/);
+});
+
+test('runOrchestratorSkill emits a chained lifecycle projection with no decision field', async () => {
+  const root = tmpRepo();
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }));
+  const runId = 'skill-lifecycle';
+
+  await runOrchestratorSkill(spec, { what: 'lifecycle work', root, runId });
+  const events = readRuntimeEvents(join(root, '.agent', 'skill-runs', runId));
+
+  validateRuntimeLedger(events); // contiguous + hash-chained
+  assert.deepEqual(
+    events.map((event) => event.type),
+    ['skill.started', 'phase.advanced', 'phase.advanced', 'phase.advanced', 'skill.completed'],
+  );
+
+  const completed = events.at(-1);
+  assert.deepEqual(Object.keys(completed?.payload ?? {}).sort(), [
+    'finalNodeId',
+    'ledgerHeadBeforeEvent',
+    'verifierVerdictRef',
+  ]);
+  assert.equal(completed?.payload.finalNodeId, 'review');
+  // The projection must never carry a verdict an intermediary could trust.
+  assert.equal('decision' in (completed?.payload ?? {}), false);
+  assert.equal('completion' in (completed?.payload ?? {}), false);
+});
+
+test('a forged skill.completed decision cannot override the ledger recompute', async () => {
+  const root = tmpRepo();
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }));
+  const runId = 'skill-forged-completed';
+
+  const report = await runOrchestratorSkill(spec, { what: 'forged add', root, runId });
+  assert.equal(report.completion, 'failed');
+
+  // A forger appends a well-formed, correctly-chained skill.completed claiming success.
+  const dir = join(root, '.agent', 'skill-runs', runId);
+  appendRuntimeEvent(dir, {
+    runId,
+    source: 'harness',
+    type: 'skill.completed',
+    payload: { finalNodeId: 'review', decision: 'supported', completion: 'passed' },
+  });
+  validateRuntimeLedger(readRuntimeEvents(dir)); // the forgery is a "legal" append; chain stays valid
+
+  // Authority is the evidence-anchored recompute, which never reads skill.completed.
+  assert.equal(recomputeCompletionFromLedger(spec, { root, runId }).completion, 'failed');
+});
+
+test('ledger recompute is evidence-anchored and invariant to the lifecycle projection', async () => {
+  const root = tmpRepo();
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }));
+  const runId = 'skill-evidence-anchored';
+
+  await runOrchestratorSkill(spec, { what: 'anchored add', root, runId });
+  assert.equal(recomputeCompletionFromLedger(spec, { root, runId }).completion, 'passed');
+
+  // Drop the entire lifecycle ledger; the verdict comes from execute evidence, not events.
+  writeFileSync(join(root, '.agent', 'skill-runs', runId, 'events.jsonl'), '');
+  assert.equal(recomputeCompletionFromLedger(spec, { root, runId }).completion, 'passed');
+});
+
+test('ledger recompute fails closed on a tampered lifecycle chain', async () => {
+  const root = tmpRepo();
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }));
+  const runId = 'skill-tampered-chain';
+
+  await runOrchestratorSkill(spec, { what: 'tamper add', root, runId });
+
+  const ledgerPath = join(root, '.agent', 'skill-runs', runId, 'events.jsonl');
+  const lines = readFileSync(ledgerPath, 'utf8').split('\n').filter(Boolean);
+  const middle = JSON.parse(lines[1]) as { payload: Record<string, unknown> };
+  middle.payload.nodeState = 'tampered'; // mutate payload, leave stale payload_sha256
+  lines[1] = JSON.stringify(middle);
+  writeFileSync(ledgerPath, `${lines.join('\n')}\n`);
+
+  assert.throws(() => recomputeCompletionFromLedger(spec, { root, runId }), /payload hash mismatch|hash chain|sequence/i);
 });
