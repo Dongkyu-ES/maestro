@@ -15,11 +15,17 @@ export {
 } from './evidence-store.js';
 
 import type { PhaseId } from './evidence-store.js';
-import { materializeEvidenceInto, storePhaseArtifact, type EvidenceRef } from './evidence-store.js';
+import { type EvidenceRef, materializeEvidenceInto, storePhaseArtifact } from './evidence-store.js';
 import { type GraphNode, type NodeState, runIsolatedWorker, type WorkerResult } from './orchestrator.js';
 
 export interface PhaseSpec {
   executor?: HarnessExecutor;
+  goalTemplate: string;
+  acceptArtifact?: string;
+}
+
+export interface PhaseSpecJson {
+  executor: string;
   goalTemplate: string;
   acceptArtifact?: string;
 }
@@ -30,6 +36,19 @@ export interface OrchestratorSkillSpec {
     research: PhaseSpec;
     execute: PhaseSpec;
     review: PhaseSpec;
+  };
+  acceptance?: {
+    command: string[];
+    testFiles?: { path: string; content: string }[];
+  };
+}
+
+export interface SkillSpecJson {
+  id: string;
+  phases: {
+    research: PhaseSpecJson;
+    execute: PhaseSpecJson;
+    review: PhaseSpecJson;
   };
   acceptance?: {
     command: string[];
@@ -76,6 +95,36 @@ export interface AcceptanceResult {
 
 function interpolateGoal(template: string, input: { what: string }): string {
   return template.replaceAll('{what}', input.what);
+}
+
+function phaseFromJson(
+  phaseId: PhaseId,
+  phase: PhaseSpecJson | undefined,
+  executors: Record<string, HarnessExecutor | undefined>,
+): PhaseSpec {
+  if (!phase) throw new Error(`missing phase: ${phaseId}`);
+  if (!(phase.executor in executors)) throw new Error(`unknown executor: ${phase.executor}`);
+  return {
+    executor: executors[phase.executor],
+    goalTemplate: phase.goalTemplate,
+    acceptArtifact: phase.acceptArtifact,
+  };
+}
+
+export function loadSkillSpecFromJson(
+  json: SkillSpecJson,
+  executors: Record<string, HarnessExecutor | undefined>,
+): OrchestratorSkillSpec {
+  if (!json.phases) throw new Error('missing phases');
+  return {
+    id: json.id,
+    phases: {
+      research: phaseFromJson('research', json.phases.research, executors),
+      execute: phaseFromJson('execute', json.phases.execute, executors),
+      review: phaseFromJson('review', json.phases.review, executors),
+    },
+    acceptance: json.acceptance,
+  };
 }
 
 export function compileSkillToGraphTemplate(spec: OrchestratorSkillSpec, input: { what: string }): GraphNode[] {

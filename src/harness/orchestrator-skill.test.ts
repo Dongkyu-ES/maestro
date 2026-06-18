@@ -10,10 +10,12 @@ import type { HarnessExecutor } from './harness-run.js';
 import { runTaskGraph } from './orchestrator.js';
 import {
   compileSkillToGraphTemplate,
+  loadSkillSpecFromJson,
   materializeEvidenceInto,
   type OrchestratorSkillSpec,
   resolveEvidenceArtifact,
   runOrchestratorSkill,
+  type SkillSpecJson,
   storePhaseArtifact,
 } from './orchestrator-skill.js';
 
@@ -121,6 +123,70 @@ if (add(1, 2) !== 3 || add(-4, 9) !== 5) process.exit(1);
     },
   };
 }
+
+test('loadSkillSpecFromJson resolves named executors and runs through fake phases', async () => {
+  const root = tmpRepo();
+  const executor = addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' });
+  const executors = { codex: undefined, claude: executor, agy: executor };
+  const json: SkillSpecJson = {
+    id: 'json-skill',
+    phases: {
+      research: { executor: 'claude', goalTemplate: 'research {what}', acceptArtifact: 'research.txt' },
+      execute: { executor: 'agy', goalTemplate: 'execute {what}', acceptArtifact: 'add.mjs' },
+      review: { executor: 'claude', goalTemplate: 'review {what}', acceptArtifact: 'review.txt' },
+    },
+    acceptance: {
+      command: ['node', 'accept.test.mjs'],
+      testFiles: [
+        {
+          path: 'accept.test.mjs',
+          content: `import { add } from './add.mjs';
+if (add(1, 2) !== 3) process.exit(1);
+`,
+        },
+      ],
+    },
+  };
+
+  const spec = loadSkillSpecFromJson(json, executors);
+
+  assert.equal(spec.id, 'json-skill');
+  assert.equal(spec.phases.research.executor, executor);
+  assert.equal(spec.phases.execute.executor, executor);
+  assert.equal(spec.phases.review.executor, executor);
+  assert.equal(spec.phases.execute.goalTemplate, 'execute {what}');
+  assert.equal(spec.phases.execute.acceptArtifact, 'add.mjs');
+  assert.deepEqual(spec.acceptance, json.acceptance);
+
+  const report = await runOrchestratorSkill(spec, { what: 'json resolver work', root, runId: 'json-skill-run' });
+
+  assert.deepEqual(
+    report.phases.map((phase) => phase.phase),
+    ['research', 'execute', 'review'],
+  );
+  assert.deepEqual(
+    report.phases.map((phase) => phase.nodeState),
+    ['supported', 'supported', 'supported'],
+  );
+  assert.equal(report.acceptance?.passed, true);
+  assert.equal(report.completion, 'passed');
+});
+
+test('loadSkillSpecFromJson rejects unknown executor names', () => {
+  const executor = addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' });
+  const json: SkillSpecJson = {
+    id: 'json-skill',
+    phases: {
+      research: { executor: 'codex', goalTemplate: 'research {what}' },
+      execute: { executor: 'gpt', goalTemplate: 'execute {what}' },
+      review: { executor: 'claude', goalTemplate: 'review {what}' },
+    },
+  };
+
+  assert.throws(() => loadSkillSpecFromJson(json, { codex: undefined, claude: executor, agy: executor }), {
+    message: 'unknown executor: gpt',
+  });
+});
 
 test('storePhaseArtifact stores a sha256 verified round-trip artifact', () => {
   const root = mkdtempSync(join(tmpdir(), 'orchestrator-skill-evidence-'));
@@ -379,7 +445,10 @@ test('runOrchestratorSkill gates review when execute does not produce its accept
     report.phases.map((phase) => phase.nodeState),
     ['supported', 'blocked', 'skipped'],
   );
-  assert.match(report.phases.find((phase) => phase.phase === 'review')?.skippedReason ?? '', /unsupported deps: execute/);
+  assert.match(
+    report.phases.find((phase) => phase.phase === 'review')?.skippedReason ?? '',
+    /unsupported deps: execute/,
+  );
 });
 
 test('runOrchestratorSkill mirrors skipped review when execute is blocked', async () => {

@@ -40,10 +40,12 @@ import { readClosedLoopAcceptanceFile, runClosedLoop } from './harness/closed-lo
 import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
 import { verifyContextProvenance } from './harness/context-provenance.js';
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
-import { runHarnessSlice } from './harness/harness-run.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
+import { runHarnessSlice } from './harness/harness-run.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/native-evidence.js';
+import { createOrchestratorServer, defaultExecutorRegistry, runSubmittedGraph } from './harness/orchestrator-server.js';
+import { loadSkillSpecFromJson, runOrchestratorSkill, type SkillSpecJson } from './harness/orchestrator-skill.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import { runProviderConformance } from './harness/provider-normalization.js';
 import { verifySkillContracts } from './harness/skill-contracts.js';
@@ -56,7 +58,6 @@ import {
   reviewProvenanceSignature,
   sha256Text,
 } from './util.js';
-import { createOrchestratorServer, defaultExecutorRegistry, runSubmittedGraph } from './harness/orchestrator-server.js';
 import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -145,6 +146,7 @@ function usage(): string {
   warden promotion approve|reject|apply <id>
   warden promotion verify-learning
   warden provider conformance --all
+  warden skill run <spec.json> --what "<goal>"
   warden skills verify-contracts [--run <run-id>]
   warden worktrees cleanup
   warden maintenance reconcile-runs
@@ -636,6 +638,23 @@ async function main() {
       const report = verifySkillContracts({ root: process.cwd(), runDir: runId ? runPath(runId) : undefined });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'skill' && sub === 'run') {
+      const specPath = firstNonFlag(rest);
+      const what = arg('--what');
+      if (!specPath || !what) throw new Error('usage: warden skill run <spec.json> --what "<goal>"');
+      const reg = defaultExecutorRegistry();
+      const executors = {
+        codex: reg.resolve('codex'),
+        claude: reg.resolve('claude'),
+        agy: reg.resolve('agy'),
+      };
+      const json = JSON.parse(readFileSync(specPath, 'utf8')) as SkillSpecJson;
+      const spec = loadSkillSpecFromJson(json, executors);
+      const report = await runOrchestratorSkill(spec, { what, root: process.cwd(), runId: arg('--run-id') });
+      console.log(JSON.stringify(report, null, 2));
+      if (report.completion === 'failed') process.exitCode = 2;
       return;
     }
     if (cmd === 'worktrees' && sub === 'cleanup') {
