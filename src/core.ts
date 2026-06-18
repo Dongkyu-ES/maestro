@@ -18,13 +18,14 @@ import {
   createRuntimeLedgerHeadBinding,
   envelopeHash,
   GENESIS_EVENT_HASH,
-  type RuntimeEventEnvelope,
   payloadHash,
+  type RuntimeEventEnvelope,
   readRuntimeEvents,
   validateRuntimeLedger,
 } from './events/ledger.js';
 import { skillContractIssuesForRun } from './harness/skill-contracts.js';
 import { runVerifier } from './harness/verifier.js';
+import { markFactsVerifiedByEvents } from './memory/fabric.js';
 import { evaluatePermission } from './policy/permission-broker.js';
 import { findProjectedRun, type RuntimeProjection, rebuildRuntimeProjection } from './projection/projection.js';
 import { writeProjectionSqlite } from './projection/sqlite-store.js';
@@ -761,7 +762,12 @@ function collectNativeExecutorDiff(root: string): string {
   return [tracked, untracked].filter((part) => part.trim()).join('\n');
 }
 
-function writeNativeExecutorEvidence(runDir: string, root: string, runId: string, result: { session_id?: string; exit_code: number; last_message: string }): void {
+function writeNativeExecutorEvidence(
+  runDir: string,
+  root: string,
+  runId: string,
+  result: { session_id?: string; exit_code: number; last_message: string },
+): void {
   const diffText = collectNativeExecutorDiff(root);
   writeFileSync(join(runDir, 'native-diff.patch'), diffText);
   const refs = [
@@ -926,7 +932,9 @@ function writePromotionLearningGateForRun(runDir: string, root: string, runId: s
   const runtimeEventsPath = join(runDir, 'events.jsonl');
   const runtimeEvents = readRuntimeEvents(runDir);
   const runtimeLedgerHead = createRuntimeLedgerHeadBinding(runtimeEvents);
-  const persistedLoadedEvent = runtimeEvents.find((event) => event.sequence === loadedEvent.sequence && event.type === 'promotion.loaded') || loadedEvent;
+  const persistedLoadedEvent =
+    runtimeEvents.find((event) => event.sequence === loadedEvent.sequence && event.type === 'promotion.loaded') ||
+    loadedEvent;
   const afterPath = join(runDir, 'promotion-state.json');
   const afterSha = writeJsonWithHash(afterPath, {
     run_id: runId,
@@ -1181,13 +1189,15 @@ function discoverSkillCandidates(root: string, goal: string): SkillCandidate[] {
       push('deliverable is a PPTX/deck, so presentation generation and rendered-slide QA may apply');
     else if (
       wantsRepoAnalysis &&
-      /(^|[\/\W])analy[sz]e|analysis skill|ranked (?:repository|local) evidence|ranked synthesis|repository analysis|repo analysis|명시적.*근거|분석/.test(
+      /(^|[/\W])analy[sz]e|analysis skill|ranked (?:repository|local) evidence|ranked synthesis|repository analysis|repo analysis|명시적.*근거|분석/.test(
         haystack,
       )
     )
       push('task requires ranked local evidence synthesis and confidence/evidence separation');
-    else if (wantsDocs && /documents?|docx|word/.test(haystack)) push('deliverable or source may be a document artifact');
-    else if (wantsSheet && /spreadsheet|xlsx|sheet/.test(haystack)) push('deliverable or source may be spreadsheet-shaped');
+    else if (wantsDocs && /documents?|docx|word/.test(haystack))
+      push('deliverable or source may be a document artifact');
+    else if (wantsSheet && /spreadsheet|xlsx|sheet/.test(haystack))
+      push('deliverable or source may be spreadsheet-shaped');
     else if (wantsBrowser && /browser|playwright|screenshot/.test(haystack))
       push('task may need browser/screenshot verification');
     else if (wantsUi && /figma|frontend|ui|ux|visual/.test(haystack)) push('task may need UI/design-specific guidance');
@@ -1217,7 +1227,9 @@ function skillCandidatePriority(candidate: SkillCandidate, goal: string, root: s
 
 function skillRoutingArtifactBody(root: string, goal: string, runId?: string): string {
   const candidates = discoverSkillCandidates(root, goal);
-  const fallbackPath = runId ? `${AGENT_DIR}/runs/${runId}/skill-usage-response.md` : `${AGENT_DIR}/skill-usage-response.md`;
+  const fallbackPath = runId
+    ? `${AGENT_DIR}/runs/${runId}/skill-usage-response.md`
+    : `${AGENT_DIR}/skill-usage-response.md`;
   const candidateLines = candidates.length
     ? candidates.map((c, i) => `${i + 1}. ${c.name}\n   - path: ${c.path}\n   - why: ${c.reason}`).join('\n')
     : '- No local SKILL.md candidates matched this task. State that explicitly if you finish without skill use.';
@@ -1263,8 +1275,7 @@ async function runCodexExecutor(
   const taskMd = existsSync(join(runDir, 'task.md')) ? readFileSync(join(runDir, 'task.md'), 'utf8') : '';
   const taskGoal = taskGoalFromMarkdown(taskMd, meta.task_id);
   const prompt = buildCodexExecutionPrompt(taskMd, meta.task_id, root, runId);
-  const effectiveSandbox =
-    sandbox || (isGithubFolderPptReportTask(prompt) ? 'danger-full-access' : 'workspace-write');
+  const effectiveSandbox = sandbox || (isGithubFolderPptReportTask(prompt) ? 'danger-full-access' : 'workspace-write');
   writeFileSync(join(runDir, 'codex-prompt.md'), prompt);
   writeFileSync(join(runDir, 'skill-routing-candidates.md'), skillRoutingArtifactBody(root, taskGoal, runId));
   writeVerificationBaseline(root, runDir, prompt);
@@ -1275,9 +1286,7 @@ async function runCodexExecutor(
   // AGENT_CODEX_BIN is the hermetic-test / wrapper seam; when set we trust it and
   // skip real binary detection and the forensic `codex doctor` launch proof.
   const codexBin = process.env.AGENT_CODEX_BIN;
-  const detected = codexBin
-    ? { available: true, path: codexBin, version: 'codex-bin-override' }
-    : detectCodexCli(root);
+  const detected = codexBin ? { available: true, path: codexBin, version: 'codex-bin-override' } : detectCodexCli(root);
   if (!codexBin)
     // Forensic detection evidence (binary path, version, doctor) — not the run result.
     createCodexLaunchProof({ runId, cwd: root, agentDir: safeJoin(root, AGENT_DIR), runDir, prompt });
@@ -1582,6 +1591,17 @@ export function collectRun(runId: string, cwd = process.cwd()): RunMeta {
     writeLedgerVerifierIssueIntoReview(runDir, ledgerVerdict.reason);
     decision = 'blocked';
   }
+  // Cross-run memory freshness: a run that passes (its ledger verifier is supported here) earns the
+  // right to stamp last_verified_at on any fabric fact grounded entirely in this run's events —
+  // e.g. the boundary facts an M8 run produced citing its own ledger. Recency is thus carried from
+  // the run that created a fact to the verifier that confirmed it, never self-asserted.
+  if (decision === 'pass') {
+    markFactsVerifiedByEvents(
+      safeJoin(root, AGENT_DIR),
+      readRuntimeEvents(runDir).map((event) => event.event_id),
+      nowIso(),
+    );
+  }
   writeNextActions(runDir, decision);
   if (decision !== 'pass')
     createApproval(
@@ -1716,7 +1736,9 @@ export function runtimeTruthForRun(root: string, run: RunMeta): { label: string;
         evidence: 'explicit command execution, not first-class Codex/OMX/agy runtime',
       };
     const nativeAssistedEvent = readRuntimeEvents(runDir).find(
-      (event) => event.payload?.native_status === 'native-harness-assisted' || event.payload?.runtime_label === 'native-harness-assisted',
+      (event) =>
+        event.payload?.native_status === 'native-harness-assisted' ||
+        event.payload?.runtime_label === 'native-harness-assisted',
     );
     if (nativeAssistedEvent)
       return {
@@ -1832,10 +1854,12 @@ function updateConflictAndSynthesis(runDir: string): void {
   );
   writeFileSync(
     join(runDir, 'synthesis.generated.md'),
-    `# Synthesis\n\n## Verifier Decision\n${multiVerifier.decision}\n\nVerifier artifact: multi-executor-verification.json\n\n## Accepted Outputs\n${multiVerifier.workers
-      .filter((worker) => worker.raw_evidence_supported)
-      .map((worker) => `- ${worker.output_ref}`)
-      .join('\n') || 'None.'}\n\n## Rejected Outputs\n${multiVerifier.issues.length ? multiVerifier.issues.map((issue) => `- ${issue}`).join('\n') : 'None.'}\n\n## Conflicts\n${hasConflict ? 'Blocking conflicts, denied paths, worktree issues, or evidence mismatches found. See conflict-report.generated.md.' : 'No blocking conflicts detected from worker-reported changed files and actual worktree diffs.'}\n\n## Recommendation\n${multiVerifier.decision === 'PASS' ? 'Proceed to review from verifier-backed artifacts only.' : 'Do not apply automatically; resolve verifier or conflict blockers first.'}\n`,
+    `# Synthesis\n\n## Verifier Decision\n${multiVerifier.decision}\n\nVerifier artifact: multi-executor-verification.json\n\n## Accepted Outputs\n${
+      multiVerifier.workers
+        .filter((worker) => worker.raw_evidence_supported)
+        .map((worker) => `- ${worker.output_ref}`)
+        .join('\n') || 'None.'
+    }\n\n## Rejected Outputs\n${multiVerifier.issues.length ? multiVerifier.issues.map((issue) => `- ${issue}`).join('\n') : 'None.'}\n\n## Conflicts\n${hasConflict ? 'Blocking conflicts, denied paths, worktree issues, or evidence mismatches found. See conflict-report.generated.md.' : 'No blocking conflicts detected from worker-reported changed files and actual worktree diffs.'}\n\n## Recommendation\n${multiVerifier.decision === 'PASS' ? 'Proceed to review from verifier-backed artifacts only.' : 'Do not apply automatically; resolve verifier or conflict blockers first.'}\n`,
   );
 }
 interface MultiWorkerVerification {
@@ -1893,7 +1917,8 @@ function writeMultiExecutorVerification(
     const declaredMatchesActual =
       declared.every((file) => actual.includes(file)) && actual.every((file) => declared.includes(file));
     const passSummaryClaimed = /\b(PASS|passed|done|complete|completed|success)\b/i.test(text);
-    const selfPromotionClaimed = /self[-\s]?promot|promote\s+(?:my|this)\s+(?:output|worker|result)|overall\s+PASS/i.test(text);
+    const selfPromotionClaimed =
+      /self[-\s]?promot|promote\s+(?:my|this)\s+(?:output|worker|result)|overall\s+PASS/i.test(text);
     return {
       worker_id: workerId,
       output_ref: `worker-outputs/${output}`,
@@ -1910,15 +1935,23 @@ function writeMultiExecutorVerification(
   const issues = [...inheritedIssues];
   for (const worker of workers) {
     if (!worker.output_exists) issues.push(`${worker.worker_id}: worker output is missing`);
-    if (worker.process_exit_code !== 0) issues.push(`${worker.worker_id}: process exit was ${worker.process_exit_code ?? 'missing'}`);
-    if (worker.self_promotion_claimed) issues.push(`${worker.worker_id}: worker attempted self-promotion/PASS authority`);
+    if (worker.process_exit_code !== 0)
+      issues.push(`${worker.worker_id}: process exit was ${worker.process_exit_code ?? 'missing'}`);
+    if (worker.self_promotion_claimed)
+      issues.push(`${worker.worker_id}: worker attempted self-promotion/PASS authority`);
     if (worker.pass_summary_claimed && !worker.raw_evidence_supported)
       issues.push(`${worker.worker_id}: PASS/done summary is contradicted by raw process or diff evidence`);
   }
   const report: MultiExecutorVerificationReport = {
     schema_version: 1,
     generated_at: nowIso(),
-    decision: !hasConflict && workers.length > 0 && workers.every((worker) => worker.raw_evidence_supported) && issues.length === 0 ? 'PASS' : 'FAIL',
+    decision:
+      !hasConflict &&
+      workers.length > 0 &&
+      workers.every((worker) => worker.raw_evidence_supported) &&
+      issues.length === 0
+        ? 'PASS'
+        : 'FAIL',
     workers,
     issues: [...new Set(issues)],
   };
@@ -2058,10 +2091,20 @@ function writeReview(runDir: string, mode: RunMode): Decision {
     ? (JSON.parse(readFileSync(join(runDir, 'evidence-errors.json'), 'utf8')) as any[])
     : [];
   const processInvalid = (!adapterEvidence && processSummary.valid === 0) || processSummary.invalid > 0;
-  const hasIssue = missing.length > 0 || hasConflict || multiVerifierFailed || exitCode !== 0 || evidenceErrors.length > 0 || processInvalid;
+  const hasIssue =
+    missing.length > 0 ||
+    hasConflict ||
+    multiVerifierFailed ||
+    exitCode !== 0 ||
+    evidenceErrors.length > 0 ||
+    processInvalid;
   const score = hasIssue ? 6 : 9;
   const decision: Decision =
-    hasConflict || multiVerifierFailed || evidenceErrors.length > 0 || processInvalid ? 'blocked' : hasIssue ? 'changes_requested' : 'pass';
+    hasConflict || multiVerifierFailed || evidenceErrors.length > 0 || processInvalid
+      ? 'blocked'
+      : hasIssue
+        ? 'changes_requested'
+        : 'pass';
   const blockingIssues = [
     ...missing.map((m) => `- Missing ${m}`),
     ...(hasConflict ? ['- Conflict report is blocked'] : []),
@@ -2150,7 +2193,9 @@ function verifyReportedPptxOutputs(root: string, runDir: string): string[] {
       });
       if (!/PPTX_OPENABLE_PASS/.test(output)) issues.push(`PPTX verifier did not pass for ${relative(root, pptxPath)}`);
     } catch (err: any) {
-      issues.push(`PPTX verifier failed for ${relative(root, pptxPath)}: ${String(err.stderr || err.stdout || err.message || err).trim()}`);
+      issues.push(
+        `PPTX verifier failed for ${relative(root, pptxPath)}: ${String(err.stderr || err.stdout || err.message || err).trim()}`,
+      );
     }
   }
   return issues;
@@ -2192,9 +2237,17 @@ function writeVerificationIssuesIntoReview(runDir: string, issues: string[]): vo
   const issueLines = issues.map((issue) => `- ${issue}`).join('\n');
   const current = existsSync(reviewPath) ? readFileSync(reviewPath, 'utf8') : '# Review\n';
   let next = replaceReviewSection(current, 'Blocking Issues', issueLines);
-  next = replaceReviewSection(next, 'Required Changes', 'Resolve the closed-loop verification failures before completion.');
+  next = replaceReviewSection(
+    next,
+    'Required Changes',
+    'Resolve the closed-loop verification failures before completion.',
+  );
   next = replaceReviewSection(next, 'Decision', 'blocked');
-  next = replaceReviewSection(next, 'System Patch Suggestions', 'Keep hard verification failures visible in review and closed-loop reports.');
+  next = replaceReviewSection(
+    next,
+    'System Patch Suggestions',
+    'Keep hard verification failures visible in review and closed-loop reports.',
+  );
   next = replaceReviewSection(next, 'Closed Loop Verification Failures', issueLines);
   writeFileSync(reviewPath, `${next.trim()}\n`);
 }
@@ -2202,19 +2255,24 @@ function writeLedgerVerifierIssueIntoReview(runDir: string, reason: string): voi
   const reviewPath = join(runDir, 'review.md');
   const current = existsSync(reviewPath) ? readFileSync(reviewPath, 'utf8') : '# Review\n';
   const next = replaceReviewSection(current, 'Decision', 'blocked');
-  writeFileSync(
-    reviewPath,
-    `${next.trim()}\n\n## Blocking Issues\n- Ledger verifier rejected the run: ${reason}\n`,
-  );
+  writeFileSync(reviewPath, `${next.trim()}\n\n## Blocking Issues\n- Ledger verifier rejected the run: ${reason}\n`);
 }
 function writeReportQualityIssuesIntoReview(runDir: string, issues: string[]): void {
   const reviewPath = join(runDir, 'review.md');
   const issueLines = issues.map((issue) => `- ${issue}`).join('\n');
   const current = existsSync(reviewPath) ? readFileSync(reviewPath, 'utf8') : '# Review\n';
   let next = replaceReviewSection(current, 'Blocking Issues', issueLines);
-  next = replaceReviewSection(next, 'Required Changes', 'Run the next agent loop with the report-quality critique and improve the report story, proof objects, and visual method.');
+  next = replaceReviewSection(
+    next,
+    'Required Changes',
+    'Run the next agent loop with the report-quality critique and improve the report story, proof objects, and visual method.',
+  );
   next = replaceReviewSection(next, 'Decision', 'changes_requested');
-  next = replaceReviewSection(next, 'System Patch Suggestions', 'Do not hand-polish the deck. Feed the critic artifact back into the next agent run.');
+  next = replaceReviewSection(
+    next,
+    'System Patch Suggestions',
+    'Do not hand-polish the deck. Feed the critic artifact back into the next agent run.',
+  );
   next = replaceReviewSection(next, 'Report Quality Critique', issueLines);
   writeFileSync(reviewPath, `${next.trim()}\n`);
 }
@@ -2223,9 +2281,17 @@ function writeSkillUsageIssuesIntoReview(runDir: string, issues: string[]): void
   const issueLines = issues.map((issue) => `- ${issue}`).join('\n');
   const current = existsSync(reviewPath) ? readFileSync(reviewPath, 'utf8') : '# Review\n';
   let next = replaceReviewSection(current, 'Blocking Issues', issueLines);
-  next = replaceReviewSection(next, 'Required Changes', 'Run the next agent loop with the skill-routing handoff and make the agent prove which skills it inspected, selected, and rejected.');
+  next = replaceReviewSection(
+    next,
+    'Required Changes',
+    'Run the next agent loop with the skill-routing handoff and make the agent prove which skills it inspected, selected, and rejected.',
+  );
   next = replaceReviewSection(next, 'Decision', 'changes_requested');
-  next = replaceReviewSection(next, 'System Patch Suggestions', 'Keep skill routing as an agent-owned artifact; do not manually perform the skill work outside the run.');
+  next = replaceReviewSection(
+    next,
+    'System Patch Suggestions',
+    'Keep skill routing as an agent-owned artifact; do not manually perform the skill work outside the run.',
+  );
   next = replaceReviewSection(next, 'Skill Usage Critique', issueLines);
   writeFileSync(reviewPath, `${next.trim()}\n`);
 }
@@ -2241,7 +2307,9 @@ function evaluateSkillUsage(root: string, runDir: string, pptxPaths: string[], r
       readFileSync(reportGenerator, 'utf8'),
     )
   )
-    issues.push('report-quality-response/skill-usage-response를 generator canned writer로 만들고 있음. sidecar는 agent가 산출물 확인 후 직접 작성해야 함.');
+    issues.push(
+      'report-quality-response/skill-usage-response를 generator canned writer로 만들고 있음. sidecar는 agent가 산출물 확인 후 직접 작성해야 함.',
+    );
   for (const section of [
     { label: 'inspected_skills', pattern: /inspected[_\s-]?skills/i },
     { label: 'selected_skills', pattern: /selected[_\s-]?skills/i },
@@ -2255,12 +2323,21 @@ function evaluateSkillUsage(root: string, runDir: string, pptxPaths: string[], r
   ]) {
     if (!section.pattern.test(response)) issues.push(`skill-usage-response.md에 ${section.label} 섹션/근거가 없음.`);
   }
-  if (/Presentations|presentation|PowerPoint|PPTX|slides?|deck/i.test(routingContext) && !/Presentations|presentation/i.test(response))
+  if (
+    /Presentations|presentation|PowerPoint|PPTX|slides?|deck/i.test(routingContext) &&
+    !/Presentations|presentation/i.test(response)
+  )
     issues.push('PPTX/슬라이드 후보가 있었는데 Presentations skill 검토/선택/거절 근거가 없음.');
-  if (/Analyze|analyze|analysis|ranked local evidence|repo facts/i.test(routingContext) && !/Analyze|analyze/i.test(response))
+  if (
+    /Analyze|analyze|analysis|ranked local evidence|repo facts/i.test(routingContext) &&
+    !/Analyze|analyze/i.test(response)
+  )
     issues.push('repo facts synthesis 후보가 있었는데 Analyze skill 검토/선택/거절 근거가 없음.');
   if (!/SKILL\.md|skill file|읽|read/i.test(response)) issues.push('스킬 파일을 실제로 읽었다는 증거가 없음.');
-  if (/Presentations|presentation|PowerPoint|PPTX|slides?|deck/i.test(routingContext) && !/not built with artifact-tool|artifact-tool|Keynote|rejected/i.test(response))
+  if (
+    /Presentations|presentation|PowerPoint|PPTX|slides?|deck/i.test(routingContext) &&
+    !/not built with artifact-tool|artifact-tool|Keynote|rejected/i.test(response)
+  )
     issues.push('Presentations skill과 실제 사용 도구 사이의 선택/거절 근거가 없음.');
   issues.push(...skillContractIssuesForRun(root, runDir, response).map((issue) => `AcceptanceContract: ${issue}`));
   return issues.slice(0, 8);
@@ -2296,10 +2373,14 @@ function evaluateGithubReportQuality(root: string, runDir: string, pptxPaths: st
   const issues: string[] = [];
   const relatedText = readReportedGithubReportText(root, runDir, pptxPaths);
   const text = relatedText.toLowerCase();
-  if (!/왜|근거|basis|reason/.test(relatedText)) issues.push('결론의 근거 구조가 약함. 왜 active project인지 점수/요인/비교로 설명해야 함.');
-  if (!/리스크|위험|risk|watchlist|주의/.test(text)) issues.push('dirty count 같은 위험 신호를 해석하지 않음. 리스크/주의 프로젝트를 분리해야 함.');
-  if (!/다음|next|action|실행/.test(text)) issues.push('다음 실행 액션이 구체적이지 않음. active repo에서 바로 할 1~3개 작업이 필요함.');
-  if (!/score|점수|활성도/.test(text)) issues.push('활성도 산정 기준이 드러나지 않음. recency/dirty/branch/status 근거를 보여야 함.');
+  if (!/왜|근거|basis|reason/.test(relatedText))
+    issues.push('결론의 근거 구조가 약함. 왜 active project인지 점수/요인/비교로 설명해야 함.');
+  if (!/리스크|위험|risk|watchlist|주의/.test(text))
+    issues.push('dirty count 같은 위험 신호를 해석하지 않음. 리스크/주의 프로젝트를 분리해야 함.');
+  if (!/다음|next|action|실행/.test(text))
+    issues.push('다음 실행 액션이 구체적이지 않음. active repo에서 바로 할 1~3개 작업이 필요함.');
+  if (!/score|점수|활성도/.test(text))
+    issues.push('활성도 산정 기준이 드러나지 않음. recency/dirty/branch/status 근거를 보여야 함.');
   if (!hasReportQualityResponse(runDir, pptxPaths))
     issues.push('agent가 품질 크리틱에 어떻게 대응했는지 report-quality-response.md로 남기지 않음.');
   if (issues.length === 0 && relatedText.length < 1800)
@@ -2508,7 +2589,8 @@ function writeClosedLoopReport(root: string, runDir: string, meta: RunMeta, deci
   if (!executed && blockers.length === 0) blockers.push('Run has no real execution evidence.');
   if (processSummary.exitCode !== null && processSummary.exitCode !== 0)
     blockers.push(`Executor exit code ${processSummary.exitCode}`);
-  if (processSummary.errors.length) blockers.push(...processSummary.errors.map((e) => `Invalid process evidence: ${e}`));
+  if (processSummary.errors.length)
+    blockers.push(...processSummary.errors.map((e) => `Invalid process evidence: ${e}`));
   const verificationBlockers = readReviewClosedLoopVerificationFailures(runDir);
   if (verificationBlockers.length) blockers.push(...verificationBlockers);
   const blockedAt =
@@ -2858,8 +2940,10 @@ export function rebuildIndex(cwd = process.cwd()): ProductIndex {
   return index;
 }
 
-
-function normalizeLegacyRuntimeEventsForProjection(runId: string, events: RuntimeEventEnvelope[]): {
+function normalizeLegacyRuntimeEventsForProjection(
+  runId: string,
+  events: RuntimeEventEnvelope[],
+): {
   events: RuntimeEventEnvelope[];
   migrated: number;
 } {
@@ -2867,20 +2951,31 @@ function normalizeLegacyRuntimeEventsForProjection(runId: string, events: Runtim
   const normalized: RuntimeEventEnvelope[] = [];
   for (const event of events as Array<RuntimeEventEnvelope & { prev_event_sha256?: string }>) {
     const previous = normalized.at(-1);
-    if (event.run_id !== runId) throw new Error(`runtime event run_id mismatch: expected ${runId}, got ${event.run_id}`);
+    if (event.run_id !== runId)
+      throw new Error(`runtime event run_id mismatch: expected ${runId}, got ${event.run_id}`);
     if (typeof event.prev_event_sha256 === 'string') {
       normalized.push(event as RuntimeEventEnvelope);
       continue;
     }
-    if (event.schema_version !== 1 || !event.event_id || !event.correlation_id || !event.timestamp || !event.source || !event.type)
+    if (
+      event.schema_version !== 1 ||
+      !event.event_id ||
+      !event.correlation_id ||
+      !event.timestamp ||
+      !event.source ||
+      !event.type
+    )
       throw new Error('legacy runtime event is missing non-migratable envelope fields');
-    if (!Number.isInteger(event.sequence) || event.sequence < 1) throw new Error('legacy runtime event has invalid sequence');
+    if (!Number.isInteger(event.sequence) || event.sequence < 1)
+      throw new Error('legacy runtime event has invalid sequence');
     if (!event.payload || typeof event.payload !== 'object' || Array.isArray(event.payload))
       throw new Error('legacy runtime event has invalid payload');
     if (!Array.isArray(event.artifact_refs)) throw new Error('legacy runtime event has invalid artifact_refs');
-    if (event.payload_sha256 !== payloadHash(event.payload)) throw new Error('legacy runtime event payload hash mismatch');
+    if (event.payload_sha256 !== payloadHash(event.payload))
+      throw new Error('legacy runtime event payload hash mismatch');
     const expectedSequence = previous ? previous.sequence + 1 : 1;
-    if (event.sequence !== expectedSequence) throw new Error(`legacy runtime event has non-contiguous sequence: ${event.sequence}`);
+    if (event.sequence !== expectedSequence)
+      throw new Error(`legacy runtime event has non-contiguous sequence: ${event.sequence}`);
     normalized.push({
       ...event,
       prev_event_sha256: previous ? envelopeHash(previous) : GENESIS_EVENT_HASH,
@@ -2975,9 +3070,7 @@ export function proposeApply(runId: string, cwd = process.cwd()): ApprovalRecord
     validateRuntimeLedger(events);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `run ${runId} is not eligible for apply: ledger failed validation: ${msg}`,
-    );
+    throw new Error(`run ${runId} is not eligible for apply: ledger failed validation: ${msg}`);
   }
   const lifecycleEvents = events
     .map((event, index) => ({ event, index }))
@@ -2989,10 +3082,7 @@ export function proposeApply(runId: string, cwd = process.cwd()): ApprovalRecord
         .filter((event) => event.type === 'verifier.completed')
         .at(-1)
     : undefined;
-  if (
-    lastLifecycle?.event.type !== 'run.completed' ||
-    verifierCompleted?.payload.status !== 'supported'
-  )
+  if (lastLifecycle?.event.type !== 'run.completed' || verifierCompleted?.payload.status !== 'supported')
     throw new Error(`run ${runId} is not eligible for apply: no verifier-backed completion in the ledger`);
   if (run.status !== 'completed' || run.decision !== 'pass')
     throw new Error(`run ${runId} is not eligible for apply proposal; collect a passing run first`);

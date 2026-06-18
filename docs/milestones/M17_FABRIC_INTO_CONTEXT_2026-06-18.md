@@ -62,13 +62,18 @@ before commit:
   #4 keys on provenance + recency, not authority, so no decision impact; carrying authority is a
   future schema change).
 
+## Follow-up landed: producer-side cross-run stamping
+
+`core.ts` `collectRun` now stamps too: when a run passes (its ledger verifier is `supported`), it
+stamps `last_verified_at` on every fabric fact grounded entirely in that run's events — e.g. the
+boundary facts an M8 run produced citing its own ledger. So recency is now carried cross-run from the
+run that *created* a fact to the verifier that *confirmed* it, not just within a single
+`runHarnessSlice`. Tested in `core.test.ts`: a fact grounded in a passing run's event is stamped; a
+fact citing a foreign event is left untouched (no blanket freshening); a blocked/tampered run stamps
+nothing (the `decision === 'pass'` gate).
+
 ## Honest residue
 
-- The **positive** verifier-gated stamp (a fact *born within* a run gets stamped when that run
-  completes) is wired and scoped, but the integration test asserts the *scoping* (no over-stamp); the
-  positive path is covered at the unit level (`markFactsVerifiedByEvents`). The producer runs that
-  create facts (`m8-boundary-evidence`, and the `core.ts` collect path) do not yet run through
-  `runHarnessSlice` with `fabricAgentDir`, so cross-run stamping at scale is the next wiring.
-- Only `warden harness run` enables the fabric read path so far; the daemon/skill execute phases
-  don't pass `fabricAgentDir` yet. Extending it there is mechanical follow-up, deferred to keep this
-  slice's blast radius small.
+- Only `warden harness run` enables the fabric **read** path so far; the daemon (`/graph`) and the
+  skill execute phases don't pass `fabricAgentDir` yet, so stored facts aren't injected into those
+  contexts. Extending it there is mechanical follow-up, deferred to keep blast radius small.

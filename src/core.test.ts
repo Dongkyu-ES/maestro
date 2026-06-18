@@ -18,8 +18,8 @@ import {
   initProject,
   isSecretPath,
   listApprovals,
-  listPromotions,
   listProjects,
+  listPromotions,
   listTasks,
   loadIndex,
   proposeApply,
@@ -39,6 +39,7 @@ import {
   readRuntimeEvents,
 } from './events/ledger.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
+import { appendMemoryFact, readMemoryFabric } from './memory/fabric.js';
 import { renderHtml, renderReviewGate, renderRun } from './view.js';
 
 function currentReviewInputHashForTest(dir = process.cwd()): string {
@@ -186,7 +187,9 @@ function writeMachineHardGateFixtures(dir: string): void {
   const runtimeEventsSha = hashTextForTest(readFileSync(join(dir, runtimeEventsRel), 'utf8'));
   const runtimeEvents = readRuntimeEvents(join(dir, '.agent/runs/promo-after'));
   const runtimeLedgerHead = createRuntimeLedgerHeadBinding(runtimeEvents);
-  const persistedLoadedEvent = runtimeEvents.find((event) => event.sequence === loadedEvent.sequence && event.type === 'promotion.loaded') || loadedEvent;
+  const persistedLoadedEvent =
+    runtimeEvents.find((event) => event.sequence === loadedEvent.sequence && event.type === 'promotion.loaded') ||
+    loadedEvent;
   const afterRunSha = writeJsonArtifact(dir, '.agent/runs/promo-after/promotion-state.json', {
     run_id: 'promo-after',
     task_context_sha256: taskContextSha,
@@ -591,7 +594,10 @@ async function createCollectedApplyRun(title: string): Promise<{ dir: string; ru
   const order = readFileSync(join(runDir, 'work-orders', 'worker-001.yaml'), 'utf8');
   const ws = order.match(/isolated_workspace: "([^"]+)"/)![1];
   writeFileSync(join(ws, 'proposal.txt'), 'proposal');
-  writeFileSync(join(runDir, 'worker-outputs', 'worker-001.md'), '# Worker Output\n\n## Files Changed\n- proposal.txt\n');
+  writeFileSync(
+    join(runDir, 'worker-outputs', 'worker-001.md'),
+    '# Worker Output\n\n## Files Changed\n- proposal.txt\n',
+  );
   const collected = collectRun(run.id, dir);
   assert.equal(collected.decision, 'pass');
   return { dir, run, runDir };
@@ -649,6 +655,46 @@ test('collectRun completes honest passing run when ledger verifier supports even
   assert.notEqual(completedIndex, -1);
   assert.equal(events[verifierIndex].payload.status, 'supported');
   assert.equal(verifierIndex < completedIndex, true);
+});
+
+test('collectRun stamps fabric facts grounded in a passing run, but not facts citing foreign events', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
+  gitInit(dir);
+  const task = addTask('cross-run stamp task', dir);
+  const run = createRun(task.id, {}, dir);
+  await startForEvidence(run, dir);
+  const runDir = join(dir, '.agent', 'runs', run.id);
+  const agentDir = join(dir, '.agent');
+
+  // A fact this run produced, citing one of its real ledger events, plus a control fact citing an
+  // event from no run. Neither is verified yet.
+  const groundedEvent = readRuntimeEvents(runDir)[0].event_id;
+  appendMemoryFact(agentDir, {
+    id: 'mem-of-run',
+    layer: 'blackboard',
+    key: 'k',
+    value: 'v',
+    run_id: run.id,
+    source_event_ids: [groundedEvent],
+    artifact_refs: [],
+  });
+  appendMemoryFact(agentDir, {
+    id: 'mem-foreign',
+    layer: 'blackboard',
+    key: 'k2',
+    value: 'v2',
+    source_event_ids: ['event-from-no-run'],
+    artifact_refs: [],
+  });
+
+  const collected = collectRun(run.id, dir);
+  assert.equal(collected.decision, 'pass');
+
+  const facts = new Map(readMemoryFabric(agentDir).facts.map((f) => [f.id, f]));
+  // Grounded in an event the passing run's ledger verifier confirmed → stamped fresh.
+  assert.equal(typeof facts.get('mem-of-run')?.last_verified_at, 'string');
+  // Cites a foreign event this run never produced → never stamped (no blanket freshening).
+  assert.equal(facts.get('mem-foreign')?.last_verified_at, undefined);
 });
 
 test('collectRun blocks passing heuristic when ledger hash chain is tampered', async () => {
@@ -769,8 +815,6 @@ test('G008 promotion differential verifies three-run effect from raw artifacts',
   assert.equal(report.decision, 'PASS', JSON.stringify(report.checks, null, 2));
 });
 
-
-
 test('G011 promotion differential accepts explicit legacy prev-hash backfill when digests are rebound', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
   writeMachineHardGateFixtures(dir);
@@ -855,7 +899,11 @@ test('G008 promotion differential rejects forged loaded event text without canon
       schema_version: 1,
       run_id: 'after',
       type: 'promotion.loaded',
-      payload: { promotion_id: 'promotion-fixture', loaded_promotion_artifact_sha256: 'contains matching words only', changed_field: 'recommendation' },
+      payload: {
+        promotion_id: 'promotion-fixture',
+        loaded_promotion_artifact_sha256: 'contains matching words only',
+        changed_field: 'recommendation',
+      },
     })}\n`,
   );
   const report = verifyPromotionDifferential({ root: dir });
@@ -964,7 +1012,7 @@ test('roles mode creates and preserves v1 artifacts during collect', async () =>
   const run = createRun(task.id, { mode: 'roles' }, dir);
   const outputPath = join(dir, '.agent', 'runs', run.id, 'worker-outputs', 'worker-001.md');
   writeFileSync(outputPath, '# Worker Output\n\n## Files Changed\n- README.md\n');
-  const command = 'node -e "require(\'fs\').appendFileSync(\'README.md\', \'roles output\\\\n\')"';
+  const command = "node -e \"require('fs').appendFileSync('README.md', 'roles output\\\\n')\"";
   await approveShellMutation(run, dir, command);
   await startRun(run.id, { command }, dir);
   collectRun(run.id, dir);
@@ -1061,9 +1109,14 @@ test('multi mode reports clear when worker changed files are disjoint', async ()
     readFileSync(join(dir, '.agent', 'runs', run.id, 'conflict-report.generated.md'), 'utf8'),
     /Status: clear/,
   );
-  const verifier = JSON.parse(readFileSync(join(dir, '.agent', 'runs', run.id, 'multi-executor-verification.json'), 'utf8'));
+  const verifier = JSON.parse(
+    readFileSync(join(dir, '.agent', 'runs', run.id, 'multi-executor-verification.json'), 'utf8'),
+  );
   assert.equal(verifier.decision, 'PASS');
-  assert.equal(verifier.workers.every((worker: { raw_evidence_supported: boolean }) => worker.raw_evidence_supported), true);
+  assert.equal(
+    verifier.workers.every((worker: { raw_evidence_supported: boolean }) => worker.raw_evidence_supported),
+    true,
+  );
 });
 
 test('multi mode detects actual worktree conflicts even when worker output omits files', async () => {
@@ -1149,7 +1202,10 @@ test('G012 multi-executor verifier requires output from every scheduled worker',
   assert.equal(collected.status, 'failed');
   const verifier = JSON.parse(readFileSync(join(runDir, 'multi-executor-verification.json'), 'utf8'));
   assert.equal(verifier.decision, 'FAIL');
-  assert.equal(verifier.workers.find((worker: { worker_id: string }) => worker.worker_id === 'worker-002').output_exists, false);
+  assert.equal(
+    verifier.workers.find((worker: { worker_id: string }) => worker.worker_id === 'worker-002').output_exists,
+    false,
+  );
   assert.match(JSON.stringify(verifier.issues), /worker-002: worker output is missing/);
 });
 
@@ -1193,7 +1249,7 @@ test('collect writes operator closed-loop report with execution, blocker, output
   gitInit(dir);
   const task = addTask('closed loop output task', dir);
   const command =
-    'node -e "const fs=require(\'fs\'); fs.writeFileSync(\'loop-output.txt\',\'ok\'); fs.mkdirSync(\'reports/demo\',{recursive:true}); fs.writeFileSync(\'reports/demo/out.pptx\',\'ppt\'); console.log(\'pptx=reports/demo/out.pptx\')"';
+    "node -e \"const fs=require('fs'); fs.writeFileSync('loop-output.txt','ok'); fs.mkdirSync('reports/demo',{recursive:true}); fs.writeFileSync('reports/demo/out.pptx','ppt'); console.log('pptx=reports/demo/out.pptx')\"";
   const run = createRun(task.id, { command }, dir);
   await approveShellMutation(run, dir, command);
   await startRun(run.id, { command, timeoutMs: 5000 }, dir);
@@ -1213,7 +1269,9 @@ test('collect writes operator closed-loop report with execution, blocker, output
     true,
   );
   assert.equal(
-    json.outputs.some((o: { path: string; kind: string }) => o.path === 'reports/demo/out.pptx' && o.kind === 'reported_output'),
+    json.outputs.some(
+      (o: { path: string; kind: string }) => o.path === 'reports/demo/out.pptx' && o.kind === 'reported_output',
+    ),
     true,
   );
   const runHtml = renderRun(run.id, dir);
@@ -1246,7 +1304,7 @@ test('collect surfaces PPTX verifier failures as review and closed-loop blockers
     "console.error('PPTX_OPENABLE_FAIL forced verifier regression'); process.exit(1);\\n",
   );
   const command =
-    'node -e "const fs=require(\'fs\'); fs.mkdirSync(\'reports/github-projects/fail\',{recursive:true}); fs.writeFileSync(\'reports/github-projects/fail/github-projects-report.pptx\',\'bad\'); console.log(\'pptx=reports/github-projects/fail/github-projects-report.pptx\')"';
+    "node -e \"const fs=require('fs'); fs.mkdirSync('reports/github-projects/fail',{recursive:true}); fs.writeFileSync('reports/github-projects/fail/github-projects-report.pptx','bad'); console.log('pptx=reports/github-projects/fail/github-projects-report.pptx')\"";
   const task = addTask('PPTX hard verifier task', dir);
   const run = createRun(task.id, { command }, dir);
   await approveShellMutation(run, dir, command);
@@ -1436,7 +1494,10 @@ test('task update ignores undefined fields and default start does not execute a 
   assert.equal(started.decision, 'blocked');
   assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, 'executor-command.txt')), false);
   assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, 'executor.process.json')), false);
-  assert.match(readFileSync(join(dir, '.agent', 'runs', run.id, 'no-executor-attached.md'), 'utf8'), /No Executor Attached/);
+  assert.match(
+    readFileSync(join(dir, '.agent', 'runs', run.id, 'no-executor-attached.md'), 'utf8'),
+    /No Executor Attached/,
+  );
 });
 
 test('run UI distinguishes approval waits from completed results', async () => {
@@ -1463,7 +1524,10 @@ test('web start without confirmed command records no executor instead of running
   assert.equal(started.status, 'failed');
   assert.equal(started.decision, 'blocked');
   assert.equal(existsSync(join(dir, '.agent', 'runs', run.id, 'executor-command.txt')), false);
-  assert.match(readFileSync(join(dir, '.agent', 'runs', run.id, 'no-executor-attached.md'), 'utf8'), /no explicit command/i);
+  assert.match(
+    readFileSync(join(dir, '.agent', 'runs', run.id, 'no-executor-attached.md'), 'utf8'),
+    /no explicit command/i,
+  );
 });
 
 test('blocked multi-worker run cannot create apply proposal', async () => {
@@ -2056,10 +2120,7 @@ test('collectRun blocks unstarted runs instead of passing placeholder artifacts'
   const collected = collectRun(run.id, dir);
   assert.equal(collected.status, 'failed');
   assert.equal(collected.decision, 'blocked');
-  assert.match(
-    readFileSync(join(dir, '.agent', 'runs', run.id, 'review.md'), 'utf8'),
-    /no real execution evidence/,
-  );
+  assert.match(readFileSync(join(dir, '.agent', 'runs', run.id, 'review.md'), 'utf8'), /no real execution evidence/);
 });
 
 test('commands are redacted and mutating commands require approval before execution', async () => {
@@ -2293,11 +2354,12 @@ test('G012 product gate regenerates and requires explicit projection quarantine 
   const projection = JSON.parse(readFileSync(projectionPath, 'utf8'));
   assert.equal(projection.status, 'PASS');
   assert.equal(
-    report.result_reality_delta.some((row) => /Hard completion ceiling/.test(row.target) && /reconciliation=true/.test(row.evidence)),
+    report.result_reality_delta.some(
+      (row) => /Hard completion ceiling/.test(row.target) && /reconciliation=true/.test(row.evidence),
+    ),
     true,
   );
 });
-
 
 function assertNoRepoControlledCommandsBeforeFirstSecret(workflow: string): void {
   const firstSecret = workflow.indexOf('${{ secrets.');
@@ -2307,10 +2369,16 @@ function assertNoRepoControlledCommandsBeforeFirstSecret(workflow: string): void
 }
 
 function assertNoDispatchInputsInRunBlocks(workflow: string): void {
-  const runBlocks = [...workflow.matchAll(/run: \|\n([\s\S]*?)(?=\n\s{6}- name:|\n\s{6}- uses:|\n\s{4}[A-Za-z_-]+:|$)/g)].map((match) => match[1]);
+  const runBlocks = [
+    ...workflow.matchAll(/run: \|\n([\s\S]*?)(?=\n\s{6}- name:|\n\s{6}- uses:|\n\s{4}[A-Za-z_-]+:|$)/g),
+  ].map((match) => match[1]);
   assert.ok(runBlocks.length > 0);
   for (const block of runBlocks) {
-    assert.doesNotMatch(block, /\$\{\{\s*inputs\./, 'workflow dispatch inputs must not be interpolated directly in run blocks');
+    assert.doesNotMatch(
+      block,
+      /\$\{\{\s*inputs\./,
+      'workflow dispatch inputs must not be interpolated directly in run blocks',
+    );
   }
 }
 
@@ -2328,9 +2396,18 @@ test('G012 independent review workflow requires trusted attested reviewer bundle
   assertNoRepoControlledCommandsBeforeFirstSecret(workflow);
   assert.match(workflow, /CURRENT_REVIEW_INPUT_HASH/);
   assert.match(workflow, /reviewInputFiles/);
-  assert.ok(workflow.indexOf('AGENT_REVIEW_BUNDLE_HMAC_KEY: ${{ secrets.AGENT_REVIEW_BUNDLE_HMAC_KEY }}') > workflow.indexOf('- name: Verify reviewer bundle attestation'));
-  assert.ok(workflow.indexOf('AGENT_REVIEW_HMAC_KEY: ${{ secrets.AGENT_REVIEW_HMAC_KEY }}') > workflow.indexOf('- name: Custody-attest independent review'));
-  assert.ok(workflow.indexOf('AGENT_REVIEW_CUSTODY_HMAC_KEY: ${{ secrets.AGENT_REVIEW_CUSTODY_HMAC_KEY }}') > workflow.indexOf('- name: Custody-attest independent review'));
+  assert.ok(
+    workflow.indexOf('AGENT_REVIEW_BUNDLE_HMAC_KEY: ${{ secrets.AGENT_REVIEW_BUNDLE_HMAC_KEY }}') >
+      workflow.indexOf('- name: Verify reviewer bundle attestation'),
+  );
+  assert.ok(
+    workflow.indexOf('AGENT_REVIEW_HMAC_KEY: ${{ secrets.AGENT_REVIEW_HMAC_KEY }}') >
+      workflow.indexOf('- name: Custody-attest independent review'),
+  );
+  assert.ok(
+    workflow.indexOf('AGENT_REVIEW_CUSTODY_HMAC_KEY: ${{ secrets.AGENT_REVIEW_CUSTODY_HMAC_KEY }}') >
+      workflow.indexOf('- name: Custody-attest independent review'),
+  );
   assert.match(workflow, /source: 'codex-native-subagent'/);
   assert.match(workflow, /status: 'completed'/);
   assert.match(workflow, /completed_at: new Date\(\)\.toISOString\(\)/);
@@ -2346,7 +2423,10 @@ test('G013 trusted reviewer bundle workflow produces custody-attested artifact w
   assert.match(workflow, /environment: trusted-reviewer-custody/);
   assertNoRepoControlledCommandsBeforeFirstSecret(workflow);
   assert.match(workflow, /AGENT_REVIEW_BUNDLE_HMAC_KEY: \${{ secrets\.AGENT_REVIEW_BUNDLE_HMAC_KEY }}/);
-  assert.ok(workflow.indexOf('AGENT_REVIEW_BUNDLE_HMAC_KEY: ${{ secrets.AGENT_REVIEW_BUNDLE_HMAC_KEY }}') > workflow.indexOf('- name: Build signed reviewer bundle from trusted comments'));
+  assert.ok(
+    workflow.indexOf('AGENT_REVIEW_BUNDLE_HMAC_KEY: ${{ secrets.AGENT_REVIEW_BUNDLE_HMAC_KEY }}') >
+      workflow.indexOf('- name: Build signed reviewer bundle from trusted comments'),
+  );
   assert.match(workflow, /AGENT_TRUSTED_REVIEW_WORKFLOW_PATH/);
   assert.match(workflow, /AGENT_TRUSTED_REVIEW_ACTORS/);
   assert.doesNotMatch(workflow, /completed_b64/i);
@@ -2461,7 +2541,10 @@ test('old product gate can no longer green a run', async () => {
   assert.match(completionPresentation, /Advisory diagnostics/i);
   assert.match(completionPresentation, /NOT a completion verdict/i);
   assert.match(completionPresentation, /decided exclusively by the M7 ledger\/diff verifier/i);
-  assert.doesNotMatch(completionPresentation, /PRD-scoped completion candidate|mark a run.*complete|mark a milestone.*complete/i);
+  assert.doesNotMatch(
+    completionPresentation,
+    /PRD-scoped completion candidate|mark a run.*complete|mark a milestone.*complete/i,
+  );
 });
 
 test('hand-authored review gate without a valid provenance signature cannot lift the ceiling', async () => {
