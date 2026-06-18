@@ -1,0 +1,29 @@
+{
+  "id": "research-brief",
+  "phases": {
+    "research": {
+      "executor": "codex",
+      "goalTemplate": "Research {what}. Read README.md and any upstream source files needed. Capture raw notes for a structured brief.",
+      "acceptArtifact": "notes.md"
+    },
+    "execute": {
+      "executor": "codex",
+      "goalTemplate": "Produce the structured research brief for {what}. Read notes.md and upstream sources. Write brief.json with shape {\"findings\":[{\"claim\":string,\"source_event_id\":string}],\"sources\":[string]}. Each finding's claim must be substantive and carry a source_event_id traceable to evidence.",
+      "acceptArtifact": "brief.json"
+    },
+    "review": {
+      "executor": "claude",
+      "goalTemplate": "Review {what}. Read notes.md and brief.json. Write review.md noting whether each claim is sourced and whether the brief is fit to accept.",
+      "acceptArtifact": "review.md"
+    }
+  },
+  "acceptance": {
+    "command": ["node", "validate-brief.mjs"],
+    "testFiles": [
+      {
+        "path": "validate-brief.mjs",
+        "content": "import { readFileSync } from 'node:fs';\nlet data;\ntry { data = JSON.parse(readFileSync('brief.json', 'utf8')); } catch { process.exit(1); }\nif (!Array.isArray(data.findings) || data.findings.length === 0) process.exit(1);\nif (!Array.isArray(data.sources) || data.sources.length === 0) process.exit(1);\nfor (const f of data.findings) {\n  if (!f || typeof f.claim !== 'string' || f.claim.trim().length < 8) process.exit(1);\n  if (typeof f.source_event_id !== 'string' || f.source_event_id.trim().length === 0) process.exit(1);\n}\nprocess.exit(0);\n"
+      }
+    ]
+  }
+}

@@ -568,3 +568,57 @@ test('ledger recompute fails closed on a tampered lifecycle chain', async () => 
 
   assert.throws(() => recomputeCompletionFromLedger(spec, { root, runId }), /payload hash mismatch|hash chain|sequence/i);
 });
+
+function briefExecutor(briefContent: string): HarnessExecutor {
+  return async (opts) => {
+    if (opts.prompt.includes('Research')) {
+      writeFileSync(join(opts.cwd, 'notes.md'), '# notes\n');
+    } else if (opts.prompt.includes('structured research brief')) {
+      writeFileSync(join(opts.cwd, 'brief.json'), briefContent);
+    } else if (opts.prompt.includes('Review')) {
+      writeFileSync(join(opts.cwd, 'review.md'), 'reviewed\n');
+    }
+    return codexResult({ cwd: opts.cwd, label: opts.label });
+  };
+}
+
+function loadResearchBriefFixture(executor: HarnessExecutor): OrchestratorSkillSpec {
+  const json = JSON.parse(
+    readFileSync(join(process.cwd(), 'fixtures', 'skills', 'research-brief.json'), 'utf8'),
+  ) as SkillSpecJson;
+  return loadSkillSpecFromJson(json, { codex: executor, claude: executor, agy: executor });
+}
+
+test('research-brief.json fixture accepts a well-sourced structured brief', async () => {
+  const root = tmpRepo();
+  const brief = JSON.stringify({
+    findings: [{ claim: 'native executor owns the loop', source_event_id: 'evt-123' }],
+    sources: ['README.md'],
+  });
+  const spec = loadResearchBriefFixture(briefExecutor(brief));
+
+  const report = await runOrchestratorSkill(spec, { what: 'harness thesis', root, runId: 'brief-good' });
+
+  assert.equal(report.acceptance?.passed, true);
+  assert.equal(report.completion, 'passed');
+  assert.equal(recomputeCompletionFromLedger(spec, { root, runId: 'brief-good' }).completion, 'passed');
+});
+
+test('research-brief.json fixture rejects a non-empty but unsourced brief (no laundering)', async () => {
+  const root = tmpRepo();
+  // Plausible-looking, non-empty prose — but no source_event_id on any claim.
+  const forged = JSON.stringify({
+    findings: [{ claim: 'everything looks great and is definitely done' }],
+    sources: ['README.md'],
+  });
+  const spec = loadResearchBriefFixture(briefExecutor(forged));
+
+  const report = await runOrchestratorSkill(spec, { what: 'harness thesis', root, runId: 'brief-forged' });
+
+  // execute/review nodes can be "supported" (a file was written) yet completion is failed:
+  // the schema validator re-run over execute evidence rejects the unsourced brief.
+  assert.equal(report.phases.find((phase) => phase.phase === 'execute')?.nodeState, 'supported');
+  assert.equal(report.acceptance?.passed, false);
+  assert.equal(report.completion, 'failed');
+  assert.equal(recomputeCompletionFromLedger(spec, { root, runId: 'brief-forged' }).completion, 'failed');
+});
