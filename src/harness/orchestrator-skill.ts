@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import type { RuntimeLedgerHeadBinding } from '../events/ledger.js';
@@ -67,6 +67,7 @@ export interface PhaseResult {
 export interface SkillRunReport {
   schema_version: 1;
   skillId: string;
+  runId: string;
   what: string;
   phases: PhaseResult[];
   ledgerHead: RuntimeLedgerHeadBinding;
@@ -250,6 +251,49 @@ export function runAcceptanceCheck(opts: {
   }
 }
 
+export function recomputeCompletion(
+  spec: OrchestratorSkillSpec,
+  report: SkillRunReport,
+  opts: { root: string },
+): { completion: 'passed' | 'failed' | 'skipped'; matchesReport: boolean; reason: string } {
+  if (!spec.acceptance) {
+    return {
+      completion: report.completion,
+      matchesReport: true,
+      reason: 'no acceptance declared; nothing to recompute',
+    };
+  }
+
+  const execute = report.phases.find((phase) => phase.phase === 'execute');
+  if (execute?.nodeState !== 'supported') {
+    return {
+      completion: 'skipped',
+      matchesReport: report.completion === 'skipped',
+      reason: 'execute not supported',
+    };
+  }
+
+  const executeDir = join(opts.root, '.agent', 'skill-runs', report.runId, 'artifacts', 'execute');
+  const executeRefs = readdirSync(executeDir).map((file): EvidenceRef => {
+    const storePath = join(executeDir, file);
+    const content = readFileSync(storePath);
+    return {
+      phase: 'execute',
+      relativePath: file,
+      sha256: sha256Hex(content),
+      storePath,
+    };
+  });
+  const acceptance = runAcceptanceCheck({ executeRefs, acceptance: spec.acceptance });
+  const completion = acceptance.passed ? 'passed' : 'failed';
+
+  return {
+    completion,
+    matchesReport: completion === report.completion,
+    reason: acceptance.reason,
+  };
+}
+
 export async function runOrchestratorSkill(
   spec: OrchestratorSkillSpec,
   input: { what: string; root: string; runId?: string },
@@ -320,6 +364,7 @@ export async function runOrchestratorSkill(
   return {
     schema_version: 1,
     skillId: spec.id,
+    runId,
     what: input.what,
     phases,
     ledgerHead,

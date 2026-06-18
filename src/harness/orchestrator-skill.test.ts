@@ -13,6 +13,7 @@ import {
   loadSkillSpecFromJson,
   materializeEvidenceInto,
   type OrchestratorSkillSpec,
+  recomputeCompletion,
   resolveEvidenceArtifact,
   runOrchestratorSkill,
   type SkillSpecJson,
@@ -351,6 +352,7 @@ test('runOrchestratorSkill returns refs-only phase report when all phases are su
 
   assert.equal(report.schema_version, 1);
   assert.equal(report.skillId, spec.id);
+  assert.equal(report.runId, 'graph-skill-happy');
   assert.equal(report.what, 'refs only work');
   assert.deepEqual(
     report.phases.map((p) => p.phase),
@@ -401,6 +403,7 @@ test('runOrchestratorSkill passes declared acceptance against clean execute evid
   const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }));
 
   const report = await runOrchestratorSkill(spec, { what: 'accepted add work', root, runId: 'skill-acceptance-pass' });
+  const recomputed = recomputeCompletion(spec, report, { root });
 
   assert.equal(report.phases.find((phase) => phase.phase === 'execute')?.nodeState, 'supported');
   assert.equal(report.acceptance?.ran, true);
@@ -409,6 +412,8 @@ test('runOrchestratorSkill passes declared acceptance against clean execute evid
   assert.equal(report.acceptance?.command.join(' '), 'node accept.test.mjs');
   assert.equal(typeof report.acceptance?.outputSha256, 'string');
   assert.equal(report.completion, 'passed');
+  assert.equal(recomputed.completion, 'passed');
+  assert.equal(recomputed.matchesReport, true);
 });
 
 test('runOrchestratorSkill fails completion when clean acceptance rejects forged execute evidence', async () => {
@@ -424,6 +429,12 @@ test('runOrchestratorSkill fails completion when clean acceptance rejects forged
   assert.equal(report.acceptance?.exitCode, 1);
   assert.equal(report.completion, 'failed');
   assert.equal(report.completionDisplay, 'supported');
+
+  report.completion = 'passed';
+  const recomputed = recomputeCompletion(spec, report, { root });
+
+  assert.equal(recomputed.completion, 'failed');
+  assert.equal(recomputed.matchesReport, false);
 });
 
 test('runOrchestratorSkill gates review when execute does not produce its accepted artifact', async () => {
