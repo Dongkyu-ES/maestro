@@ -1,11 +1,15 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import type { MemoryFact } from '../memory/fabric.js';
+import { appendMemoryFact, type MemoryFact, markFactsVerifiedByEvents } from '../memory/fabric.js';
 import {
   assertNoStaleAsFact,
   buildMemoryContextSections,
   classifyMemoryForInjection,
   gatingViewFromFact,
+  loadGatedMemoryFromFabric,
   type MemoryEntry,
 } from './memory-gating.js';
 
@@ -103,6 +107,28 @@ test('gatingViewFromFact projects the canonical MemoryFact so the gate consumes 
   // A blocked/failed outcome is not a durable fact: it projects as hypothesis (never confirmed).
   const blocked = gatingViewFromFact({ ...fact, id: 'fact-2', outcome: 'blocked' });
   assert.equal(classifyMemoryForInjection(blocked, { now, freshnessWindowMs }), 'unverified');
+});
+
+test('loadGatedMemoryFromFabric: a stored fact is unverified until a verifier stamps it, then confirmed', () => {
+  const agentDir = mkdtempSync(join(tmpdir(), 'fabric-gate-'));
+  appendMemoryFact(agentDir, {
+    id: 'mem-build',
+    layer: 'vertical_project',
+    key: 'build_cmd',
+    value: 'npm run build',
+    source_event_ids: ['e1'],
+    artifact_refs: [],
+  });
+
+  // Before any verification stamp, the stored fact has provenance but no recency → not injectable.
+  const before = loadGatedMemoryFromFabric(agentDir);
+  assert.equal(before.length, 1);
+  assert.equal(classifyMemoryForInjection(before[0], { now, freshnessWindowMs }), 'unverified');
+
+  // A passing verifier stamps last_verified_at on the facts grounded in the verified events.
+  markFactsVerifiedByEvents(agentDir, ['e1'], now);
+  const after = loadGatedMemoryFromFabric(agentDir);
+  assert.equal(classifyMemoryForInjection(after[0], { now, freshnessWindowMs }), 'confirmed_fact');
 });
 
 test('T5 buildMemoryContextSections is deterministic', () => {

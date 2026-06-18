@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { type MemoryWriteRecord, validateMemoryWrite } from './records.js';
 
 export type MemoryLayer =
   | 'vertical_project'
@@ -49,7 +50,16 @@ export function memoryFabricPath(agentDir: string): string {
 export function readMemoryFabric(agentDir: string): MemoryFabricStore {
   const path = memoryFabricPath(agentDir);
   if (!existsSync(path)) return { schema_version: 1, facts: [] };
-  return JSON.parse(readFileSync(path, 'utf8')) as MemoryFabricStore;
+  // Fail open on a malformed/foreign store: a corrupt fabric.json must not crash a run that merely
+  // wants to read memory (the read path is default-on for `warden harness run`). An unreadable
+  // fabric simply contributes no facts — the safe direction.
+  try {
+    const parsed = JSON.parse(readFileSync(path, 'utf8')) as Partial<MemoryFabricStore>;
+    if (!parsed || !Array.isArray(parsed.facts)) return { schema_version: 1, facts: [] };
+    return { schema_version: 1, facts: parsed.facts };
+  } catch {
+    return { schema_version: 1, facts: [] };
+  }
 }
 export function writeMemoryFabric(agentDir: string, store: MemoryFabricStore): void {
   const path = memoryFabricPath(agentDir);
@@ -74,6 +84,70 @@ export function appendMemoryFact(
   writeMemoryFabric(agentDir, store);
   return next;
 }
+const SCOPE_TO_LAYER: Record<MemoryWriteRecord['scope'], MemoryLayer> = {
+  global: 'vertical_project',
+  project: 'vertical_project',
+  goal: 'vertical_project',
+  task: 'vertical_project',
+  agent_scratchpad: 'vertical_project',
+  blackboard: 'blackboard',
+  handoff: 'sequential_handoff',
+  experiment: 'experiment_outcome',
+  module_learning: 'module_learning',
+};
+
+/**
+ * The executable write→store binding: turn a validated `MemoryWriteRecord` (write-time authority)
+ * into the canonical stored `MemoryFact` input. This is the code the §6 reconciliation previously
+ * only asserted in prose — the two types are now provably one provenance model.
+ *
+ * Lossy by design (documented, not a bug): the five non-collaboration scopes collapse to
+ * `vertical_project`, and the record's `authority` (operator_approved / system_imported, enforced at
+ * write time by `validateMemoryWrite`) is NOT carried onto the fact. Gate #4 keys on provenance +
+ * recency only, so this does not affect any injection decision today; if a future gate needs the
+ * write-time trust signal, add an `authority` field to `MemoryFact` rather than re-deriving it.
+ */
+export function factFromWriteRecord(
+  record: MemoryWriteRecord,
+): Omit<MemoryFact, 'schema_version' | 'id' | 'created_at'> & { id: string } {
+  return {
+    id: record.memory_id,
+    layer: SCOPE_TO_LAYER[record.scope],
+    key: record.key,
+    value: record.value,
+    source_event_ids: record.source_event_ids,
+    artifact_refs: record.artifact_refs,
+  };
+}
+
+/** Validate a write record and persist it as a canonical stored fact. */
+export function appendFactFromWriteRecord(agentDir: string, record: MemoryWriteRecord): MemoryFact {
+  validateMemoryWrite(record);
+  return appendMemoryFact(agentDir, factFromWriteRecord(record));
+}
+
+/**
+ * Stamp `last_verified_at` on every stored fact whose provenance is fully covered by a set of
+ * just-verified ledger events — i.e. a verifier confirmed all the events the fact cites. This is
+ * the only path that makes a fact "fresh": verification recency is earned from a passing verifier,
+ * never self-asserted. A fact with empty `source_event_ids` is never stamped (it has no provenance
+ * to verify). Returns the ids that were stamped.
+ */
+export function markFactsVerifiedByEvents(agentDir: string, verifiedEventIds: string[], at: string): string[] {
+  const verified = new Set(verifiedEventIds);
+  const store = readMemoryFabric(agentDir);
+  const stamped: string[] = [];
+  for (const fact of store.facts) {
+    if (fact.source_event_ids.length === 0) continue;
+    if (fact.source_event_ids.every((id) => verified.has(id))) {
+      fact.last_verified_at = at;
+      stamped.push(fact.id);
+    }
+  }
+  if (stamped.length) writeMemoryFabric(agentDir, store);
+  return stamped;
+}
+
 export function recommendModules(agentDir: string, goalKey: string): ModuleRecommendation[] {
   const facts = readMemoryFabric(agentDir).facts.filter(
     (fact) => fact.layer === 'module_learning' && fact.modules?.length && fact.key.includes(goalKey),

@@ -351,6 +351,9 @@ async function main() {
         executor: registry.resolve(executorKind), // undefined for codex → native runCodexExec default
         executorLabel: executorKind,
         executorBin: arg('--executor-bin'),
+        // Load this project's memory fabric into context (gate #4 admits only provenanced+fresh
+        // facts). No-op when the fabric is empty, so this is safe to enable by default.
+        fabricAgentDir: '.agent',
       });
       console.log(JSON.stringify(report, null, 2));
       if (report.state !== 'completed') process.exitCode = 2;

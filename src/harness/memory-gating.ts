@@ -1,4 +1,4 @@
-import type { MemoryFact } from '../memory/fabric.js';
+import { type MemoryFact, readMemoryFabric } from '../memory/fabric.js';
 
 /**
  * Gate #4 ("no stale/ungrounded memory injected as fact") operates on a projection of the single
@@ -41,6 +41,15 @@ export function gatingViewFromFact(fact: MemoryFact): MemoryEntry {
     sourceEventIds: fact.source_event_ids,
     lastVerifiedAt: fact.last_verified_at,
   };
+}
+
+/**
+ * Load every stored fact from the canonical fabric and project it into the gate-#4 view. This is
+ * the production read path that feeds the fabric into a run's context: the caller passes the result
+ * as `memory`, and gate #4 then admits only the facts with provenance + recent verification.
+ */
+export function loadGatedMemoryFromFabric(agentDir: string): MemoryEntry[] {
+  return readMemoryFabric(agentDir).facts.map(gatingViewFromFact);
 }
 
 export type InjectionLabel = 'confirmed_fact' | 'unverified' | 'stale' | 'excluded';

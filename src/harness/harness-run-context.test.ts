@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { appendMemoryFact, readMemoryFabric } from '../memory/fabric.js';
 import type { BaseRuleSet, Rule } from './base-rules.js';
 import { runHarnessSlice } from './harness-run.js';
 import type { MemoryEntry } from './memory-gating.js';
@@ -131,6 +132,40 @@ test('T7 harness run composes base rules and verification-gated memory into exec
   assert.match(prompt, /\[confirmed_fact\] Fresh confirmed memory/);
   assert.match(prompt, /\[stale\] Stale memory reaches the executor only with a stale label/);
   assert.doesNotMatch(prompt, /Deprecated rule text/);
+});
+
+test('T7 fabricAgentDir loads stored facts into context (gate #4 in prod) and stamps only verified events', async () => {
+  const root = tmpRepo();
+  // A stored fact with provenance but no verification stamp yet.
+  appendMemoryFact(join(root, '.agent'), {
+    id: 'mem-fabric',
+    layer: 'vertical_project',
+    key: 'fabric_fact',
+    value: 'loaded from the canonical fabric',
+    source_event_ids: ['external-evt-not-in-this-run'],
+    artifact_refs: [],
+  });
+
+  const report = await runHarnessSlice({
+    root,
+    goal: 'edit target.txt with fabric-backed memory',
+    executorBin: fakeCodex(CAPTURING_FAKE_CODEX),
+    runId: 'fabric-backed',
+    fabricAgentDir: '.agent',
+    freshnessWindowMs: 24 * 60 * 60 * 1000,
+  });
+
+  assert.equal(report.state, 'completed');
+  // Read side: the stored fact reached the executor context, projected through gate #4. Unstamped →
+  // labeled [unverified] and NOT promoted to a confirmed fact.
+  const prompt = readFileSync(join(root, 'executor-prompt.txt'), 'utf8');
+  assert.match(prompt, /\[unverified\] fabric_fact: loaded from the canonical fabric/);
+  assert.deepEqual(report.includedMemoryIds, []);
+
+  // Stamp scoping: the completed run stamps only facts grounded in ITS verified events. This fact
+  // cites an external event the run never produced, so it must remain unstamped (no blanket stamp).
+  const fact = readMemoryFabric(join(root, '.agent')).facts.find((f) => f.id === 'mem-fabric');
+  assert.equal(fact?.last_verified_at, undefined);
 });
 
 test('T7 stale memory cannot forge inclusion as a confirmed fact', async () => {

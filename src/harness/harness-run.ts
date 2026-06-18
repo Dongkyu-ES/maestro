@@ -5,26 +5,31 @@ import { join, relative } from 'node:path';
 import {
   appendRuntimeEvent,
   createRuntimeLedgerHeadBinding,
+  type RuntimeEventSource,
+  type RuntimeLedgerHeadBinding,
   readRuntimeEvents,
   runtimeLedgerHeadHash,
   stableJson,
   validateRuntimeLedger,
-  type RuntimeEventSource,
-  type RuntimeLedgerHeadBinding,
 } from '../events/ledger.js';
-import { runCodexExec, type CodexExecResult } from '../runtime/codex-exec-runner.js';
+import { markFactsVerifiedByEvents } from '../memory/fabric.js';
+import { type CodexExecResult, runCodexExec } from '../runtime/codex-exec-runner.js';
 import { redact } from '../util.js';
-import { compileBaseRules, type BaseRuleSet } from './base-rules.js';
+import { type BaseRuleSet, compileBaseRules } from './base-rules.js';
 import {
   buildContextBundle as buildCanonicalContextBundle,
   type ContextBundle as CanonicalContextBundle,
   type ContextSection,
 } from './context-bundle.js';
-import { writeContextProvenanceBundle, type ContextProvenanceBundle } from './context-provenance.js';
-import { runHooks, type HookHandler, type HookOutcome, type LifecycleEvent } from './hooks.js';
-import { buildMemoryContextSections, type MemoryEntry } from './memory-gating.js';
-import { assertLabelMatchesObservation, deriveNativeHarnessAssisted, type RunObservation } from './native-surface-detector.js';
+import { type ContextProvenanceBundle, writeContextProvenanceBundle } from './context-provenance.js';
+import { type HookHandler, type HookOutcome, type LifecycleEvent, runHooks } from './hooks.js';
+import { buildMemoryContextSections, loadGatedMemoryFromFabric, type MemoryEntry } from './memory-gating.js';
 import type { NativeArtifactHash } from './native-evidence.js';
+import {
+  assertLabelMatchesObservation,
+  deriveNativeHarnessAssisted,
+  type RunObservation,
+} from './native-surface-detector.js';
 import { runVerifier, type VerifierResult } from './verifier.js';
 
 export type HarnessSliceState = 'completed' | 'blocked';
@@ -54,6 +59,12 @@ export interface HarnessRunOptions {
   hooks?: HookHandler[];
   baseRules?: BaseRuleSet;
   memory?: MemoryEntry[];
+  /**
+   * Opt-in: load stored facts from this agent dir's memory fabric, project them through gate #4,
+   * and include the confirmed ones in context. When set, the run also stamps `last_verified_at` on
+   * any fabric fact grounded entirely in this run's verified events once the run completes.
+   */
+  fabricAgentDir?: string;
   providerProfile?: string;
   freshnessWindowMs?: number;
 }
@@ -188,7 +199,10 @@ function buildContextBundle(options: {
       included_context_extras_sha256: bundle.included_context_extras_sha256,
     }),
   );
-  writeFileSync(join(options.runDir, 'context-bundle.json'), `${JSON.stringify({ ...bundle, sha256: bundleSha256 }, null, 2)}\n`);
+  writeFileSync(
+    join(options.runDir, 'context-bundle.json'),
+    `${JSON.stringify({ ...bundle, sha256: bundleSha256 }, null, 2)}\n`,
+  );
   return { bundle, sha256: bundleSha256 };
 }
 
@@ -317,7 +331,12 @@ function captureToolEvidence(options: {
 }
 
 function existingInstructionPaths(root: string, runDir: string): string[] {
-  return [join(root, 'AGENTS.md'), join(root, 'CLAUDE.md'), join(runDir, 'AGENTS.md'), join(runDir, 'CLAUDE.md')].filter((path) => existsSync(path));
+  return [
+    join(root, 'AGENTS.md'),
+    join(root, 'CLAUDE.md'),
+    join(runDir, 'AGENTS.md'),
+    join(runDir, 'CLAUDE.md'),
+  ].filter((path) => existsSync(path));
 }
 
 function buildRunObservation(options: {
@@ -336,7 +355,9 @@ function buildRunObservation(options: {
       join(options.runDir, 'executor.process.json'),
       ...existingInstructionPaths(options.root, options.runDir),
     ],
-    transcript: [options.executor.stdout, options.executor.stderr, options.executor.last_message].filter((text) => text.length > 0).join('\n'),
+    transcript: [options.executor.stdout, options.executor.stderr, options.executor.last_message]
+      .filter((text) => text.length > 0)
+      .join('\n'),
     sessionIds: options.executor.session_id ? [options.executor.session_id] : [],
   };
 }
@@ -444,7 +465,12 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
   const runId = options.runId || `harness-${randomUUID()}`;
   const hooks = options.hooks || [];
   const runDir = runDirFor(root, runId);
-  const useComposedContext = options.baseRules !== undefined || options.memory !== undefined;
+  // Production read path for the memory fabric: load stored facts and project them through gate #4.
+  // gatingViewFromFact runs here, in a real run, not just in tests.
+  const fabricMemory = options.fabricAgentDir ? loadGatedMemoryFromFabric(join(root, options.fabricAgentDir)) : [];
+  const effectiveMemory =
+    options.memory !== undefined || fabricMemory.length > 0 ? [...(options.memory ?? []), ...fabricMemory] : undefined;
+  const useComposedContext = options.baseRules !== undefined || effectiveMemory !== undefined;
   mkdirSync(runDir, { recursive: true });
   writeFileSync(join(runDir, 'task.md'), `${options.goal}\n`);
 
@@ -461,7 +487,7 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
         runDir,
         goal: options.goal,
         baseRules: options.baseRules,
-        memory: options.memory,
+        memory: effectiveMemory,
         providerProfile: options.providerProfile,
         freshnessWindowMs: options.freshnessWindowMs,
       })
@@ -469,16 +495,21 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
   writeFileSync(
     join(runDir, 'context.md'),
     composedContext?.text ??
-      (options.contextExtras === undefined ? `Goal:\n${options.goal}\n` : `Goal:\n${options.goal}\n\nContext extras:\n${options.contextExtras}\n`),
+      (options.contextExtras === undefined
+        ? `Goal:\n${options.goal}\n`
+        : `Goal:\n${options.goal}\n\nContext extras:\n${options.contextExtras}\n`),
   );
   const provenance = writeContextProvenanceBundle({ root, agentDir: '.agent', runId });
-  const legacyContext =
-    useComposedContext ? undefined : buildContextBundle({ runDir, root, runId, goal: options.goal, contextExtras: options.contextExtras, provenance });
+  const legacyContext = useComposedContext
+    ? undefined
+    : buildContextBundle({ runDir, root, runId, goal: options.goal, contextExtras: options.contextExtras, provenance });
   const contextSha256 = composedContext?.bundle.sha256 ?? legacyContext?.sha256;
   if (!contextSha256) throw new Error('context bundle was not built');
   const executorPrompt =
     composedContext?.text ??
-    (options.contextExtras === undefined ? options.goal : `${options.goal}\n\nContext extras:\n${options.contextExtras}\n`);
+    (options.contextExtras === undefined
+      ? options.goal
+      : `${options.goal}\n\nContext extras:\n${options.contextExtras}\n`);
   appendRuntimeEvent(runDir, {
     runId,
     source: 'harness',
@@ -559,7 +590,14 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     });
   }
 
-  const evidence = captureToolEvidence({ root, runDir, runId, executor, executorLabel, unownedSurfaces: nativeLabel.surfaces });
+  const evidence = captureToolEvidence({
+    root,
+    runDir,
+    runId,
+    executor,
+    executorLabel,
+    unownedSurfaces: nativeLabel.surfaces,
+  });
   appendRuntimeEvent(runDir, {
     runId,
     source: 'harness',
@@ -644,8 +682,29 @@ export async function runHarnessSlice(options: HarnessRunOptions): Promise<Harne
     runId,
     source: 'harness',
     type: state === 'completed' ? 'run.completed' : 'run.blocked',
-    payload: { state, native_harness_assisted: nativeLabel.nativeHarnessAssisted, unowned_surfaces: nativeLabel.surfaces },
+    payload: {
+      state,
+      native_harness_assisted: nativeLabel.nativeHarnessAssisted,
+      unowned_surfaces: nativeLabel.surfaces,
+    },
   });
+
+  // Verifier-gated freshness. The stamp does NOT mean "the fact's claim is true" — it means a
+  // verifier confirmed the events the fact cites are authentic and chain-valid. So we gate on the
+  // LEDGER-INTEGRITY verifier over this run's events, not on the diff-completion above: a run with a
+  // tampered/invalid ledger stamps nothing, even if it produced a diff. A fact's recency is thus
+  // earned only from recomputable ledger integrity, never from "a diff happened".
+  if (options.fabricAgentDir && state === 'completed') {
+    const runEvents = readRuntimeEvents(runDir);
+    const ledgerVerdict = runVerifier({ type: 'ledger', root: runDir, events: runEvents });
+    if (ledgerVerdict.status === 'supported') {
+      markFactsVerifiedByEvents(
+        join(root, options.fabricAgentDir),
+        runEvents.map((event) => event.event_id),
+        new Date().toISOString(),
+      );
+    }
+  }
 
   return finalizeReport({
     root,
