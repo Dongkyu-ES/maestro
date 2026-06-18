@@ -3,17 +3,17 @@
   "phases": {
     "research": {
       "executor": "codex",
-      "goalTemplate": "Research {what}. Read README.md and any upstream source files needed to understand the current project shape. Write research.md with concise findings, constraints, and the intended implementation approach.",
+      "goalTemplate": "Research {what}. Read README.md and any upstream source files needed to understand the current project shape. IMPORTANT: write your findings to the single file ./research.md at the root of your working directory — exactly that path, not a subdirectory and not a different filename. Include concise findings, constraints, and the intended implementation approach.",
       "acceptArtifact": "research.md"
     },
     "execute": {
       "executor": "codex",
-      "goalTemplate": "Implement {what}. Read research.md and upstream source files before editing. Create feature-builder.mjs exporting function buildFeatureName(input) that trims input, lowercases it, replaces non-alphanumeric runs with single hyphens, and removes leading or trailing hyphens.",
+      "goalTemplate": "Implement {what}. Read ./research.md and upstream source files before editing. IMPORTANT: create the single file ./feature-builder.mjs at the root of your working directory — exactly that path, not a subdirectory and not a different filename. It must export function buildFeatureName(input) that trims input, lowercases it, replaces non-alphanumeric runs with single hyphens, and removes leading or trailing hyphens.",
       "acceptArtifact": "feature-builder.mjs"
     },
     "review": {
       "executor": "claude",
-      "goalTemplate": "Review {what}. Read research.md, feature-builder.mjs, and upstream source files relevant to the implementation. Write review.md with verdict, risks, and whether acceptance should pass.",
+      "goalTemplate": "Review {what}. Read ./research.md, ./feature-builder.mjs, and upstream source files relevant to the implementation. IMPORTANT: write your review to the single file ./review.md at the root of your working directory — exactly that path, not a subdirectory and not a different filename. Include verdict, risks, and whether acceptance should pass.",
       "acceptArtifact": "review.md"
     }
   },

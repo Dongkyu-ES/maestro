@@ -3,17 +3,17 @@
   "phases": {
     "research": {
       "executor": "codex",
-      "goalTemplate": "Research {what}. Read README.md and any upstream source files needed. Capture raw notes for a structured brief.",
+      "goalTemplate": "Research {what}. Read README.md and any upstream source files needed. Capture raw notes for a structured brief. IMPORTANT: write your notes to the single file ./notes.md at the root of your working directory — exactly that path, not a subdirectory and not a different filename.",
       "acceptArtifact": "notes.md"
     },
     "execute": {
       "executor": "codex",
-      "goalTemplate": "Produce the structured research brief for {what}. Read notes.md and upstream sources. Write brief.json with shape {\"findings\":[{\"claim\":string,\"source_event_id\":string}],\"sources\":[string]}. Each finding's claim must be substantive and carry a source_event_id traceable to evidence.",
+      "goalTemplate": "Produce the structured research brief for {what}. Read ./notes.md and upstream sources. IMPORTANT: write the brief to the single file ./brief.json at the root of your working directory — exactly that path, not a subdirectory and not a different filename. brief.json shape: {\"findings\":[{\"claim\":string,\"source_event_id\":string}],\"sources\":[string]}. Each finding's claim must be substantive and carry a source_event_id traceable to evidence.",
       "acceptArtifact": "brief.json"
     },
     "review": {
       "executor": "claude",
-      "goalTemplate": "Review {what}. Read notes.md and brief.json. Write review.md noting whether each claim is sourced and whether the brief is fit to accept.",
+      "goalTemplate": "Review {what}. Read ./notes.md and ./brief.json. IMPORTANT: write your review to the single file ./review.md at the root of your working directory — exactly that path, not a subdirectory and not a different filename. Note whether each claim is sourced and whether the brief is fit to accept.",
       "acceptArtifact": "review.md"
     }
   },
