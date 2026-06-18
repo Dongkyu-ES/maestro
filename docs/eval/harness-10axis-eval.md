@@ -1,4 +1,4 @@
-# Harness 10-axis evaluation — Dominic Orchestration (DH) vs the reference 7
+# Harness 10-axis evaluation — Warden (DH) vs the reference 7
 
 Replicates the `../harness_learn` harness-wiki rubric (`10_프레임워크분석/_분석축_루브릭`,
 `20_비교분석/_비교매트릭스`): score a harness on the **same 10 axes, 1–5** (1 = absent/weak,

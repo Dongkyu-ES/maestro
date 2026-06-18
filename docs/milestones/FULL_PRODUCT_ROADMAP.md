@@ -1,4 +1,4 @@
-# Dominic Orchestration Full Product Roadmap: v0 → v2
+# Warden Full Product Roadmap: v0 → v2
 
 
 > **REDESIGN NOTE (2026-06-04):** The ultimate direction is provider-neutral harness ownership, corrected by `docs/milestones/HARNESS_OS_CORRECTED_PLAN.md`: Phase A canonical substrate is a rented native executor wrapped by Dominic-owned evidence/verifier/policy/ledger/promotion contracts. Direct model executors remain future adapters behind the same contract, not the current proof path. See `docs/milestones/ULTIMATE_GOAL_DIVIDE_AND_CONQUER_PLAN.md`, `docs/milestones/PROVIDER_NEUTRAL_HARNESS_CONTRACT.md`, and `docs/adr/0001-provider-neutral-supersedes-omx-first.md`.
@@ -29,7 +29,7 @@ This remains **PRD-scoped local v0-v2**, not a universal hosted/remote/broad-MCP
 
 ### Goal
 
-A real operator can install/run Dominic Orchestration locally, register real projects, create/manage tasks, start/collect runs, review results, and inspect all evidence through CLI and Web UI.
+A real operator can install/run Warden locally, register real projects, create/manage tasks, start/collect runs, review results, and inspect all evidence through CLI and Web UI.
 
 ### Required Product Behavior
 
@@ -53,7 +53,7 @@ A real operator can install/run Dominic Orchestration locally, register real pro
 
 #### V0-PF-02 Project registry
 - Add global or repo-local registry.
-- Support `agent project add/list/show/remove`.
+- Support `warden project add/list/show/remove`.
 - Store project id, name, root path, agent dir, last opened.
 - Recover invalid/missing projects safely.
 
@@ -241,7 +241,7 @@ This matrix must be read as PRD-scoped v0-v2, not as a universal final-platform 
 
 | Area | 95% Product Pass Definition | Current Baseline | Status |
 | --- | --- | --- | --- |
-| Installable CLI | `agent` usable outside repo after documented install/link | package bin, README install/link docs, `agent --version` smoke | PASS |
+| Installable CLI | `agent` usable outside repo after documented install/link | package bin, README install/link docs, `warden --version` smoke | PASS |
 | Web UI | operator can create/control tasks/runs and inspect evidence | operator/permission lane, agent work lanes, advanced shell separation, and run evidence summary implemented | PASS |
 | Project registry | multiple real projects managed | CLI registry add/list/show/remove implemented | PASS |
 | Durable index | index/recovery across projects/tasks/runs | `.agent/index.json` rebuild/show implemented and smoke-verified | PASS |

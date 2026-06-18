@@ -67,7 +67,7 @@ timer.unref?.();
 
 ws.addEventListener('open', async () => {
   try {
-    await send('initialize', { clientInfo: { name: 'dominic-orchestration', title: 'Dominic Orchestration', version: '0.1.0' }, capabilities: null });
+    await send('initialize', { clientInfo: { name: 'warden', title: 'Warden', version: '0.1.0' }, capabilities: null });
     const start = await send('thread/start', {
       cwd: opts.cwd,
       sandbox: opts.sandbox,

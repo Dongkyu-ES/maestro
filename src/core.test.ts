@@ -480,7 +480,7 @@ console.log('LIVE_INTEGRATION_SMOKE_PASS root=' + root + ' run=run-gate-repo-fix
   );
   writeFileSync(
     join(dir, 'docs/milestones/FULL_PRODUCT_ROADMAP.md'),
-    `# Dominic Orchestration Completion-Ready Roadmap Fixture
+    `# Warden Completion-Ready Roadmap Fixture
 
 Latest product gate evidence records FAIL unless executable gates pass.
 UI shows worker lanes. Run detail UI showing all required evidence.
@@ -1872,7 +1872,7 @@ test('run viewer includes generated v2 evidence files', async () => {
 test('renderHtml self-heals a fresh uninitialized repo instead of throwing', () => {
   const dir = mkdtempSync(join(tmpdir(), 'dominic-orch-'));
   const html = renderHtml(dir);
-  assert.match(html, /Dominic Orchestration/);
+  assert.match(html, /Warden/);
   assert.equal(existsSync(join(dir, '.agent', 'index.json')), true);
 });
 
@@ -2190,7 +2190,7 @@ test('unsafe-host auth does not leak tokens on unmatched POST', async () => {
     const authed = await fetch(`http://127.0.0.1:${port}/?auth=secret-token`);
     const text = await authed.text();
     assert.equal(authed.status, 200);
-    assert.match(text, /Dominic Orchestration/);
+    assert.match(text, /Warden/);
     assert.doesNotMatch(text, /secret-token/);
     const cookie = authed.headers.get('set-cookie') || '';
     assert.match(cookie, /agent_auth=/);
@@ -2951,7 +2951,7 @@ test('shaped scaffold with fake CLI and dogfood strings still fails without dogf
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ bin: { agent: './dist/cli.js' } }));
   writeFileSync(
     join(dir, 'dist', 'cli.js'),
-    'if(process.argv.includes("--version")) console.log("dominic-orchestration 0.1.0"); else console.log("agent quality gate [--write]\nagent run create|start|collect|cancel|latest\nagent apply propose|approved");',
+    'if(process.argv.includes("--version")) console.log("warden 0.1.0"); else console.log("warden quality gate [--write]\nwarden run create|start|collect|cancel|latest\nwarden apply propose|approved");',
   );
   writeFileSync(
     join(dir, 'dominic_orchestration_PRD.md'),
@@ -2987,7 +2987,7 @@ test('shaped scaffold with fake CLI and dogfood strings still fails without dogf
   );
   writeFileSync(
     join(dir, 'docs', 'milestones', 'PRODUCT_GATE_RERUN_REPORT.md'),
-    'Result-Reality Delta | Original PRD / v0-v2 target | Current runnable evidence | Delta | Forbidden completion claim Allowed completion claim Why the previous loop failed implementation-friendly grading Final wording guard CLI/Web controls agent quality gate --write',
+    'Result-Reality Delta | Original PRD / v0-v2 target | Current runnable evidence | Delta | Forbidden completion claim Allowed completion claim Why the previous loop failed implementation-friendly grading Final wording guard CLI/Web controls warden quality gate --write',
   );
   writeFileSync(
     join(dir, 'docs', 'milestones', 'DOGFOOD_REPORT.md'),
@@ -3036,7 +3036,7 @@ test('minimal fake dogfood artifacts still fail coherence checks', async () => {
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ bin: { agent: './dist/cli.js' } }));
   writeFileSync(
     join(dir, 'dist', 'cli.js'),
-    'if(process.argv.includes("--version")) console.log("dominic-orchestration 0.1.0"); else console.log("agent quality gate [--write]\nagent run create|start|collect|cancel|latest\nagent apply propose|approved");',
+    'if(process.argv.includes("--version")) console.log("warden 0.1.0"); else console.log("warden quality gate [--write]\nwarden run create|start|collect|cancel|latest\nwarden apply propose|approved");',
   );
   writeFileSync(
     join(dir, 'dominic_orchestration_PRD.md'),
@@ -3147,7 +3147,7 @@ test('forged dogfood proposal digest fails product gate', async () => {
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ bin: { agent: './dist/cli.js' } }));
   writeFileSync(
     join(dir, 'dist', 'cli.js'),
-    'if(process.argv.includes("--version")) console.log("dominic-orchestration 0.1.0"); else console.log("agent quality gate [--write]\nagent run create|start|collect|cancel|latest\nagent apply propose|approved");',
+    'if(process.argv.includes("--version")) console.log("warden 0.1.0"); else console.log("warden quality gate [--write]\nwarden run create|start|collect|cancel|latest\nwarden apply propose|approved");',
   );
   writeFileSync(
     join(dir, 'dominic_orchestration_PRD.md'),

@@ -602,11 +602,11 @@ theme='''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 now=datetime.datetime.utcnow().replace(microsecond=0).isoformat()+"Z"
 core=f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:dcterms="http://purl.org/dc/terms/" xmlns:dcmitype="http://purl.org/dc/dcmitype/" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
- <dc:title>GitHub 프로젝트 활동 요약</dc:title><dc:creator>Dominic Orchestration</dc:creator><cp:lastModifiedBy>Dominic Orchestration</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>
+ <dc:title>GitHub 프로젝트 활동 요약</dc:title><dc:creator>Warden</dc:creator><cp:lastModifiedBy>Warden</cp:lastModifiedBy><dcterms:created xsi:type="dcterms:W3CDTF">{now}</dcterms:created><dcterms:modified xsi:type="dcterms:W3CDTF">{now}</dcterms:modified>
 </cp:coreProperties>'''
 app=f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/extended-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes">
- <Application>Dominic Orchestration</Application><PresentationFormat>On-screen Show (16:9)</PresentationFormat><Slides>{len(slides)}</Slides><Company>Dominic</Company>
+ <Application>Warden</Application><PresentationFormat>On-screen Show (16:9)</PresentationFormat><Slides>{len(slides)}</Slides><Company>Dominic</Company>
 </Properties>'''
 pres_props='''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:presentationPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>'''
 view_props='''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><p:viewPr xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"/>'''

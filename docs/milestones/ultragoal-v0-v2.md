@@ -1,4 +1,4 @@
-# Dominic Orchestration Ultragoal Plan: v0 → v2
+# Warden Ultragoal Plan: v0 → v2
 
 **Status:** Implementation ultragoal plan  
 **Date:** 2026-05-31  
@@ -12,7 +12,7 @@
 
 ### 1.1 전체 목표
 
-Dominic Orchestration을 한 번에 “완성형 개인 에이전트 OS”로 만들지 않는다. v0~v2는 다음 순서로 점진적으로 닫힌다.
+Warden을 한 번에 “완성형 개인 에이전트 OS”로 만들지 않는다. v0~v2는 다음 순서로 점진적으로 닫힌다.
 
 ```text
 v0: CLI-first run record loop
@@ -72,14 +72,14 @@ OMX/Codex를 계속 쓰되, 모든 작업이 `task → run → baseline/collect 
 
 #### CLI
 
-- `agent init`
-- `agent task add "..."`
-- `agent task list`
-- `agent task show <task-id>`
-- `agent run create <task-id>`
-- `agent run collect <run-id>`
-- `agent review latest`
-- `agent web`
+- `warden init`
+- `warden task add "..."`
+- `warden task list`
+- `warden task show <task-id>`
+- `warden run create <task-id>`
+- `warden run collect <run-id>`
+- `warden review latest`
+- `warden web`
 
 #### File artifacts
 
@@ -132,13 +132,13 @@ OMX/Codex를 계속 쓰되, 모든 작업이 `task → run → baseline/collect 
 
 #### V0-T02 `.agent/` initializer
 
-- Implement `agent init`.
+- Implement `warden init`.
 - Create `.agent/project.yaml` with `schema_version`, `id`, `name`, `root_path`, `default_executor`.
 - Create policy/eval templates.
 - Respect existing `.agent/`; do not overwrite without explicit flag.
 - Add path canonicalization and project-root boundary checks.
 
-**Done when:** running `agent init` twice is idempotent and leaves existing files safe.
+**Done when:** running `warden init` twice is idempotent and leaves existing files safe.
 
 #### V0-T03 Task file model
 
@@ -152,7 +152,7 @@ OMX/Codex를 계속 쓰되, 모든 작업이 `task → run → baseline/collect 
 
 #### V0-T04 Run create
 
-- Implement `agent run create <task-id>`.
+- Implement `warden run create <task-id>`.
 - Create `.agent/runs/<run-id>/`.
 - Copy task snapshot to `task.md`.
 - Generate `context.md` and `prompt.md`.
@@ -165,7 +165,7 @@ OMX/Codex를 계속 쓰되, 모든 작업이 `task → run → baseline/collect 
 
 #### V0-T05 Run collect
 
-- Implement `agent run collect <run-id>`.
+- Implement `warden run collect <run-id>`.
 - Capture `collect-status.txt` and `collect-diff.patch`.
 - Produce `diff.patch` as the run review artifact.
 - Preserve baseline diff so pre-existing dirty files are distinguishable.
@@ -212,12 +212,12 @@ Run at minimum:
 npm lint
 npm test
 npm build
-agent init
-agent task add "smoke task"
-agent task list
-agent run create <task-id>
-agent run collect <run-id>
-agent web
+warden init
+warden task add "smoke task"
+warden task list
+warden run create <task-id>
+warden run collect <run-id>
+warden web
 ```
 
 Manual smoke:
@@ -320,9 +320,9 @@ Runtime/API additions:
 npm lint
 npm test
 npm build
-agent run create <task-id> --mode roles
-agent run collect <run-id>
-agent review latest
+warden run create <task-id> --mode roles
+warden run collect <run-id>
+warden review latest
 ```
 
 Manual smoke:
@@ -430,9 +430,9 @@ Runtime additions:
 npm lint
 npm test
 npm build
-agent run create <task-id> --mode multi --max-workers 3
-agent run collect <run-id>
-agent review latest
+warden run create <task-id> --mode multi --max-workers 3
+warden run collect <run-id>
+warden review latest
 ```
 
 Manual smoke:

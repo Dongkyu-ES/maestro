@@ -1,4 +1,4 @@
-# Dominic Orchestration Physical Runtime Architecture
+# Warden Physical Runtime Architecture
 
 **Last reviewed:** 2026-06-02
 **Review result:** 구현은 최초 문서의 “missing runtime adapter” 상태를 넘어섰지만, 현재 product gate는 **FAIL / completion ceiling 60**이다. live smoke와 verifier 계열 증거는 존재하나, signed independent-review provenance가 없으므로 completion-candidate/90/95 claim은 금지된다. hosted/SaaS/remote daemon/범용 MCP 플랫폼은 여전히 범위 밖이다.
@@ -11,7 +11,7 @@
 
 ```mermaid
 flowchart TD
-    Browser["User Browser"] -->|"HTTP GET or POST<br/>localhost:4317"| WebServer["agent web<br/>Node.js process<br/>dist/cli.js"]
+    Browser["User Browser"] -->|"HTTP GET or POST<br/>localhost:4317"| WebServer["warden web<br/>Node.js process<br/>dist/cli.js"]
     Terminal["Terminal<br/>agent command"] --> WebServer
     Terminal --> CLI["src/cli.ts<br/>compiled to dist/cli.js"]
 
@@ -48,7 +48,7 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant B as Browser
-    participant S as agent web dist_cli_js
+    participant S as warden web dist_cli_js
     participant C as src_core_ts
     participant F as dot_agent_file_store
     participant E as events_jsonl
@@ -221,7 +221,7 @@ flowchart TD
 현재 기본 실행은 여전히 compatibility shell이다.
 
 ```text
-node -e "console.log('Dominic Orchestration task adapter executed')"
+node -e "console.log('Warden task adapter executed')"
 ```
 
 단, 이것은 더 이상 전체 런타임의 전부가 아니다. 현재 구현은 primitive shell을 명시적으로 낮은 등급으로 표시하고, Codex/OMX/agy adapter evidence와 `events.jsonl` 기반 projection/gate를 별도 레이어로 기록한다.
@@ -327,5 +327,5 @@ browser-client E2E guarantee beyond server-render smoke
 1. signed independent-review provenance를 reviewer/CI-owned key custody로 운영화.
 2. `gate.full_target.verified`를 문서와 운영 절차의 authoritative completion event로 고정.
 3. fresh target run으로 과거 noisy events 없이 최종 evidence 재생성.
-4. Browser/Playwright 기반 실제 `agent web` run detail + SSE E2E smoke 추가.
+4. Browser/Playwright 기반 실제 `warden web` run detail + SSE E2E smoke 추가.
 5. OMX/agy adapter를 detection/evidence 수준에서 session lifecycle 수준으로 확장할지 별도 PRD로 결정.

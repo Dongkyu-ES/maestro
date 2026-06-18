@@ -5,7 +5,7 @@
 
 ## What Exists Now
 
-- Installable TypeScript CLI and local `agent web` control plane.
+- Installable TypeScript CLI and local `warden web` control plane.
 - `.agent/` file-backed ledger plus `events.jsonl` runtime event ledger.
 - Runtime projection and run detail UI/SSE event endpoint.
 - Project/task/run/approval/apply/worktree/product-gate CLI and Web flows.

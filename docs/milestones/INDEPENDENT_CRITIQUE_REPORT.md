@@ -1,4 +1,4 @@
-# Independent Critique Report — Dominic Orchestration
+# Independent Critique Report — Warden
 
 **Date:** 2026-06-02
 **Method:** 7-dimension multi-agent critique (claim-vs-reality, architecture, code quality, test integrity, security, scope/PRD, process hygiene), each finding adversarially verified by an independent agent. Key facts reproduced empirically.
@@ -60,7 +60,7 @@ Result: **two divergent products.** (1) Committed `HEAD` = a self-contained v0 c
 
 ## What genuinely works (fair credit)
 
-- Installable CLI (`agent --version/--help`) and a real local SSR web UI with **solid web security**: output escaping (`esc`/`attr`, stored-XSS safe), per-server CSRF token + `timingSafeEqual`, Origin allowlist, HttpOnly cookie, loopback-only bind by default.
+- Installable CLI (`warden --version/--help`) and a real local SSR web UI with **solid web security**: output escaping (`esc`/`attr`, stored-XSS safe), per-server CSRF token + `timingSafeEqual`, Origin allowlist, HttpOnly cookie, loopback-only bind by default.
 - Project/Task/Run CRUD over a `.agent/` file store, index rebuild, **real git worktree isolation** (`core.ts:125`), actual worktree-diff conflict / evidence-mismatch blocking (`core.ts:182`), and an **approval-gated, sha256-bound, atomic `git apply --check`** path (`core.ts:240`). This multi-worker safety path is genuinely well built.
 - **Scope narrowing is legitimate:** PRD §3 Non-Goals explicitly defer Web UI / multi-agent / SaaS / custom Agents SDK (v3+). The v0-v2 limitation is faithful to the PRD, not post-hoc shrinking.
 

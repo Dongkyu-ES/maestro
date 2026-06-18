@@ -9,9 +9,9 @@
 
 ## 1. Contract Purpose
 
-This contract defines the minimum provider-neutral runtime semantics Dominic Orchestration must own before it can claim cross-model agent orchestration.
+This contract defines the minimum provider-neutral runtime semantics Warden must own before it can claim cross-model agent orchestration.
 
-The product may call OpenAI, Anthropic, Gemini, local models, Codex CLI, Claude Code, OMX, agy, or shell. None of those providers/harnesses owns completion. Dominic Orchestration owns completion through this contract.
+The product may call OpenAI, Anthropic, Gemini, local models, Codex CLI, Claude Code, OMX, agy, or shell. None of those providers/harnesses owns completion. Warden owns completion through this contract.
 
 ---
 
@@ -19,7 +19,7 @@ The product may call OpenAI, Anthropic, Gemini, local models, Codex CLI, Claude 
 
 ### 2.1 Canonical owner
 
-Dominic Orchestration owns:
+Warden owns:
 
 - base rules;
 - memory selection and verification labels;
@@ -63,7 +63,7 @@ A run using these surfaces must label which surfaces are unowned.
 | `degraded` | Product-owned path works with reduced capability, cost, fidelity, or automation. |
 | `unproven` | The system may work, but evidence is insufficient or not recomputable. |
 | `unsupported` | The system does not support the behavior. |
-| `native-harness-assisted` | A vendor-native agent harness materially participated; evidence must be separated from product-owned proof. |
+| `native-harness-assisted` | A vendor-native warden harness materially participated; evidence must be separated from product-owned proof. |
 
 Rules:
 

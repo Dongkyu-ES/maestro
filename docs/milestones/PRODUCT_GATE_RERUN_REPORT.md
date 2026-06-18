@@ -23,7 +23,7 @@ The gate must compare the actual product against `dominic_orchestration_PRD.md` 
 
 | Original PRD / v0-v2 target | Current runnable evidence | Delta |
 | --- | --- | --- |
-| Local webservice control plane | `agent web`, loopback server, task/run/approval forms | PRD-scoped local target satisfied; not SaaS and not claimed as SaaS |
+| Local webservice control plane | `warden web`, loopback server, task/run/approval forms | PRD-scoped local target satisfied; not SaaS and not claimed as SaaS |
 | Task/run/review durable state | `.agent/tasks`, `.agent/runs`, `.agent/index.json`, review/next-actions | Satisfied for local file-backed product |
 | Manager/Worker/Reviewer v1 runtime | roles mode launches manager, worker, reviewer process records | Process-backed adapter exists; not a full custom LLM runtime, which PRD places later |
 | Bounded v2 multi-worker | git worktrees, bounded max workers, scheduler evidence, conflict reports | Satisfied for local worktree model |
@@ -37,7 +37,7 @@ The gate must compare the actual product against `dominic_orchestration_PRD.md` 
 
 Evidence:
 
-- PRD says Dominic Orchestration is a local webservice control plane.
+- PRD says Warden is a local webservice control plane.
 - PRD v0/v1/v2 scope is single run, manager/worker/reviewer, bounded multi-worker.
 - PRD explicitly excludes initial SaaS, automatic push, full custom Agents SDK runtime, and broad MCP integration.
 
@@ -52,7 +52,7 @@ This PASS does **not** mean “universal final agent platform 95% complete.” I
 Why it passes now:
 
 - The completion standard now contains an explicit rubber-stamp failure analysis.
-- A new executable product gate command exists: `agent quality gate --write`.
+- A new executable product gate command exists: `warden quality gate --write`.
 - The gate now emits a generated `result_reality_delta` array derived from current PRD anchors, built CLI behavior, acceptance matrix rows, dogfood identifiers, and regression evidence.
 - The gate checks PRD scope integrity, anti-self-deception language, real execution evidence, deterministic evidence integrity, safety/policy, UX exposure, tests, and dogfood evidence.
 - Regression tests cover both the passing current repo and a fake string-only repo that must fail.
@@ -91,7 +91,7 @@ The exact command output is recorded in the current agent transcript and the lat
 
 Allowed completion claim now:
 
-> Prototype / control-plane scaffold with hard blockers; 90/95 claims forbidden until signed independent-review provenance exists and `agent quality gate --write` passes.
+> Prototype / control-plane scaffold with hard blockers; 90/95 claims forbidden until signed independent-review provenance exists and `warden quality gate --write` passes.
 
 Forbidden completion claim:
 

@@ -115,50 +115,50 @@ function cookieValue(req: any, name: string): string {
 }
 function usage(): string {
   return `usage:
-  agent --help|--version
-  agent init
-  agent project add|list|show|remove
-  agent index rebuild|show
-  agent task add|list|show|status|update|archive
-  agent run create|start|collect|cancel|latest
-  agent run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
-  agent run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
-  agent harness run <goal> [--executor-bin <path>]
-  agent loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]
-  agent runtime projection
-  agent context verify --run <run-id>
-  agent runtime verify-ledger <run-id>
-  agent runtime full-target-gate <run-id> [--append-pass-event]
-  agent runtime m8-boundary-evidence <run-id>
-  agent runtime codex-lifecycle-proof <run-id> --thread-id <thread-id>
-  agent runtime ui-agreement <run-id>
-  agent runtime verify-full-target <run-id> [--append-verified-event]
-  agent verifier run --run <run-id>
-  agent runtime prepare-review-gate --code-reviewer-artifact .agent/review-gates/code-reviewer.md --architect-artifact .agent/review-gates/architect.md --code-reviewer-notification .agent/review-gates/subagent-notifications/code-reviewer.json --architect-notification .agent/review-gates/subagent-notifications/architect.json --code-reviewer-agent PASTE_CODE_REVIEWER_AGENT_ID --architect-agent PASTE_ARCHITECT_AGENT_ID
-  agent runtime sign-review --custody reviewer-ci [--custody-issuer ISSUER --review-session RUN_ID]
-  agent review latest
-  agent approvals
-  agent approval request|approve|reject
-  agent apply propose|approved
-  agent report github-projects [--github-dir ~/Documents/github] [--out-dir reports/github-projects/<timestamp>]
-  agent promotions
-  agent promotion approve|reject|apply <id>
-  agent promotion verify-learning
-  agent provider conformance --all
-  agent skills verify-contracts [--run <run-id>]
-  agent worktrees cleanup
-  agent maintenance reconcile-runs
-  agent quality gate [--write]
-  agent web [--host 127.0.0.1] [--port 4317] [--unsafe-host]
-  agent orchestrate serve [--host 127.0.0.1] [--port 4319] [--auth-token TOKEN] [--verify-cmd CMD] [--unsafe-host]
-  agent orchestrate run --file <graph.json> [--reconcile] [--verify-cmd CMD] [--concurrency N]`;
+  warden --help|--version
+  warden init
+  warden project add|list|show|remove
+  warden index rebuild|show
+  warden task add|list|show|status|update|archive
+  warden run create|start|collect|cancel|latest
+  warden run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
+  warden run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
+  warden harness run <goal> [--executor-bin <path>]
+  warden loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]
+  warden runtime projection
+  warden context verify --run <run-id>
+  warden runtime verify-ledger <run-id>
+  warden runtime full-target-gate <run-id> [--append-pass-event]
+  warden runtime m8-boundary-evidence <run-id>
+  warden runtime codex-lifecycle-proof <run-id> --thread-id <thread-id>
+  warden runtime ui-agreement <run-id>
+  warden runtime verify-full-target <run-id> [--append-verified-event]
+  warden verifier run --run <run-id>
+  warden runtime prepare-review-gate --code-reviewer-artifact .agent/review-gates/code-reviewer.md --architect-artifact .agent/review-gates/architect.md --code-reviewer-notification .agent/review-gates/subagent-notifications/code-reviewer.json --architect-notification .agent/review-gates/subagent-notifications/architect.json --code-reviewer-agent PASTE_CODE_REVIEWER_AGENT_ID --architect-agent PASTE_ARCHITECT_AGENT_ID
+  warden runtime sign-review --custody reviewer-ci [--custody-issuer ISSUER --review-session RUN_ID]
+  warden review latest
+  warden approvals
+  warden approval request|approve|reject
+  warden apply propose|approved
+  warden report github-projects [--github-dir ~/Documents/github] [--out-dir reports/github-projects/<timestamp>]
+  warden promotions
+  warden promotion approve|reject|apply <id>
+  warden promotion verify-learning
+  warden provider conformance --all
+  warden skills verify-contracts [--run <run-id>]
+  warden worktrees cleanup
+  warden maintenance reconcile-runs
+  warden quality gate [--write]
+  warden web [--host 127.0.0.1] [--port 4317] [--unsafe-host]
+  warden orchestrate serve [--host 127.0.0.1] [--port 4319] [--auth-token TOKEN] [--verify-cmd CMD] [--unsafe-host]
+  warden orchestrate run --file <graph.json> [--reconcile] [--verify-cmd CMD] [--concurrency N]`;
 }
 
 async function main() {
   const [, , cmd, sub, ...rest] = process.argv;
   try {
     if (cmd === '--version' || cmd === 'version') {
-      console.log('dominic-orchestration 0.1.0');
+      console.log('warden 0.1.0');
       return;
     }
     if (cmd === '--help' || cmd === 'help' || !cmd) {
@@ -181,7 +181,7 @@ async function main() {
     }
     if (cmd === 'project' && sub === 'show') {
       const id = rest[0];
-      if (!id) throw new Error('usage: agent project show <id>');
+      if (!id) throw new Error('usage: warden project show <id>');
       const project = listProjects().find((p) => p.id === id);
       if (!project) throw new Error(`project not found: ${id}`);
       console.log(JSON.stringify(project, null, 2));
@@ -189,7 +189,7 @@ async function main() {
     }
     if (cmd === 'project' && sub === 'remove') {
       const id = rest[0];
-      if (!id) throw new Error('usage: agent project remove <id>');
+      if (!id) throw new Error('usage: warden project remove <id>');
       removeProject(id);
       return;
     }
@@ -203,7 +203,7 @@ async function main() {
     }
     if (cmd === 'task' && sub === 'add') {
       const title = rest.join(' ').trim();
-      if (!title) throw new Error('usage: agent task add "title"');
+      if (!title) throw new Error('usage: warden task add "title"');
       const task = addTask(title);
       console.log(`${task.id}\t${task.title}`);
       return;
@@ -214,7 +214,7 @@ async function main() {
     }
     if (cmd === 'task' && sub === 'show') {
       const id = rest[0];
-      if (!id) throw new Error('usage: agent task show <task-id>');
+      if (!id) throw new Error('usage: warden task show <task-id>');
       const p = taskPath(id);
       if (!existsSync(p)) throw new Error(`task not found: ${id}`);
       console.log(readFileSync(p, 'utf8'));
@@ -223,19 +223,19 @@ async function main() {
     if (cmd === 'task' && sub === 'status') {
       const id = rest[0];
       const status = rest[1] as any;
-      if (!id || !status) throw new Error('usage: agent task status <task-id> <status>');
+      if (!id || !status) throw new Error('usage: warden task status <task-id> <status>');
       console.log(JSON.stringify(updateTask(id, { status }), null, 2));
       return;
     }
     if (cmd === 'task' && sub === 'update') {
       const id = rest[0];
-      if (!id) throw new Error('usage: agent task update <task-id> [--title title] [--status status]');
+      if (!id) throw new Error('usage: warden task update <task-id> [--title title] [--status status]');
       console.log(JSON.stringify(updateTask(id, { title: arg('--title'), status: arg('--status') as any }), null, 2));
       return;
     }
     if (cmd === 'task' && sub === 'archive') {
       const id = rest[0];
-      if (!id) throw new Error('usage: agent task archive <task-id>');
+      if (!id) throw new Error('usage: warden task archive <task-id>');
       console.log(JSON.stringify(updateTask(id, { status: 'abandoned' }), null, 2));
       return;
     }
@@ -243,7 +243,7 @@ async function main() {
       const id = firstNonFlag(rest);
       if (!id)
         throw new Error(
-          'usage: agent run create <task-id> [--mode roles|multi] [--executor command|codex|omx|agy] [--max-workers N] [--command cmd]',
+          'usage: warden run create <task-id> [--mode roles|multi] [--executor command|codex|omx|agy] [--max-workers N] [--command cmd]',
         );
       const mode = (arg('--mode', has('--multi') ? 'multi' : has('--roles') ? 'roles' : 'basic') || 'basic') as any;
       const maxWorkers = Number(arg('--max-workers', '2'));
@@ -256,7 +256,7 @@ async function main() {
     }
     if (cmd === 'run' && sub === 'start') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent run start <run-id> [--command cmd] [--sandbox mode] [--timeout-ms N]');
+      if (!id) throw new Error('usage: warden run start <run-id> [--command cmd] [--sandbox mode] [--timeout-ms N]');
       const timeoutArg = arg('--timeout-ms');
       const run = await startRun(id, {
         command: arg('--command'),
@@ -268,14 +268,14 @@ async function main() {
     }
     if (cmd === 'run' && sub === 'collect') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent run collect <run-id>');
+      if (!id) throw new Error('usage: warden run collect <run-id>');
       const run = collectRun(id);
       console.log(`collected: ${run.id}\nstatus: ${run.status}\ndecision: ${run.decision}`);
       return;
     }
     if (cmd === 'run' && sub === 'cancel') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent run cancel <run-id>');
+      if (!id) throw new Error('usage: warden run cancel <run-id>');
       cancelRun(id);
       console.log(`cancelled: ${id}`);
       return;
@@ -286,7 +286,7 @@ async function main() {
     }
     if (cmd === 'run' && sub === 'native-evidence-smoke') {
       const task = arg('--task');
-      if (!task) throw new Error('usage: agent run native-evidence-smoke --task <fixture-task> [--timeout-ms N]');
+      if (!task) throw new Error('usage: warden run native-evidence-smoke --task <fixture-task> [--timeout-ms N]');
       const timeoutArg = arg('--timeout-ms');
       const report = await runNativeEvidenceSmoke({
         root: process.cwd(),
@@ -300,7 +300,7 @@ async function main() {
     }
     if (cmd === 'harness' && sub === 'run') {
       const goal = rest.filter((item, index) => item !== '--executor-bin' && rest[index - 1] !== '--executor-bin').join(' ').trim();
-      if (!goal) throw new Error('usage: agent harness run <goal> [--executor-bin <path>]');
+      if (!goal) throw new Error('usage: warden harness run <goal> [--executor-bin <path>]');
       const report = await runHarnessSlice({ root: process.cwd(), goal, executorBin: arg('--executor-bin') });
       console.log(JSON.stringify(report, null, 2));
       if (report.state !== 'completed') process.exitCode = 2;
@@ -313,7 +313,7 @@ async function main() {
         .join(' ')
         .trim();
       if (!goal || !acceptanceFile)
-        throw new Error('usage: agent loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]');
+        throw new Error('usage: warden loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]');
       const report = await runClosedLoop({
         root: process.cwd(),
         goal,
@@ -329,7 +329,7 @@ async function main() {
     }
     if (cmd === 'context' && sub === 'verify') {
       const id = arg('--run') || rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent context verify --run <run-id>');
+      if (!id) throw new Error('usage: warden context verify --run <run-id>');
       const report = verifyContextProvenance({ root: process.cwd(), runId: id, writeIfMissing: true });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
@@ -341,7 +341,7 @@ async function main() {
     }
     if (cmd === 'runtime' && sub === 'verify-ledger') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent runtime verify-ledger <run-id>');
+      if (!id) throw new Error('usage: warden runtime verify-ledger <run-id>');
       const runDir = runPath(id);
       const events = readRuntimeEvents(runDir);
       const { createRuntimeLedgerHeadBinding, validateRuntimeLedger } = await import('./events/ledger.js');
@@ -351,7 +351,7 @@ async function main() {
     }
     if (cmd === 'runtime' && sub === 'full-target-gate') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent runtime full-target-gate <run-id> [--append-pass-event]');
+      if (!id) throw new Error('usage: warden runtime full-target-gate <run-id> [--append-pass-event]');
       const report = writeFullTargetGateArtifact({
         root: process.cwd(),
         agentDir: '.agent',
@@ -364,7 +364,7 @@ async function main() {
     }
     if (cmd === 'runtime' && sub === 'm8-boundary-evidence') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent runtime m8-boundary-evidence <run-id>');
+      if (!id) throw new Error('usage: warden runtime m8-boundary-evidence <run-id>');
       console.log(
         JSON.stringify(appendM8BoundaryEvidence({ root: process.cwd(), agentDir: '.agent', runId: id }), null, 2),
       );
@@ -374,7 +374,7 @@ async function main() {
       const id = firstNonFlag(rest) || latestRunId();
       const threadId = arg('--thread-id');
       if (!id || !threadId)
-        throw new Error('usage: agent runtime codex-lifecycle-proof <run-id> --thread-id <thread-id>');
+        throw new Error('usage: warden runtime codex-lifecycle-proof <run-id> --thread-id <thread-id>');
       const report = await exerciseCodexAppServerLifecycle({
         root: process.cwd(),
         agentDir: '.agent',
@@ -387,7 +387,7 @@ async function main() {
     }
     if (cmd === 'runtime' && sub === 'ui-agreement') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent runtime ui-agreement <run-id>');
+      if (!id) throw new Error('usage: warden runtime ui-agreement <run-id>');
       const report = writeUiAgreementSmoke({ root: process.cwd(), agentDir: '.agent', runId: id });
       console.log(JSON.stringify(report, null, 2));
       if (report.status !== 'PASS') process.exitCode = 2;
@@ -395,7 +395,7 @@ async function main() {
     }
     if (cmd === 'runtime' && sub === 'verify-full-target') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent runtime verify-full-target <run-id> [--append-verified-event]');
+      if (!id) throw new Error('usage: warden runtime verify-full-target <run-id> [--append-verified-event]');
       const report = verifyFullTargetGateArtifact({
         agentDir: '.agent',
         runId: id,
@@ -407,7 +407,7 @@ async function main() {
     }
     if (cmd === 'verifier' && sub === 'run') {
       const id = arg('--run') || rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent verifier run --run <run-id>');
+      if (!id) throw new Error('usage: warden verifier run --run <run-id>');
       const report = verifyNativeEvidenceRun({ root: process.cwd(), runId: id });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
@@ -430,7 +430,7 @@ async function main() {
         !architectAgentId
       )
         throw new Error(
-          'usage: agent runtime prepare-review-gate --code-reviewer-artifact .agent/review-gates/code-reviewer.md --architect-artifact .agent/review-gates/architect.md --code-reviewer-notification .agent/review-gates/subagent-notifications/code-reviewer.json --architect-notification .agent/review-gates/subagent-notifications/architect.json --code-reviewer-agent PASTE_CODE_REVIEWER_AGENT_ID --architect-agent PASTE_ARCHITECT_AGENT_ID',
+          'usage: warden runtime prepare-review-gate --code-reviewer-artifact .agent/review-gates/code-reviewer.md --architect-artifact .agent/review-gates/architect.md --code-reviewer-notification .agent/review-gates/subagent-notifications/code-reviewer.json --architect-notification .agent/review-gates/subagent-notifications/architect.json --code-reviewer-agent PASTE_CODE_REVIEWER_AGENT_ID --architect-agent PASTE_ARCHITECT_AGENT_ID',
         );
       const reviewerText = readReviewArtifact(root, reviewerArtifactPath);
       const architectText = readReviewArtifact(root, architectArtifactPath);
@@ -559,13 +559,13 @@ async function main() {
     }
     if (cmd === 'approval' && (sub === 'approve' || sub === 'reject')) {
       const id = rest[0];
-      if (!id) throw new Error(`usage: agent approval ${sub} <id>`);
+      if (!id) throw new Error(`usage: warden approval ${sub} <id>`);
       console.log(JSON.stringify(resolveApproval(id, sub === 'approve' ? 'approved' : 'rejected'), null, 2));
       return;
     }
     if (cmd === 'approval' && sub === 'request') {
       const runId = rest[0] || latestRunId();
-      if (!runId) throw new Error('usage: agent approval request <run-id>');
+      if (!runId) throw new Error('usage: warden approval request <run-id>');
       console.log(
         JSON.stringify(
           createApproval(runId, arg('--type', 'manual')!, 'medium', arg('--summary', 'manual approval request')!),
@@ -577,13 +577,13 @@ async function main() {
     }
     if (cmd === 'apply' && sub === 'propose') {
       const id = rest[0] || latestRunId();
-      if (!id) throw new Error('usage: agent apply propose <run-id>');
+      if (!id) throw new Error('usage: warden apply propose <run-id>');
       console.log(JSON.stringify(proposeApply(id), null, 2));
       return;
     }
     if (cmd === 'apply' && sub === 'approved') {
       const id = rest[0];
-      if (!id) throw new Error('usage: agent apply approved <approval-id>');
+      if (!id) throw new Error('usage: warden apply approved <approval-id>');
       console.log(JSON.stringify(applyApprovedProposal(id), null, 2));
       return;
     }
@@ -608,13 +608,13 @@ async function main() {
     }
     if (cmd === 'promotion' && (sub === 'approve' || sub === 'reject')) {
       const id = rest[0];
-      if (!id) throw new Error(`usage: agent promotion ${sub} <id>`);
+      if (!id) throw new Error(`usage: warden promotion ${sub} <id>`);
       console.log(JSON.stringify(resolvePromotion(id, sub === 'approve' ? 'approved' : 'rejected'), null, 2));
       return;
     }
     if (cmd === 'promotion' && sub === 'apply') {
       const id = rest[0];
-      if (!id) throw new Error('usage: agent promotion apply <id>');
+      if (!id) throw new Error('usage: warden promotion apply <id>');
       console.log(JSON.stringify(applyApprovedPromotion(id), null, 2));
       return;
     }
@@ -625,7 +625,7 @@ async function main() {
       return;
     }
     if (cmd === 'provider' && sub === 'conformance') {
-      if (!has('--all')) throw new Error('usage: agent provider conformance --all');
+      if (!has('--all')) throw new Error('usage: warden provider conformance --all');
       const report = runProviderConformance({ root: process.cwd() });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
@@ -659,7 +659,7 @@ async function main() {
     }
     if (cmd === 'orchestrate' && sub === 'run') {
       const file = arg('--file');
-      if (!file) throw new Error('usage: agent orchestrate run --file <graph.json> [--reconcile] [--verify-cmd CMD]');
+      if (!file) throw new Error('usage: warden orchestrate run --file <graph.json> [--reconcile] [--verify-cmd CMD]');
       const spec = JSON.parse(readFileSync(file, 'utf8')) as {
         goal?: string;
         nodes?: { id: string; goal: string; deps?: string[]; executor?: string; purpose?: string }[];
@@ -711,7 +711,7 @@ async function serveWeb(): Promise<void> {
   const unsafeHost = has('--unsafe-host');
   if (!['127.0.0.1', 'localhost'].includes(host) && !unsafeHost)
     throw new Error(
-      'agent web only binds loopback hosts by default; pass --unsafe-host with --auth-token to acknowledge remote command/control risk',
+      'warden web only binds loopback hosts by default; pass --unsafe-host with --auth-token to acknowledge remote command/control risk',
     );
   const authToken = arg('--auth-token') || process.env.AGENT_WEB_TOKEN || '';
   if (unsafeHost && !authToken)
@@ -882,7 +882,7 @@ async function serveWeb(): Promise<void> {
       res.end(String(err.message || err));
     }
   });
-  server.listen(port, host, () => console.log(`agent web listening at http://${host}:${port}`));
+  server.listen(port, host, () => console.log(`warden web listening at http://${host}:${port}`));
 }
 
 main();

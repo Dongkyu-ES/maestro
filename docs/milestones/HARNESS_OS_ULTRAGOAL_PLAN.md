@@ -12,9 +12,9 @@
 
 ## 0. Blunt thesis
 
-Dominic Orchestration must become a **provider-neutral evidence-and-control layer** over rented lower-level executors.
+Warden must become a **provider-neutral evidence-and-control layer** over rented lower-level executors.
 
-The product does **not** win by rebuilding the full coding-agent loop from scratch first. It wins by owning the parts that cannot be trusted to a vendor harness:
+The product does **not** win by rebuilding the full coding-warden loop from scratch first. It wins by owning the parts that cannot be trusted to a vendor harness:
 
 - base rules;
 - memory provenance;
@@ -635,7 +635,7 @@ The next slice is **not** “finish all architecture.” It is the smallest dail
 5. high-intensity critic artifact;
 6. UI/projection displays `native-harness-assisted`, raw evidence, and unowned surfaces.
 
-Success means a real task can run through a rented executor while Dominic Orchestration owns the evidence and refuses to lie about what it does not own.
+Success means a real task can run through a rented executor while Warden owns the evidence and refuses to lie about what it does not own.
 
 ---
 

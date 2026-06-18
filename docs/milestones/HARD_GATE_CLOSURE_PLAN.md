@@ -15,7 +15,7 @@ Latest local product gate artifact must be resolved at verification time with `l
 | Gate | Current state | Why it fails | Real closure condition |
 | --- | --- | --- | --- |
 | Product Completeness Gate | FAIL | `FULL_PRODUCT_ROADMAP.md` still admits current blockers: disputed/scaffolded status, v1 role behavior PARTIAL, promotion lifecycle PARTIAL, anti-self-deception FAIL-CLOSED. | Roadmap blockers may be removed only after executable tests and live artifacts prove the v1 role loop and promotion loop are real product behavior. |
-| Hard Completion Ceiling Gate | FAIL | hard-gate table still has one FAIL row and independent-review provenance is absent or not custody-attested. | `agent quality gate --write` returns PASS with ceiling 95 only after product completeness passes and a reviewer/CI-owned custody signature validates current review artifacts. |
+| Hard Completion Ceiling Gate | FAIL | hard-gate table still has one FAIL row and independent-review provenance is absent or not custody-attested. | `warden quality gate --write` returns PASS with ceiling 95 only after product completeness passes and a reviewer/CI-owned custody signature validates current review artifacts. |
 
 ## Root causes, not symptoms
 
@@ -36,7 +36,7 @@ Current anchor: `classifyRunPromotions(...)`, `proposeApply(...)`, and `applyApp
 
 ### R3. independent review can be mechanically signed, but independence is operational
 
-Current anchor: `docs/milestones/REVIEW_PROVENANCE.md` and `agent runtime sign-review --custody ...` require artifact and custody HMACs. This blocks hand-authored fixtures, but it still cannot prove independence if the implementer owns the keys. Completion needs a reviewer/CI-owned signing path outside the implementer write path.
+Current anchor: `docs/milestones/REVIEW_PROVENANCE.md` and `warden runtime sign-review --custody ...` require artifact and custody HMACs. This blocks hand-authored fixtures, but it still cannot prove independence if the implementer owns the keys. Completion needs a reviewer/CI-owned signing path outside the implementer write path.
 
 ### R4. historical reports inflated completion and must remain subordinate to the gate
 
@@ -165,8 +165,8 @@ node dist/cli.js quality gate --write
 scripts/live-integration-smoke.mjs
 npm run e2e
 # in reviewer/CI custody, not implementer custody:
-agent runtime prepare-review-gate --code-reviewer-artifact <path> --architect-artifact <path> --code-reviewer-notification <path> --architect-notification <path> --code-reviewer-agent <id> --architect-agent <id>
-agent runtime sign-review --custody reviewer-ci --custody-issuer <trusted-reviewer-ci> --review-session <ci-run-or-review-session-id>
+warden runtime prepare-review-gate --code-reviewer-artifact <path> --architect-artifact <path> --code-reviewer-notification <path> --architect-notification <path> --code-reviewer-agent <id> --architect-agent <id>
+warden runtime sign-review --custody reviewer-ci --custody-issuer <trusted-reviewer-ci> --review-session <ci-run-or-review-session-id>
 node dist/cli.js quality gate --write
 ```
 

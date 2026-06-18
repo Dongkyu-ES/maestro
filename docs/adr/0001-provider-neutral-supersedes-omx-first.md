@@ -6,9 +6,9 @@
 
 ## Context
 
-The original PRD positioned OMX/Codex as the first-class executor strategy and treated vendor agent harnesses as peer runtimes. Two analyses (a code-grounded audit and a cross-critique with Codex) converged on a different ultimate goal: Dominic Orchestration must **own the harness** (base rules, memory, hooks, context, policy, event ledger, verifier, promotion, state transitions) and treat LLMs and vendor CLIs as **interchangeable lower-level executors**. Letting each vendor's native harness (its own `AGENTS.md`/`CLAUDE.md`, memory, hooks, subagents, compaction, permission model) decide behavior makes cross-model parity impossible to prove — the harness, not the model, silently changes the task.
+The original PRD positioned OMX/Codex as the first-class executor strategy and treated vendor agent harnesses as peer runtimes. Two analyses (a code-grounded audit and a cross-critique with Codex) converged on a different ultimate goal: Warden must **own the harness** (base rules, memory, hooks, context, policy, event ledger, verifier, promotion, state transitions) and treat LLMs and vendor CLIs as **interchangeable lower-level executors**. Letting each vendor's native harness (its own `AGENTS.md`/`CLAUDE.md`, memory, hooks, subagents, compaction, permission model) decide behavior makes cross-model parity impossible to prove — the harness, not the model, silently changes the task.
 
-A second, equally binding finding from current-repo reality: making the **direct provider-API path** (OpenAI/Anthropic) the *canonical proof path* is premature. The only working executor today is `src/runtime/codex-exec-runner.ts` (`codex exec`); direct-API is 0% (`package.json` `dependencies={}`). Rebuilding the commoditized agent loop from scratch just to relabel it "canonical" would strand the product as a toy while every real run routed through the native loop.
+A second, equally binding finding from current-repo reality: making the **direct provider-API path** (OpenAI/Anthropic) the *canonical proof path* is premature. The only working executor today is `src/runtime/codex-exec-runner.ts` (`codex exec`); direct-API is 0% (`package.json` `dependencies={}`). Rebuilding the commoditized warden loop from scratch just to relabel it "canonical" would strand the product as a toy while every real run routed through the native loop.
 
 ## Decision
 

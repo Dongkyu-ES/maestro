@@ -3,7 +3,7 @@
 **Date:** 2026-06-04
 **Status:** Design rewrite + self-critique. This is not a completion claim.
 **Supersedes:** prior “Ultimate Goal → Divide & Conquer Plan” framing that treated Codex/OMX/Claude-style native agent runtimes as first-class product runtime targets too early.
-**Controlling thesis:** Dominic Orchestration must own the harness. LLMs are independent lower-level executors, not the source of runtime truth.
+**Controlling thesis:** Warden must own the harness. LLMs are independent lower-level executors, not the source of runtime truth.
 
 > **BINDING CORRECTION (2026-06-04, applied):** A 5-lens code-grounded critique found this draft *right in direction, wrong in sequencing* (`structure_survives: false`; honest re-baseline vs this goal ≈ **7%**). Two reversals are now folded into §4.2/§5/§11 below and detailed in `HARNESS_OS_CORRECTED_PLAN.md`: (1) **own the LAYER, not the loop** — the canonical execution substrate is the existing native executor (`codex exec`) wrapped by the evidence contract; direct-provider API is an *optional future* adapter, NOT the proof path; (2) a new **M‑1 Integrity Baseline** blocks M0, and the shipped self-certifying gate (`product-gate.ts`, `core.ts:784/1822`) must be demolished before M7. Where this banner and the corrected plan disagree with the original prose below, the corrected plan wins.
 
@@ -15,9 +15,9 @@ The old direction was close but still too vendor-agent-shaped: “wrap Codex/OMX
 
 The redesigned target is stricter:
 
-> **Dominic Orchestration is a provider-neutral local control plane that builds its own base rules, memory, hook lifecycle, context composer, tool policy, event ledger, verifier, and promotion loop. OpenAI/Anthropic/Gemini/local models are invoked as disposable lower-level LLM executors. Codex CLI, Claude Code, OMX, and other native agent harnesses may be used only as optional compatibility adapters, never as the controlling harness.**
+> **Warden is a provider-neutral local control plane that builds its own base rules, memory, hook lifecycle, context composer, tool policy, event ledger, verifier, and promotion loop. OpenAI/Anthropic/Gemini/local models are invoked as disposable lower-level LLM executors. Codex CLI, Claude Code, OMX, and other native agent harnesses may be used only as optional compatibility adapters, never as the controlling harness.**
 
-The ultimate product is therefore not “a better Codex wrapper” or “a bridge between Codex and Claude Code.” It is a **cross-model agent harness OS** whose own deterministic contracts force different models to satisfy the same acceptance criteria.
+The ultimate product is therefore not “a better Codex wrapper” or “a bridge between Codex and Claude Code.” It is a **cross-model warden harness OS** whose own deterministic contracts force different models to satisfy the same acceptance criteria.
 
 ---
 
@@ -30,7 +30,7 @@ Codex and Claude Code are both strong, but their harnesses are strong in differe
 - Codex/OMX-style operation is naturally centered on `AGENTS.md`, Codex config/hooks, skills, plugins, subagents, sandbox/approval, and local runtime wrappers.
 - Claude Code-style operation is naturally centered on `CLAUDE.md`, `.claude/rules`, auto memory, skills, custom subagents, rich hook events, settings, and permission modes.
 
-If Dominic Orchestration treats those native harnesses as peer runtimes, the product inherits their differences:
+If Warden treats those native harnesses as peer runtimes, the product inherits their differences:
 
 - different instruction precedence;
 - different memory semantics;
@@ -46,7 +46,7 @@ That makes cross-model parity impossible to prove. The same model quality can pr
 
 The model is not the product. The vendor agent CLI is not the product. The harness is the product.
 
-So Dominic Orchestration must define:
+So Warden must define:
 
 1. the base instruction contract;
 2. the memory authority model;
@@ -65,11 +65,11 @@ LLMs then become interchangeable workers under this contract.
 
 ## 2. New Ultimate Goal
 
-Dominic Orchestration is complete when a clean local install can take a user goal, assemble deterministic context and policy, invoke one or more model providers as bounded executors, run allowed tools through the orchestration layer, collect evidence, verify acceptance gates, and update approved learning artifacts — **without depending on Codex CLI, Claude Code, OMX, or any vendor-native agent harness for correctness.**
+Warden is complete when a clean local install can take a user goal, assemble deterministic context and policy, invoke one or more model providers as bounded executors, run allowed tools through the orchestration layer, collect evidence, verify acceptance gates, and update approved learning artifacts — **without depending on Codex CLI, Claude Code, OMX, or any vendor-native warden harness for correctness.**
 
 ### 2.1 Invariants
 
-1. **Harness-owned truth.** State, memory, policy, hooks, verifier decisions, and lifecycle transitions live in Dominic Orchestration, not in vendor CLIs.
+1. **Harness-owned truth.** State, memory, policy, hooks, verifier decisions, and lifecycle transitions live in Warden, not in vendor CLIs.
 2. **LLM-as-executor.** OpenAI, Anthropic, Gemini, local models, Codex CLI, Claude Code, and shell are all adapter choices behind one executor contract.
 3. **Native agent minimization.** Vendor-native agent harnesses are optional compatibility bridges. They cannot be required for product identity, hard gates, or completion claims.
 4. **Canonical base rules.** The product owns its own base rules (`BaseRuleSet`) and composes them into prompts/tool policies. `AGENTS.md`/`CLAUDE.md` may be generated or imported, but they are not the canonical authority.
@@ -89,7 +89,7 @@ Dominic Orchestration is complete when a clean local install can take a user goa
 | **Harness** | Dominic-owned deterministic lifecycle: rules, hooks, memory selection, policy, tool execution, ledger, gates. |
 | **LLM Executor** | A model call or model session that proposes text/tool intents under a bounded contract. |
 | **Native Agent Harness** | Codex CLI, Claude Code, OMX, agy, or any environment with its own instructions/hooks/memory/subagents. |
-| **Compatibility Adapter** | A bridge to a native agent harness used only when useful, labeled as such, never trusted as canonical. |
+| **Compatibility Adapter** | A bridge to a native warden harness used only when useful, labeled as such, never trusted as canonical. |
 | **BaseRuleSet** | Product-owned invariant rules. Compiled into prompts and policy checks. |
 | **ContextBundle** | Deterministic, hash-addressed context assembled from task, repo, memory, rules, policy, and artifacts. |
 | **ToolIntent** | Model-proposed action before policy approval and execution. |
@@ -102,7 +102,7 @@ Dominic Orchestration is complete when a clean local install can take a user goa
 ## 4. Target Architecture
 
 ```text
-Dominic Orchestration
+Warden
 ├─ Operator UI / CLI
 ├─ Goal Intake
 ├─ BaseRule Engine
@@ -143,7 +143,7 @@ review text says pass -> state complete
 
 ### 4.2 Canonical path is native-executor-over-evidence-contract (CORRECTED)
 
-> ~~Original draft: "Direct model path is the primary product path."~~ **Reversed.** The only working executor today is the native `codex exec` adapter; direct-provider API is 0% (`package.json` `dependencies={}`). Rebuilding the commoditized agent loop (tool-calling/patch/retry/compaction) from scratch for a solo dev — while every real run keeps routing through `codex exec` and is stamped `native-harness-assisted` forever — is self-defeating.
+> ~~Original draft: "Direct model path is the primary product path."~~ **Reversed.** The only working executor today is the native `codex exec` adapter; direct-provider API is 0% (`package.json` `dependencies={}`). Rebuilding the commoditized warden loop (tool-calling/patch/retry/compaction) from scratch for a solo dev — while every real run keeps routing through `codex exec` and is stamped `native-harness-assisted` forever — is self-defeating.
 
 The first-class runtime path is a **thin native-executor adapter wrapped by the product's evidence contract**: rent the loop (Codex CLI / Claude Code as commodity agent loops), own the layer (ledger + verifier + promotion + projection + policy) on top. A run is canonical when its evidence is recomputable in the Dominic ledger and passes the Dominic verifier — regardless of which loop produced the diffs.
 
@@ -158,7 +158,7 @@ Codex CLI and Claude Code may be useful for specific tasks, but they are treated
 - hook side effects;
 - permission mode drift;
 - compaction/resume differences;
-- subagent behavior not owned by Dominic Orchestration.
+- subagent behavior not owned by Warden.
 
 Therefore native-harness-assisted runs must emit:
 
@@ -285,7 +285,7 @@ interface MemoryEntry {
 
 ### M3 — Product Hook Runtime
 
-**Goal:** Build lifecycle hooks directly in Dominic Orchestration instead of depending on Codex/Claude hooks.
+**Goal:** Build lifecycle hooks directly in Warden instead of depending on Codex/Claude hooks.
 
 **Events:**
 
@@ -629,9 +629,9 @@ Codex CLI and Claude Code are optimized for repo work. Direct model APIs require
 
 **Countermeasure:** Use native harnesses as compatibility adapters for productivity, but never for canonical gates. Dogfood can use native assistance; product proof must run direct or clearly label native assistance.
 
-### C3 — “LLM-as-executor” still needs a tool loop, which is itself an agent runtime.
+### C3 — “LLM-as-executor” still needs a tool loop, which is itself an warden runtime.
 
-The redesign says native agent harnesses are minimized, but the product must still build its own agent loop. That is not simpler; it just moves complexity inside the repo.
+The redesign says native agent harnesses are minimized, but the product must still build its own warden loop. That is not simpler; it just moves complexity inside the repo.
 
 **Countermeasure:** That is intentional. The product thesis is harness ownership. If the repo is unwilling to own the loop, it cannot claim cross-model parity.
 
@@ -693,7 +693,7 @@ A user must understand why a run is complete, degraded, native-assisted, unsuppo
 
 ## 11. Final Redefined Completion Standard
 
-Dominic Orchestration reaches the redesigned ultimate goal only when all of the following are true from a clean checkout:
+Warden reaches the redesigned ultimate goal only when all of the following are true from a clean checkout:
 
 1. A task can run through product-owned base rules, memory selection, hooks, policy, context composition, tool execution, **hash-chained** event ledger, verifier, and promotion loop.
 2. **(CORRECTED)** A task completes through the **native-executor canonical adapter over the evidence contract** — the product owns ledger/verifier/promotion/policy on top of the rented loop. (Two *direct* providers under one contract is an optional later milestone, M6, not the bar.)

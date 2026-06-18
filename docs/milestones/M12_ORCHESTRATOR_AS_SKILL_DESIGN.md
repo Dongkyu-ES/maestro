@@ -18,7 +18,7 @@ The spine the corrected plan ordered *before* skills is now in place — verifie
 - **§9 daily-usable slice — DONE as `runHarnessSlice`** (`src/harness/harness-run.ts`):
   ContextBundle (base rules + gated memory + provenance, hashed) → pluggable executor
   (codex default) → redacted tool evidence (diff/status + file hashes) → hash-chained ledger
-  → `runVerifier` → state. Exposed at `agent harness run "<goal>"`.
+  → `runVerifier` → state. Exposed at `warden harness run "<goal>"`.
 - **DAG with per-node acceptance — DONE.** `runTaskGraph` starts a node only when every dep
   is `verifier: supported`; each node now carries an `AcceptanceContract` (`3d11996`).
 - **Closed verifier set:** `artifact | test | ledger | diff | review_custody`
@@ -120,7 +120,7 @@ the blog's own limitation rather than pretending the verifier can judge taste.
   when `execute` is unsupported.
 - **P2** `runOrchestratorSkill` + `SkillRunReport` + `skill.started/phase.advanced/skill.completed`
   ledger events; deterministic test (refs-not-raw asserted).
-- **P3** CLI `agent skill run <spec.json> --what "<...>"` (mirrors `agent orchestrate run --file`).
+- **P3** CLI `warden skill run <spec.json> --what "<...>"` (mirrors `warden orchestrate run --file`).
 - **P4** one **live heterogeneous** dogfood: codex research → codex execute → claude review,
   recorded to `reports/`.
 - **P5** two fixture specs: `feature-builder.json`, `research-brief.json`.
@@ -152,7 +152,7 @@ must FAIL the verifier.
 
 ## 5. Definition of done (this slice)
 
-`agent skill run feature-builder.json --what "<small real task>"` drives research→execute→review
+`warden skill run feature-builder.json --what "<small real task>"` drives research→execute→review
 through native executors, each phase verifier-gated, completion owned by the M7 verifier over a
 recomputable ledger, one live heterogeneous run recorded, and the forgery fixture failing —
 with `npm test` green. That is one correct BRND "team lead", not seven half-built ones.
@@ -236,7 +236,7 @@ refs-not-raw across handoff.
 
 ## 7. Revised definition of done
 
-`agent skill run feature-builder` (concrete graph first) drives research→execute→review through
+`warden skill run feature-builder` (concrete graph first) drives research→execute→review through
 native executors; each phase verifier-gated; handoff content-addressed via the evidence store; the
 verifier re-runs the review `test` from execute's sha-pinned evidence in a clean checkout;
 completion recomputable from the ledger (display field non-authoritative); the `feature-builder`
