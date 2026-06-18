@@ -1,10 +1,27 @@
 import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { listApprovals, listFilesRecursive, listProjects, loadIndex, runtimeTruthForRun } from './core.js';
-import { listSkillRunSummaries, projectSkillRun } from './harness/orchestrator-skill.js';
+import {
+  listSkillRunSummaries,
+  projectSkillRun,
+  readSkillLaunchMarker,
+  type SkillRunStatus,
+  skillRunStatus,
+} from './harness/orchestrator-skill.js';
 import { AGENT_DIR, isSecretPath, projectRoot, type RunMeta, readYaml, redact, safeJoin } from './util.js';
 
-export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''): string {
+const SKILL_STATUS_PILL: Record<SkillRunStatus, { css: string; label: string }> = {
+  final: { css: 'done', label: 'has report — open to verify' },
+  running: { css: 'running', label: 'running — no verdict yet' },
+  'exited-without-verdict': { css: 'blocked', label: 'exited without verdict' },
+};
+
+export function renderHtml(
+  cwd = process.cwd(),
+  csrfToken = '',
+  authToken = '',
+  skillSpecs: { id: string }[] = [],
+): string {
   const index = loadIndex(cwd);
   const csrf = csrfToken ? `<input type="hidden" name="csrf" value="${attr(csrfToken)}">` : '';
   const auth = authToken ? `<input type="hidden" name="auth" value="${attr(authToken)}">` : '';
@@ -13,12 +30,15 @@ export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''):
   const skillRuns = listSkillRunSummaries(activeRoot);
   const skillRunLane = skillRuns.length
     ? skillRuns
-        .map(
-          (s) =>
-            `<article class="run-card"><header><a href="/skill/${attr(s.runId)}">${esc(s.runId)}</a><span class="pill">${esc(s.skillId)}</span></header><small>Open to recompute the authoritative completion from the ledger + execute evidence.</small></article>`,
-        )
+        .map((s) => {
+          const pill = SKILL_STATUS_PILL[s.status];
+          return `<article class="run-card"><header><a href="/skill/${attr(s.runId)}">${esc(s.runId)}</a><span class="pill">${esc(s.skillId)}</span><span class="pill ${pill.css}">${esc(pill.label)}</span></header><small>Open to recompute the authoritative completion from the ledger + execute evidence.</small></article>`;
+        })
         .join('')
-    : '<p class="empty">No skill runs yet. Run <code>warden skill run &lt;spec.json&gt; --what "…"</code>.</p>';
+    : '<p class="empty">No skill runs yet. Launch one from the operator zone, or run <code>warden skill run &lt;spec.json&gt; --what "…"</code>.</p>';
+  const skillLaunchPanel = skillSpecs.length
+    ? `<div class="panel"><h3>Run a skill (orchestrator-as-skill)</h3><form class="stack" method="POST" action="/api/skill-runs">${hidden}<input name="what" placeholder="작은 목표를 한 줄로 (e.g. a slugify helper)" required><select name="specId" title="skill spec">${skillSpecs.map((s) => `<option value="${attr(s.id)}">${esc(s.id)}</option>`).join('')}</select><button class="primary">Launch skill run</button></form><small>Runs research → execute → review through real executors. Completion is recomputed from the ledger — a launch is never a green.</small></div>`
+    : '';
   const projects = listProjects();
   const projectPanel = projects.length
     ? projects
@@ -68,8 +88,14 @@ export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''):
       ? 'Waiting for your approval above; this is not a completed result.'
       : 'Not a completed result; approval may already be handled, so start with a real command, collect, or cancel.';
     const commandExecutor = r.executor === 'command';
-    const noExecutorCopy = commandExecutor && r.status === 'created' ? 'Draft only: command executor needs an explicit command before Start.' : '';
-    const readyExecutorCopy = !commandExecutor && r.status === 'created' ? `${String(r.executor).toUpperCase()} executor selected. Start will run that executor; command is not required.` : '';
+    const noExecutorCopy =
+      commandExecutor && r.status === 'created'
+        ? 'Draft only: command executor needs an explicit command before Start.'
+        : '';
+    const readyExecutorCopy =
+      !commandExecutor && r.status === 'created'
+        ? `${String(r.executor).toUpperCase()} executor selected. Start will run that executor; command is not required.`
+        : '';
     const commandDetails = commandExecutor
       ? `<details open><summary>Command required</summary><input name="command" placeholder="예: npm test 또는 node scripts/job.js"><label class="check"><input type="checkbox" name="confirmCommand" value="yes"> Run this exact shell command</label><small>Unchecked or empty command means nothing executes and Collect cannot complete.</small></details>`
       : `<details><summary>Command override is not used for ${esc(String(r.executor))}</summary><small>This run starts the selected executor with the task prompt.</small></details>`;
@@ -77,7 +103,7 @@ export function renderHtml(cwd = process.cwd(), csrfToken = '', authToken = ''):
   };
   return page(
     'Warden',
-    `<header class="topbar"><div><h1>Warden</h1><p>Operator input on top. Agent work below.</p></div><nav class="top-actions"><a class="ghost" href="/review-gate">Review Gate 사용법</a><a class="ghost" href="/">Refresh</a></nav></header><main><section class="operator-zone"><div class="section-title"><span>01</span><div><h2>Your input / permissions</h2><p>여기는 네가 입력하거나 승인해야 진행되는 것만 둔다.</p></div></div><div class="operator-grid"><div class="panel"><h3>Projects</h3>${projectPanel}<form class="stack" method="POST" action="/api/projects">${hidden}<input name="path" placeholder="/absolute/path/to/project" required><button class="primary">Add / register project</button></form><small>The active project is where you launched <code>warden web</code>. Registering adds a project to the registry and initializes its <code>.agent/</code>.</small></div><div class="panel"><h3>Tool / permission boundary</h3><p><strong>Allowed without approval:</strong> git status/diff/log/show, ls/cat safe paths, task adapter execution.</p><p><strong>Approval required:</strong> shell mutation, package install, git commit/push, apply/merge proposal, network/unsafe host.</p><p><strong>Blocked by design:</strong> secret paths, path traversal, natural-language replies as shell commands.</p></div><div class="panel"><h3>Create Task</h3><form class="stack" method="POST" action="/api/tasks">${hidden}<input name="title" placeholder="해야 할 일을 한 줄로 적어라" required><button class="primary">Create Task</button></form></div><div class="panel urgent"><h3>Approval Queue</h3>${approvalPanel}</div></div><div class="panel"><h3>Task Board — choose what should run</h3>${taskPanel}</div></section><section class="agent-zone"><div class="section-title"><span>02</span><div><h2>Agent / LLM work</h2><p>에이전트가 수행 중인 것, 다음에 수행할 것, 끝난 증거를 아래에서 본다.</p></div></div><div class="lane"><h3>Running now</h3>${activeRuns.length ? activeRuns.map(runCard).join('') : '<p class="empty">Nothing running.</p>'}</div><div class="lane"><h3>Ready / waiting to run</h3>${waitingRuns.length ? waitingRuns.map(runCard).join('') : '<p class="empty">No run waiting. Create a run from a task above.</p>'}</div><div class="lane"><h3>Recent results</h3>${completedRuns.length ? completedRuns.map(runCard).join('') : '<p class="empty">No completed runs yet.</p>'}</div><div class="lane"><h3>Skill runs (orchestrator-as-skill)</h3>${skillRunLane}</div></section></main>`,
+    `<header class="topbar"><div><h1>Warden</h1><p>Operator input on top. Agent work below.</p></div><nav class="top-actions"><a class="ghost" href="/review-gate">Review Gate 사용법</a><a class="ghost" href="/">Refresh</a></nav></header><main><section class="operator-zone"><div class="section-title"><span>01</span><div><h2>Your input / permissions</h2><p>여기는 네가 입력하거나 승인해야 진행되는 것만 둔다.</p></div></div><div class="operator-grid"><div class="panel"><h3>Projects</h3>${projectPanel}<form class="stack" method="POST" action="/api/projects">${hidden}<input name="path" placeholder="/absolute/path/to/project" required><button class="primary">Add / register project</button></form><small>The active project is where you launched <code>warden web</code>. Registering adds a project to the registry and initializes its <code>.agent/</code>.</small></div><div class="panel"><h3>Tool / permission boundary</h3><p><strong>Allowed without approval:</strong> git status/diff/log/show, ls/cat safe paths, task adapter execution.</p><p><strong>Approval required:</strong> shell mutation, package install, git commit/push, apply/merge proposal, network/unsafe host.</p><p><strong>Blocked by design:</strong> secret paths, path traversal, natural-language replies as shell commands.</p></div><div class="panel"><h3>Create Task</h3><form class="stack" method="POST" action="/api/tasks">${hidden}<input name="title" placeholder="해야 할 일을 한 줄로 적어라" required><button class="primary">Create Task</button></form></div>${skillLaunchPanel}<div class="panel urgent"><h3>Approval Queue</h3>${approvalPanel}</div></div><div class="panel"><h3>Task Board — choose what should run</h3>${taskPanel}</div></section><section class="agent-zone"><div class="section-title"><span>02</span><div><h2>Agent / LLM work</h2><p>에이전트가 수행 중인 것, 다음에 수행할 것, 끝난 증거를 아래에서 본다.</p></div></div><div class="lane"><h3>Running now</h3>${activeRuns.length ? activeRuns.map(runCard).join('') : '<p class="empty">Nothing running.</p>'}</div><div class="lane"><h3>Ready / waiting to run</h3>${waitingRuns.length ? waitingRuns.map(runCard).join('') : '<p class="empty">No run waiting. Create a run from a task above.</p>'}</div><div class="lane"><h3>Recent results</h3>${completedRuns.length ? completedRuns.map(runCard).join('') : '<p class="empty">No completed runs yet.</p>'}</div><div class="lane"><h3>Skill runs (orchestrator-as-skill)</h3>${skillRunLane}</div></section></main>`,
   );
 }
 
@@ -123,7 +149,12 @@ function reviewGateStatus(root: string): ReviewGateStatus[] {
     ],
     ['준비된 review gate', '.agent/independent-review-gate.json', 'prepare-review-gate가 생성하는 로컬 gate'],
   ] as const;
-  return paths.map(([label, relPath, note]) => ({ label, path: relPath, note, present: existsSync(join(root, relPath)) }));
+  return paths.map(([label, relPath, note]) => ({
+    label,
+    path: relPath,
+    note,
+    present: existsSync(join(root, relPath)),
+  }));
 }
 function commandBlock(reviewerAgentId: string, architectAgentId: string): string {
   const reviewer = reviewerAgentId || 'PASTE_CODE_REVIEWER_AGENT_ID';
@@ -179,7 +210,12 @@ function isPositiveTrustArtifact(file: string, artifact: Record<string, unknown>
   }
   return /PASS|supported/i.test(value);
 }
-function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[]; refs: string[]; positiveRefs: string[] } {
+function evidenceTrustFindings(runDir: string): {
+  red: string[];
+  yellow: string[];
+  refs: string[];
+  positiveRefs: string[];
+} {
   const red: string[] = [];
   const yellow: string[] = [];
   const refs: string[] = [];
@@ -206,7 +242,9 @@ function evidenceTrustFindings(runDir: string): { red: string[]; yellow: string[
   if (native) {
     refs.push('native-evidence.json');
     if (native.status === 'native-harness-assisted') {
-      const surfaces = Array.isArray(native.unowned_surfaces) ? native.unowned_surfaces.map(String).join('; ') : 'unowned surfaces not listed';
+      const surfaces = Array.isArray(native.unowned_surfaces)
+        ? native.unowned_surfaces.map(String).join('; ')
+        : 'unowned surfaces not listed';
       yellow.push(`native-harness-assisted: ${surfaces}`);
     }
   }
@@ -217,7 +255,11 @@ function renderEvidenceTrustPanel(runDir: string, meta: RunMeta): string {
   const claimsComplete = meta.status === 'completed' || meta.decision === 'pass';
   const trusted = claimsComplete && findings.red.length === 0 && findings.positiveRefs.length > 0;
   const css = findings.red.length ? 'trust-red' : findings.yellow.length ? 'trust-yellow' : 'hero';
-  const verdict = findings.red.length ? 'NOT TRUSTED — evidence contradiction' : trusted ? 'trusted by current evidence' : 'not yet trusted';
+  const verdict = findings.red.length
+    ? 'NOT TRUSTED — evidence contradiction'
+    : trusted
+      ? 'trusted by current evidence'
+      : 'not yet trusted';
   const redBlock = findings.red.length
     ? `<h3>Red evidence</h3><ul>${findings.red.map((item) => `<li class="missing">${esc(item)}</li>`).join('')}</ul>`
     : '';
@@ -268,7 +310,12 @@ export function renderRun(runId: string, cwd = process.cwd()): string {
     meta.status === 'awaiting_approval'
       ? `<div class="notice danger"><strong>Not a result yet.</strong><p>${requestedApproval ? 'This run is waiting for operator approval. Review the approval queue before treating it as work output.' : 'This run is in an awaiting-approval state, but no requested approval remains. It is stale or already approved without a valid completed execution; start with a real command, collect failure evidence, or cancel.'}</p></div>`
       : '';
-  const rawArtifacts = names.map((n) => `<details><summary>${esc(n)}</summary><pre>${esc(redact(readFileSync(join(runDir, n), 'utf8')))}</pre></details>`).join('');
+  const rawArtifacts = names
+    .map(
+      (n) =>
+        `<details><summary>${esc(n)}</summary><pre>${esc(redact(readFileSync(join(runDir, n), 'utf8')))}</pre></details>`,
+    )
+    .join('');
   const closedLoopPath = join(runDir, 'closed-loop-report.md');
   const evidenceTrust = renderEvidenceTrustPanel(runDir, meta);
   const operatorOutputs = renderOperatorOutputs(runDir);
@@ -283,13 +330,34 @@ export function renderRun(runId: string, cwd = process.cwd()): string {
 export function renderSkillRun(runId: string, cwd = process.cwd()): string {
   if (!/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/.test(runId) || runId.includes('..'))
     throw new Error(`invalid skill run id: ${runId}`);
-  const p = projectSkillRun({ root: projectRoot(cwd), runId });
+  const root = projectRoot(cwd);
+  const status = skillRunStatus(root, runId);
+  if (status !== 'final') {
+    const marker = readSkillLaunchMarker(root, runId);
+    const running = status === 'running';
+    return page(
+      `skill ${runId}`,
+      `<a href="/">← back</a><h1>${esc(marker?.skillId ?? 'skill')} <small>${esc(runId)}</small></h1>` +
+        `<section class="panel hero"><h2>${running ? 'Running — no verdict yet' : 'Exited without a verdict'}</h2>` +
+        (running
+          ? `<p>The skill run was launched and is still executing (research → execute → review). There is <strong>no completion claim</strong> yet — refresh; the authoritative verdict appears only once the child writes its report and the ledger can be recomputed.</p>`
+          : `<p class="warning">The launched child exited before producing a report, so there is <strong>no recomputable evidence</strong>. This is a stuck launch, not a completion. Re-launch the skill, and check <code>.agent/skill-runs/${esc(runId)}/launch.log</code>.</p>`) +
+        (marker
+          ? `<small>Goal: ${esc(marker.what)} · launched ${esc(marker.startedAt)} · pid ${esc(String(marker.pid))}</small>`
+          : '') +
+        `</section><section class="panel"><a class="ghost" href="/">Refresh</a></section>`,
+    );
+  }
+  const p = projectSkillRun({ root, runId });
   const authClass = p.authoritativeCompletion === 'passed' ? 'ok' : 'warning';
   const contradiction = p.contradiction
     ? `<div class="notice danger"><strong>CONTRADICTION — do not trust the stored report.</strong><p>The stored report claims completion <code>${esc(p.reportCompletion)}</code>, but the authoritative recompute from the hash-chained ledger + content-addressed execute evidence says <code>${esc(p.authoritativeCompletion)}</code>${p.ledgerValid ? '' : ' (lifecycle ledger FAILED validation)'}. Trust the recompute. Reason: ${esc(p.reason)}</p></div>`
     : '';
   const phaseRows = p.phases
-    .map((ph) => `<tr><td><code>${esc(ph.phase)}</code></td><td><span class="pill ${esc(ph.nodeState)}">${esc(ph.label)}</span></td></tr>`)
+    .map(
+      (ph) =>
+        `<tr><td><code>${esc(ph.phase)}</code></td><td><span class="pill ${esc(ph.nodeState)}">${esc(ph.label)}</span></td></tr>`,
+    )
     .join('');
   return page(
     `skill ${runId}`,
@@ -329,7 +397,10 @@ function renderOperatorOutputs(runDir: string): string {
   const outputList = outputs.length
     ? `<ul>${outputs
         .slice(0, 20)
-        .map((o) => `<li><code>${esc(String(o.path))}</code>${String(o.path).endsWith('.pptx') ? ' <span class="pill ok">PPTX</span>' : ''}</li>`)
+        .map(
+          (o) =>
+            `<li><code>${esc(String(o.path))}</code>${String(o.path).endsWith('.pptx') ? ' <span class="pill ok">PPTX</span>' : ''}</li>`,
+        )
         .join('')}</ul>`
     : '<p class="empty">No operator-visible output paths recorded.</p>';
   const verificationBlock = verification.length

@@ -5,8 +5,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
   appendRuntimeEvent,
-  readRuntimeEvents,
   type RuntimeLedgerHeadBinding,
+  readRuntimeEvents,
   runtimeLedgerHeadHash,
   validateRuntimeLedger,
 } from '../events/ledger.js';
@@ -295,7 +295,7 @@ export function runAcceptanceCheck(opts: {
   }
 }
 
-function skillRunDir(root: string, runId: string): string {
+export function skillRunDir(root: string, runId: string): string {
   return join(root, '.agent', 'skill-runs', runId);
 }
 
@@ -703,15 +703,78 @@ function toSerializableSpec(spec: OrchestratorSkillSpec): SerializableSkillSpec 
   };
 }
 
-export interface SkillRunSummary {
+/**
+ * Operator-supplied launch input for an async skill run started from the UI. This records the
+ * operator's request (which spec, what goal) and the spawned child pid — it is NOT a completion
+ * claim and carries no verdict. The authoritative verdict only ever comes from the ledger
+ * recompute once the child writes its report.
+ */
+export interface SkillLaunchMarker {
   runId: string;
   skillId: string;
+  what: string;
+  startedAt: string;
+  pid: number;
+}
+
+const SKILL_LAUNCH_MARKER = 'skill-launch.json';
+
+export function writeSkillLaunchMarker(root: string, marker: SkillLaunchMarker): void {
+  const dir = skillRunDir(root, marker.runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, SKILL_LAUNCH_MARKER), JSON.stringify(marker, null, 2));
+}
+
+export function readSkillLaunchMarker(root: string, runId: string): SkillLaunchMarker | null {
+  const file = join(skillRunDir(root, runId), SKILL_LAUNCH_MARKER);
+  if (!existsSync(file)) return null;
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as SkillLaunchMarker;
+  } catch {
+    return null;
+  }
 }
 
 /**
- * Cheap discovery list for the operator home: runId + skillId only, read from each stored
- * report. It deliberately asserts NO completion verdict — a home list must not show an
- * unverified green. The authoritative verdict is recomputed on the /skill/<runId> detail page.
+ * Lifecycle status of a skill run, derived from on-disk facts only:
+ *  - `final`: the child wrote `skill-run-report.json`; trust the ledger recompute on the detail page.
+ *  - `running`: a launch marker exists, no report yet, and the recorded pid is still alive.
+ *  - `exited-without-verdict`: a launch marker exists, no report, and the pid is gone — the child
+ *    died before producing evidence. This is an honest stuck state, never a green.
+ * A directory with neither a report nor a marker is treated as `final` (CLI-launched legacy runs).
+ */
+export type SkillRunStatus = 'final' | 'running' | 'exited-without-verdict';
+
+function pidAlive(pid: number): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    // EPERM means the process exists but we can't signal it — still alive.
+    return (error as NodeJS.ErrnoException).code === 'EPERM';
+  }
+}
+
+export function skillRunStatus(root: string, runId: string): SkillRunStatus {
+  const dir = skillRunDir(root, runId);
+  if (existsSync(join(dir, 'skill-run-report.json'))) return 'final';
+  const marker = readSkillLaunchMarker(root, runId);
+  if (!marker) return 'final';
+  return pidAlive(marker.pid) ? 'running' : 'exited-without-verdict';
+}
+
+export interface SkillRunSummary {
+  runId: string;
+  skillId: string;
+  status: SkillRunStatus;
+}
+
+/**
+ * Cheap discovery list for the operator home. It surfaces both completed runs (with a stored
+ * report) and in-flight launches (marker but no report) so the operator can watch a run they
+ * just started — but it deliberately asserts NO completion verdict. A home list must never show
+ * an unverified green; the authoritative verdict is recomputed on the /skill/<runId> detail page.
  */
 export function listSkillRunSummaries(root: string): SkillRunSummary[] {
   const base = join(root, '.agent', 'skill-runs');
@@ -719,12 +782,22 @@ export function listSkillRunSummaries(root: string): SkillRunSummary[] {
   const summaries: SkillRunSummary[] = [];
   for (const runId of readdirSync(base)) {
     const reportPath = join(base, runId, 'skill-run-report.json');
-    if (!existsSync(reportPath)) continue;
-    try {
-      const report = JSON.parse(readFileSync(reportPath, 'utf8')) as SkillRunReport;
-      summaries.push({ runId: report.runId ?? runId, skillId: report.skillId ?? 'unknown' });
-    } catch {
-      // unreadable report — skip rather than crash the home page
+    if (existsSync(reportPath)) {
+      try {
+        const report = JSON.parse(readFileSync(reportPath, 'utf8')) as SkillRunReport;
+        summaries.push({ runId: report.runId ?? runId, skillId: report.skillId ?? 'unknown', status: 'final' });
+      } catch {
+        // unreadable report — skip rather than crash the home page
+      }
+      continue;
+    }
+    const marker = readSkillLaunchMarker(root, runId);
+    if (marker) {
+      summaries.push({
+        runId: marker.runId ?? runId,
+        skillId: marker.skillId ?? 'unknown',
+        status: skillRunStatus(root, runId),
+      });
     }
   }
   return summaries.sort((a, b) => b.runId.localeCompare(a.runId));
@@ -759,9 +832,18 @@ export function projectSkillRun(opts: { root: string; runId: string }): SkillRun
     id: specJson.id,
     acceptance: specJson.acceptance,
     phases: {
-      research: { goalTemplate: specJson.phases.research.goalTemplate, acceptArtifact: specJson.phases.research.acceptArtifact },
-      execute: { goalTemplate: specJson.phases.execute.goalTemplate, acceptArtifact: specJson.phases.execute.acceptArtifact },
-      review: { goalTemplate: specJson.phases.review.goalTemplate, acceptArtifact: specJson.phases.review.acceptArtifact },
+      research: {
+        goalTemplate: specJson.phases.research.goalTemplate,
+        acceptArtifact: specJson.phases.research.acceptArtifact,
+      },
+      execute: {
+        goalTemplate: specJson.phases.execute.goalTemplate,
+        acceptArtifact: specJson.phases.execute.acceptArtifact,
+      },
+      review: {
+        goalTemplate: specJson.phases.review.goalTemplate,
+        acceptArtifact: specJson.phases.review.acceptArtifact,
+      },
     },
   };
 

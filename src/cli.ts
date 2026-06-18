@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
-import { existsSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import { spawn, spawnSync } from 'node:child_process';
+import { randomBytes, randomUUID, timingSafeEqual } from 'node:crypto';
+import { closeSync, existsSync, mkdirSync, openSync, readdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { dirname, join, relative } from 'node:path';
 import { parse as parseQuery } from 'node:querystring';
@@ -19,8 +19,8 @@ import {
   initProject,
   latestRunId,
   listApprovals,
-  listPromotions,
   listProjects,
+  listPromotions,
   listTasks,
   loadIndex,
   proposeApply,
@@ -51,6 +51,7 @@ import {
   recomputeCompletionFromLedger,
   runOrchestratorSkill,
   type SkillSpecJson,
+  writeSkillLaunchMarker,
 } from './harness/orchestrator-skill.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import { runProviderConformance } from './harness/provider-normalization.js';
@@ -75,6 +76,32 @@ function has(name: string): boolean {
 }
 function firstNonFlag(items: string[]): string | undefined {
   return items.find((x) => !x.startsWith('--'));
+}
+export interface SkillSpecOption {
+  id: string;
+  path: string;
+}
+/**
+ * Discover the bundled skill specs an operator can launch from the UI. The set is a server-owned
+ * whitelist (the launch POST only accepts an id from this list), so an operator never supplies a
+ * free-text spec path — that keeps the spawned `skill run` command server-controlled.
+ */
+export function listSkillSpecs(): SkillSpecOption[] {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const dirs = [join(here, '..', 'fixtures', 'skills'), join(process.cwd(), 'fixtures', 'skills')];
+  const seen = new Set<string>();
+  const specs: SkillSpecOption[] = [];
+  for (const dir of dirs) {
+    if (!existsSync(dir)) continue;
+    for (const file of readdirSync(dir)) {
+      if (!file.endsWith('.json')) continue;
+      const id = file.replace(/\.json$/, '');
+      if (seen.has(id)) continue;
+      seen.add(id);
+      specs.push({ id, path: join(dir, file) });
+    }
+  }
+  return specs.sort((a, b) => a.id.localeCompare(b.id));
 }
 function safeReviewRelPath(root: string, artifactPath: unknown): string {
   if (
@@ -313,7 +340,8 @@ async function main() {
         .filter((item, index) => !valueFlags.includes(item) && !valueFlags.includes(rest[index - 1]))
         .join(' ')
         .trim();
-      if (!goal) throw new Error('usage: warden harness run <goal> [--executor codex|claude|agy] [--executor-bin <path>]');
+      if (!goal)
+        throw new Error('usage: warden harness run <goal> [--executor codex|claude|agy] [--executor-bin <path>]');
       const executorKind = arg('--executor') ?? 'codex';
       const registry = defaultExecutorRegistry();
       if (!registry.has(executorKind)) throw new Error(`unknown executor: ${executorKind} (use codex|claude|agy)`);
@@ -331,7 +359,13 @@ async function main() {
     if (cmd === 'loop' && sub === 'run') {
       const acceptanceFile = arg('--acceptance-file');
       const goal = rest
-        .filter((item, index) => !['--acceptance-file', '--max-iters', '--stall', '--executor-bin', '--verify-cmd'].includes(item) && !['--acceptance-file', '--max-iters', '--stall', '--executor-bin', '--verify-cmd'].includes(rest[index - 1]))
+        .filter(
+          (item, index) =>
+            !['--acceptance-file', '--max-iters', '--stall', '--executor-bin', '--verify-cmd'].includes(item) &&
+            !['--acceptance-file', '--max-iters', '--stall', '--executor-bin', '--verify-cmd'].includes(
+              rest[index - 1],
+            ),
+        )
         .join(' ')
         .trim();
       if (!goal || !acceptanceFile)
@@ -720,7 +754,8 @@ async function main() {
         goal?: string;
         nodes?: { id: string; goal: string; deps?: string[]; executor?: string; purpose?: string }[];
       };
-      if (!Array.isArray(spec.nodes) || spec.nodes.length === 0) throw new Error('graph file must contain a non-empty nodes[]');
+      if (!Array.isArray(spec.nodes) || spec.nodes.length === 0)
+        throw new Error('graph file must contain a non-empty nodes[]');
       const result = await runSubmittedGraph({
         root: process.cwd(),
         registry: defaultExecutorRegistry(),
@@ -739,14 +774,18 @@ async function main() {
       const host = arg('--host', '127.0.0.1') ?? '127.0.0.1';
       const unsafeHost = has('--unsafe-host');
       if (!['127.0.0.1', 'localhost'].includes(host) && !unsafeHost)
-        throw new Error('orchestrate serve binds loopback only; pass --unsafe-host with --auth-token to accept remote spawn risk');
+        throw new Error(
+          'orchestrate serve binds loopback only; pass --unsafe-host with --auth-token to accept remote spawn risk',
+        );
       const authToken = arg('--auth-token') || process.env.AGENT_ORCH_TOKEN;
       const reconcileVerifyCmd = arg('--verify-cmd') || process.env.AGENT_ORCH_VERIFY_CMD;
       if (unsafeHost && !authToken)
         throw new Error('--unsafe-host requires --auth-token or AGENT_ORCH_TOKEN (the server spawns local executors)');
       const port = Number(arg('--port', '4319'));
       const server = createOrchestratorServer({ root: process.cwd(), host, authToken, reconcileVerifyCmd });
-      server.listen(port, host, () => console.log(`orchestrator listening at http://${host}:${port}  (POST /graph, GET /health)`));
+      server.listen(port, host, () =>
+        console.log(`orchestrator listening at http://${host}:${port}  (POST /graph, GET /health)`),
+      );
       return;
     }
     if (cmd === 'web') {
@@ -842,6 +881,52 @@ async function serveWeb(): Promise<void> {
         redirect(res);
         return;
       }
+      if (req.method === 'POST' && url.pathname === '/api/skill-runs') {
+        const body = await requirePostAuth();
+        const what = (body.what || '').trim();
+        if (!what) throw new Error('a skill run needs a one-line goal (what)');
+        // A goal never legitimately starts with `--`. Rejecting it stops a value like `--run-id`
+        // from colliding with the child CLI's flag parser and corrupting the run id (which would
+        // orphan the marker from the report it recomputes against).
+        if (what.startsWith('--')) throw new Error('goal (what) must not start with "--"');
+        const chosen = listSkillSpecs().find((s) => s.id === body.specId);
+        if (!chosen) throw new Error('unknown skill spec');
+        // Fail fast: confirm the spec is a real, loadable skill before spawning a detached child.
+        const reg = defaultExecutorRegistry();
+        loadSkillSpecFromJson(JSON.parse(readFileSync(chosen.path, 'utf8')) as SkillSpecJson, {
+          codex: reg.resolve('codex'),
+          claude: reg.resolve('claude'),
+          agy: reg.resolve('agy'),
+        });
+        const root = process.cwd();
+        const runId = `skill-${randomUUID()}`;
+        const logDir = join(root, '.agent', 'skill-runs', runId);
+        mkdirSync(logDir, { recursive: true });
+        const logFd = openSync(join(logDir, 'launch.log'), 'a');
+        // Async, wrap-don't-rebuild: the launch reuses the exact `warden skill run` CLI as a
+        // detached child. `what` is a separate argv element (no shell), and the spec path comes
+        // from the server-owned whitelist — so neither can inject a command.
+        const child = spawn(
+          process.execPath,
+          [fileURLToPath(import.meta.url), 'skill', 'run', chosen.path, '--what', what, '--run-id', runId],
+          { cwd: root, detached: true, stdio: ['ignore', logFd, logFd] },
+        );
+        // The child inherited a dup of logFd; close the parent's copy so each launch does not
+        // leak a descriptor in the long-lived web server.
+        closeSync(logFd);
+        // Marker carries operator input + pid only — it is NOT a verdict; completion is recomputed
+        // from the ledger once the child writes its report.
+        writeSkillLaunchMarker(root, {
+          runId,
+          skillId: chosen.id,
+          what,
+          startedAt: new Date().toISOString(),
+          pid: child.pid ?? -1,
+        });
+        child.unref();
+        redirect(res, `/skill/${runId}`);
+        return;
+      }
       const startMatch = url.pathname.match(/^\/api\/runs\/([^/]+)\/start$/);
       if (req.method === 'POST' && startMatch) {
         const body = await requirePostAuth();
@@ -929,7 +1014,7 @@ async function serveWeb(): Promise<void> {
       if (url.pathname.startsWith('/run/')) res.end(renderRun(decodeURIComponent(url.pathname.slice(5))));
       else if (url.pathname.startsWith('/skill/')) res.end(renderSkillRun(decodeURIComponent(url.pathname.slice(7))));
       else if (url.pathname === '/review-gate') res.end(renderReviewGate(process.cwd()));
-      else if (url.pathname === '/') res.end(renderHtml(process.cwd(), csrfToken));
+      else if (url.pathname === '/') res.end(renderHtml(process.cwd(), csrfToken, '', listSkillSpecs()));
       else {
         res.statusCode = 404;
         res.end('not found');

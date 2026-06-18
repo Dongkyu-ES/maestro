@@ -12,19 +12,23 @@ import type { HarnessExecutor } from './harness-run.js';
 import { removeWorktreeAndBranch, runIsolatedWorker, runTaskGraph } from './orchestrator.js';
 import {
   compileSkillToGraphTemplate,
-  loadSkillSpecFromJson,
-  materializeEvidenceInto,
   type ExecuteCandidate,
   listSkillRunSummaries,
+  loadSkillSpecFromJson,
+  materializeEvidenceInto,
   type OrchestratorSkillSpec,
   projectSkillRun,
-  selectExecuteCandidateByAcceptance,
+  readSkillLaunchMarker,
   recomputeCompletion,
   recomputeCompletionFromLedger,
   resolveEvidenceArtifact,
   runOrchestratorSkill,
   type SkillSpecJson,
+  selectExecuteCandidateByAcceptance,
+  skillRunDir,
+  skillRunStatus,
   storePhaseArtifact,
+  writeSkillLaunchMarker,
 } from './orchestrator-skill.js';
 
 function tmpRepo(): string {
@@ -205,7 +209,13 @@ test('runIsolatedWorker forwards executorLabel into honest per-phase evidence', 
     return codexResult({ cwd: opts.cwd, label: opts.label });
   };
 
-  const result = await runIsolatedWorker({ root, workerId: 'label-claude', goal: 'edit', executor: labelExec, executorLabel: 'claude' });
+  const result = await runIsolatedWorker({
+    root,
+    workerId: 'label-claude',
+    goal: 'edit',
+    executor: labelExec,
+    executorLabel: 'claude',
+  });
 
   const runDir = result.runDir;
   assert.ok(runDir);
@@ -608,7 +618,10 @@ test('ledger recompute fails closed on a tampered lifecycle chain', async () => 
   lines[1] = JSON.stringify(middle);
   writeFileSync(ledgerPath, `${lines.join('\n')}\n`);
 
-  assert.throws(() => recomputeCompletionFromLedger(spec, { root, runId }), /payload hash mismatch|hash chain|sequence/i);
+  assert.throws(
+    () => recomputeCompletionFromLedger(spec, { root, runId }),
+    /payload hash mismatch|hash chain|sequence/i,
+  );
 });
 
 test('skill re-runs do not collide on fixed worktree names and clean up after themselves', async () => {
@@ -740,7 +753,10 @@ test('selectExecuteCandidateByAcceptance picks the winner by acceptance, not ord
 
   // The CORRECT candidate is listed LAST — proving selection is by recomputable acceptance,
   // not by order, model rank, or self-claim.
-  const selection = selectExecuteCandidateByAcceptance({ candidates: [forged, correct], acceptance: candidateAcceptance });
+  const selection = selectExecuteCandidateByAcceptance({
+    candidates: [forged, correct],
+    acceptance: candidateAcceptance,
+  });
 
   assert.equal(selection.winner, 'claude-correct');
   assert.equal(selection.results.find((r) => r.label === 'codex-forged')?.passed, false);
@@ -765,8 +781,16 @@ test('runOrchestratorSkill fans out execute across candidates and promotes the a
   const root = tmpRepo();
   // forged listed FIRST, correct LAST → proves the winner is chosen by acceptance, not order.
   const spec = fanoutSpec([
-    { label: 'forged', executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }), executorLabel: 'codex' },
-    { label: 'correct', executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }), executorLabel: 'claude' },
+    {
+      label: 'forged',
+      executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }),
+      executorLabel: 'codex',
+    },
+    {
+      label: 'correct',
+      executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }),
+      executorLabel: 'claude',
+    },
   ]);
 
   const report = await runOrchestratorSkill(spec, { what: 'fanout work', root, runId: 'fanout-pass' });
@@ -775,7 +799,10 @@ test('runOrchestratorSkill fans out execute across candidates and promotes the a
   assert.equal(report.phases.find((p) => p.phase === 'review')?.nodeState, 'supported');
   assert.equal(report.completion, 'passed');
   // The promoted canonical execute evidence is the CORRECT candidate's implementation.
-  const promoted = readFileSync(join(root, '.agent', 'skill-runs', 'fanout-pass', 'artifacts', 'execute', 'add.mjs'), 'utf8');
+  const promoted = readFileSync(
+    join(root, '.agent', 'skill-runs', 'fanout-pass', 'artifacts', 'execute', 'add.mjs'),
+    'utf8',
+  );
   assert.match(promoted, /return a\+b/);
   assert.equal(recomputeCompletionFromLedger(spec, { root, runId: 'fanout-pass' }).completion, 'passed');
   // candidate + winner worktrees are cleaned up.
@@ -786,8 +813,16 @@ test('runOrchestratorSkill fans out execute across candidates and promotes the a
 test('runOrchestratorSkill blocks execute when no fan-out candidate passes acceptance', async () => {
   const root = tmpRepo();
   const spec = fanoutSpec([
-    { label: 'sub', executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }), executorLabel: 'codex' },
-    { label: 'mul', executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a*b}\n' }), executorLabel: 'claude' },
+    {
+      label: 'sub',
+      executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }),
+      executorLabel: 'codex',
+    },
+    {
+      label: 'mul',
+      executor: addAcceptanceExecutor({ implementation: 'export function add(a,b){return a*b}\n' }),
+      executorLabel: 'claude',
+    },
   ]);
 
   const report = await runOrchestratorSkill(spec, { what: 'fanout fail', root, runId: 'fanout-fail' });
@@ -863,4 +898,95 @@ test('research-brief.json fixture rejects a non-empty but unsourced brief (no la
   assert.equal(report.acceptance?.passed, false);
   assert.equal(report.completion, 'failed');
   assert.equal(recomputeCompletionFromLedger(spec, { root, runId: 'brief-forged' }).completion, 'failed');
+});
+
+test('skill launch marker round-trips operator input + pid (never a verdict)', () => {
+  const root = tmpRepo();
+  const marker = {
+    runId: 'skill-rt',
+    skillId: 'feature-builder',
+    what: 'a slugify helper',
+    startedAt: '2026-06-18T00:00:00.000Z',
+    pid: process.pid,
+  };
+  writeSkillLaunchMarker(root, marker);
+  const read = readSkillLaunchMarker(root, 'skill-rt');
+  assert.deepEqual(read, marker);
+  // The marker file carries no completion/verdict field — it is operator input only.
+  assert.equal(Object.hasOwn(read as object, 'completion'), false);
+  assert.equal(readSkillLaunchMarker(root, 'skill-missing'), null);
+});
+
+test('skillRunStatus derives running/exited/final from disk facts only', () => {
+  const root = tmpRepo();
+  // running: marker with a live pid (this test process), no report yet
+  writeSkillLaunchMarker(root, { runId: 'skill-live', skillId: 's', what: 'w', startedAt: 'now', pid: process.pid });
+  assert.equal(skillRunStatus(root, 'skill-live'), 'running');
+  // exited-without-verdict: marker with a dead pid, no report
+  writeSkillLaunchMarker(root, { runId: 'skill-dead', skillId: 's', what: 'w', startedAt: 'now', pid: 2147483646 });
+  assert.equal(skillRunStatus(root, 'skill-dead'), 'exited-without-verdict');
+  // final: a report exists (pid liveness is irrelevant once there is evidence)
+  writeSkillLaunchMarker(root, { runId: 'skill-done', skillId: 's', what: 'w', startedAt: 'now', pid: 2147483646 });
+  writeFileSync(
+    join(skillRunDir(root, 'skill-done'), 'skill-run-report.json'),
+    JSON.stringify({ runId: 'skill-done', skillId: 's' }),
+  );
+  assert.equal(skillRunStatus(root, 'skill-done'), 'final');
+});
+
+test('listSkillRunSummaries surfaces in-flight launches but never shows a green', () => {
+  const root = tmpRepo();
+  writeSkillLaunchMarker(root, {
+    runId: 'skill-live',
+    skillId: 'feature-builder',
+    what: 'w',
+    startedAt: 'now',
+    pid: process.pid,
+  });
+  writeSkillLaunchMarker(root, {
+    runId: 'skill-done',
+    skillId: 'feature-builder',
+    what: 'w',
+    startedAt: 'now',
+    pid: 2147483646,
+  });
+  writeFileSync(
+    join(skillRunDir(root, 'skill-done'), 'skill-run-report.json'),
+    JSON.stringify({ runId: 'skill-done', skillId: 'feature-builder' }),
+  );
+  const summaries = listSkillRunSummaries(root);
+  const byId = new Map(summaries.map((s) => [s.runId, s]));
+  assert.equal(byId.get('skill-live')?.status, 'running');
+  assert.equal(byId.get('skill-done')?.status, 'final');
+  // A summary asserts no completion verdict — there is no 'passed'/'completion' field to leak a green.
+  for (const s of summaries) assert.equal(Object.hasOwn(s, 'completion'), false);
+});
+
+test('renderSkillRun shows an honest no-verdict panel for a still-running launch (no throw)', () => {
+  const root = tmpRepo();
+  writeSkillLaunchMarker(root, {
+    runId: 'skill-live',
+    skillId: 'feature-builder',
+    what: 'a slugify helper',
+    startedAt: 'now',
+    pid: process.pid,
+  });
+  const html = renderSkillRun('skill-live', root);
+  assert.match(html, /no verdict yet|Running/i);
+  assert.doesNotMatch(html, /Authoritative completion/);
+  assert.match(html, /a slugify helper/);
+});
+
+test('renderSkillRun flags an exited-without-verdict launch as a stuck launch, not a completion', () => {
+  const root = tmpRepo();
+  writeSkillLaunchMarker(root, {
+    runId: 'skill-dead',
+    skillId: 'feature-builder',
+    what: 'w',
+    startedAt: 'now',
+    pid: 2147483646,
+  });
+  const html = renderSkillRun('skill-dead', root);
+  assert.match(html, /Exited without a verdict|no recomputable evidence/i);
+  assert.doesNotMatch(html, /Authoritative completion/);
 });
