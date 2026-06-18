@@ -47,6 +47,7 @@ import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/nativ
 import { createOrchestratorServer, defaultExecutorRegistry, runSubmittedGraph } from './harness/orchestrator-server.js';
 import {
   loadSkillSpecFromJson,
+  projectSkillRun,
   recomputeCompletionFromLedger,
   runOrchestratorSkill,
   type SkillSpecJson,
@@ -152,6 +153,7 @@ function usage(): string {
   warden promotion verify-learning
   warden provider conformance --all
   warden skill run <spec.json> --what "<goal>"
+  warden skill show <runId>            # operator projection: recomputes completion, flags contradictions
   warden skills verify-contracts [--run <run-id>]
   warden worktrees cleanup
   warden maintenance reconcile-runs
@@ -664,6 +666,19 @@ async function main() {
         `AUTHORITATIVE (ledger recompute, report field is display-only): completion=${recomputed.completion} (${recomputed.reason})`,
       );
       if (recomputed.completion === 'failed') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'skill' && sub === 'show') {
+      const runId = firstNonFlag(rest);
+      if (!runId) throw new Error('usage: warden skill show <runId>');
+      const projection = projectSkillRun({ root: process.cwd(), runId });
+      console.log(JSON.stringify(projection, null, 2));
+      if (projection.contradiction) {
+        console.log(
+          'CONTRADICTION: stored/display completion disagrees with the authoritative ledger recompute — trust the recompute, not the report.',
+        );
+        process.exitCode = 2;
+      }
       return;
     }
     if (cmd === 'worktrees' && sub === 'cleanup') {

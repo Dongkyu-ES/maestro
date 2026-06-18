@@ -14,6 +14,7 @@ import {
   loadSkillSpecFromJson,
   materializeEvidenceInto,
   type OrchestratorSkillSpec,
+  projectSkillRun,
   recomputeCompletion,
   recomputeCompletionFromLedger,
   resolveEvidenceArtifact,
@@ -594,6 +595,45 @@ test('skill re-runs do not collide on fixed worktree names and clean up after th
   // Per-run worktrees are removed after each run, so none linger to collide with later runs.
   const worktreesDir = join(root, '.agent', 'worktrees');
   assert.equal(existsSync(worktreesDir) ? readdirSync(worktreesDir).length : 0, 0);
+});
+
+test('projectSkillRun reports authoritative pass with no contradiction on an honest green run', async () => {
+  const root = tmpRepo();
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' }));
+  const runId = 'skill-projection-pass';
+
+  await runOrchestratorSkill(spec, { what: 'projection pass', root, runId });
+  const projection = projectSkillRun({ root, runId });
+
+  assert.equal(projection.skillId, spec.id);
+  assert.equal(projection.ledgerValid, true);
+  assert.equal(projection.phases.length, 3);
+  assert.equal(projection.reportCompletion, 'passed');
+  assert.equal(projection.authoritativeCompletion, 'passed');
+  assert.equal(projection.contradiction, false);
+});
+
+test('projectSkillRun flags a tampered report (UI cannot show green when the gate is red)', async () => {
+  const root = tmpRepo();
+  // forged execute (a-b) → clean acceptance fails → honest completion is "failed"
+  const spec = addAcceptanceSpec(addAcceptanceExecutor({ implementation: 'export function add(a,b){return a-b}\n' }));
+  const runId = 'skill-projection-tamper';
+
+  await runOrchestratorSkill(spec, { what: 'projection tamper', root, runId });
+  const honest = projectSkillRun({ root, runId });
+  assert.equal(honest.authoritativeCompletion, 'failed');
+  assert.equal(honest.contradiction, false); // stored report already says failed — agrees
+
+  // Tamper the operator-facing report on disk to claim success.
+  const reportPath = join(root, '.agent', 'skill-runs', runId, 'skill-run-report.json');
+  const stored = JSON.parse(readFileSync(reportPath, 'utf8')) as Record<string, unknown>;
+  stored.completion = 'passed';
+  stored.completionDisplay = 'supported';
+  writeFileSync(reportPath, JSON.stringify(stored, null, 2));
+
+  const projected = projectSkillRun({ root, runId });
+  assert.equal(projected.authoritativeCompletion, 'failed'); // recompute ignores the tampered field
+  assert.equal(projected.contradiction, true);
 });
 
 function briefExecutor(briefContent: string): HarnessExecutor {

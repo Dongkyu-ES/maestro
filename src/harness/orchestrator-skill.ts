@@ -506,9 +506,96 @@ export async function runOrchestratorSkill(
   // Lifecycle events are derived projections appended AFTER the verdict is fixed;
   // they describe the run, they never decide it.
   emitLifecycleProjection({ root: input.root, runId, spec, phases });
-  const reportPath = join(skillRunDir(input.root, runId), 'skill-run-report.json');
-  mkdirSync(dirname(reportPath), { recursive: true });
-  writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
+  const dir = skillRunDir(input.root, runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, 'skill-run-report.json'), `${JSON.stringify(report, null, 2)}\n`);
+  // Persist the serializable spec (executors dropped — they are functions) so an operator
+  // projection can later RECOMPUTE completion from disk, not trust the stored report field.
+  writeFileSync(join(dir, 'skill-spec.json'), `${JSON.stringify(toSerializableSpec(spec), null, 2)}\n`);
 
   return report;
+}
+
+interface SerializableSkillSpec {
+  id: string;
+  acceptance?: OrchestratorSkillSpec['acceptance'];
+  phases: Record<PhaseId, { goalTemplate: string; acceptArtifact?: string }>;
+}
+
+function toSerializableSpec(spec: OrchestratorSkillSpec): SerializableSkillSpec {
+  const phase = (id: PhaseId) => ({
+    goalTemplate: spec.phases[id].goalTemplate,
+    acceptArtifact: spec.phases[id].acceptArtifact,
+  });
+  return {
+    id: spec.id,
+    acceptance: spec.acceptance,
+    phases: { research: phase('research'), execute: phase('execute'), review: phase('review') },
+  };
+}
+
+export interface SkillRunProjection {
+  runId: string;
+  skillId: string;
+  ledgerValid: boolean;
+  phases: { phase: PhaseId; nodeState: NodeState; label: string }[];
+  /** Display-only mirror of the review node state (what the run reported for show). */
+  displayCompletion: NodeState;
+  /** The display-only completion field as stored in the report. */
+  reportCompletion: 'passed' | 'failed' | 'skipped';
+  /** The authoritative verdict, recomputed from the ledger + execute evidence on disk. */
+  authoritativeCompletion: 'passed' | 'failed' | 'skipped';
+  /** True when the stored/display fields disagree with the authoritative recompute. */
+  contradiction: boolean;
+  reason: string;
+}
+
+/**
+ * Operator projection (stage U): render a skill run's truth WITHOUT trusting the stored
+ * report. It recomputes completion from the persisted spec + ledger + execute evidence and
+ * flags any contradiction — so the UI can never show green when the gate is red.
+ */
+export function projectSkillRun(opts: { root: string; runId: string }): SkillRunProjection {
+  const dir = skillRunDir(opts.root, opts.runId);
+  const report = JSON.parse(readFileSync(join(dir, 'skill-run-report.json'), 'utf8')) as SkillRunReport;
+  const specJson = JSON.parse(readFileSync(join(dir, 'skill-spec.json'), 'utf8')) as SerializableSkillSpec;
+  const spec: OrchestratorSkillSpec = {
+    id: specJson.id,
+    acceptance: specJson.acceptance,
+    phases: {
+      research: { goalTemplate: specJson.phases.research.goalTemplate, acceptArtifact: specJson.phases.research.acceptArtifact },
+      execute: { goalTemplate: specJson.phases.execute.goalTemplate, acceptArtifact: specJson.phases.execute.acceptArtifact },
+      review: { goalTemplate: specJson.phases.review.goalTemplate, acceptArtifact: specJson.phases.review.acceptArtifact },
+    },
+  };
+
+  let ledgerValid = true;
+  let authoritativeCompletion: 'passed' | 'failed' | 'skipped' = 'failed';
+  let reason: string;
+  try {
+    const recomputed = recomputeCompletionFromLedger(spec, opts);
+    authoritativeCompletion = recomputed.completion;
+    reason = recomputed.reason;
+  } catch (error) {
+    ledgerValid = false;
+    reason = error instanceof Error ? error.message : String(error);
+  }
+
+  // completionDisplay mirrors the review NODE state (supported = review ran), which is NOT a
+  // green claim — a legitimately failed acceptance still has a supported review node. The only
+  // completion claim is the display-only report.completion field; contradiction is when that
+  // (or an invalid ledger) disagrees with the authoritative recompute.
+  const contradiction = !ledgerValid || report.completion !== authoritativeCompletion;
+
+  return {
+    runId: report.runId,
+    skillId: report.skillId,
+    ledgerValid,
+    phases: report.phases.map((phase) => ({ phase: phase.phase, nodeState: phase.nodeState, label: phase.nodeState })),
+    displayCompletion: report.completionDisplay,
+    reportCompletion: report.completion,
+    authoritativeCompletion,
+    contradiction,
+    reason,
+  };
 }
