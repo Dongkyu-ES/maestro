@@ -79,6 +79,7 @@ import { renderHtml, renderReviewGate, renderRun, renderSkillRun } from './view.
 import { loadModuleCatalog } from './composition/catalog.js';
 import { adapterFor, applyCompositionToWorktree, verifyInjection } from './composition/inject.js';
 import { recomputeInjectionFromLedger, recordInjectionEvent } from './composition/inject-ledger.js';
+import { runMagicInjectionRun } from './composition/magic-run.js';
 import { formatMagicPlan, resolveMagicPlan } from './composition/magic.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -199,6 +200,7 @@ function usage(): string {
   warden magic catalog                 # list the module catalog (declared + discovered)
   warden magic apply [--into <dir>] [--executor claude|codex|agy] [--approve-secrets]  # inject resolved MCP capability (hash-chained composition.injected ledger record)
   warden magic show <magicRunId> [--into <dir>] [--executor ...]  # recompute the injection record from the ledger; flag contradiction
+  warden magic run "<goal>" [--executor claude|codex|agy] [--approve-secrets]  # inject resolved MCP then run the executor in that worktree; ledger composition.injected
   warden skills verify-contracts [--run <run-id>]
   warden worktrees cleanup
   warden maintenance reconcile-runs
@@ -801,6 +803,33 @@ async function main() {
       // A real injection whose own writes fail integrity (or whose ledger record can't be reproduced)
       // is an error; honest 'unsupported'/'none' is not. Consumption is never proven here.
       if (manifest.files.length > 0 && (!verification.integrityOk || !ledgerCheck.reproduced)) process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'magic' && sub === 'run') {
+      const goal = firstNonFlag(rest);
+      if (!goal) throw new Error('usage: warden magic run "<goal>" [--executor claude|codex|agy] [--approve-secrets]');
+      const executorLabel = arg('--executor') ?? 'claude';
+      const magicRegistry = defaultExecutorRegistry();
+      if (!magicRegistry.has(executorLabel)) throw new Error(`unknown executor: ${executorLabel} (use codex|claude|agy)`);
+      const executor = magicRegistry.resolve(executorLabel); // undefined for codex → native default
+      const catalog = loadModuleCatalog({ root: process.cwd() });
+      const plan = resolveMagicPlan({ root: process.cwd(), goal, catalog });
+      const selectedMcpIds = new Set(plan.selected.filter((s) => s.kind === 'mcp').map((s) => s.moduleId));
+      const mcpModules = catalog.modules.filter((m) => m.kind === 'mcp' && selectedMcpIds.has(m.id));
+      const result = await runMagicInjectionRun({
+        root: process.cwd(),
+        goal,
+        magicRunId: `magic-${randomUUID()}`,
+        executor,
+        executorLabel,
+        mcpModules,
+        adapter: adapterFor(executorLabel),
+        approveSecrets: has('--approve-secrets'),
+      });
+      console.log(JSON.stringify(result, null, 2));
+      if (result.manifest.files.length > 0 && (!result.verification.integrityOk || !result.ledgerCheck.reproduced)) {
+        process.exitCode = 2;
+      }
       return;
     }
     if (cmd === 'magic' && sub === 'show') {

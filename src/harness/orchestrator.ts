@@ -116,6 +116,10 @@ async function runWorkerSlice(options: {
   inputRefs?: EvidenceRef[];
   /** Absolute path to the PROJECT memory fabric, injected read-only into the worker's context. */
   fabricAgentDir?: string;
+  /** Opt-in hook run AFTER evidence is materialized and BEFORE the executor runs — used by Warden
+   *  Magic to inject composed capability (.mcp.json) into the worktree the executor will run in.
+   *  Default undefined = no-op (zero behavior change for existing callers). */
+  beforeExecute?: (worktreePath: string) => void;
 }): Promise<WorkerResult> {
   const base = {
     workerId: options.workerId,
@@ -124,6 +128,7 @@ async function runWorkerSlice(options: {
   };
   try {
     for (const ref of options.inputRefs ?? []) materializeEvidenceInto(ref, options.worktreePath);
+    options.beforeExecute?.(options.worktreePath);
     const slice = await runHarnessSlice({
       root: options.worktreePath,
       goal: options.goal,
@@ -167,6 +172,8 @@ export async function runIsolatedWorker(options: {
   executorLabel?: string;
   timeoutMs?: number;
   inputRefs?: EvidenceRef[];
+  /** Opt-in pre-executor hook (Warden Magic injection). Default no-op. */
+  beforeExecute?: (worktreePath: string) => void;
 }): Promise<WorkerResult> {
   const root = resolve(options.root);
   const { branch, worktreePath } = createWorktree(root, options.workerId);
@@ -180,6 +187,7 @@ export async function runIsolatedWorker(options: {
     timeoutMs: options.timeoutMs,
     inputRefs: options.inputRefs,
     fabricAgentDir: join(root, '.agent'),
+    beforeExecute: options.beforeExecute,
   });
 }
 
