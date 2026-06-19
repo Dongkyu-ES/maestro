@@ -80,6 +80,7 @@ import { loadModuleCatalog } from './composition/catalog.js';
 import { adapterFor, applyCompositionToWorktree, verifyInjection } from './composition/inject.js';
 import { recomputeInjectionFromLedger, recordInjectionEvent } from './composition/inject-ledger.js';
 import { runMagicInjectionRun } from './composition/magic-run.js';
+import { canaryModule, withCanaryProbe } from './composition/smoke-probe.js';
 import { formatMagicPlan, resolveMagicPlan } from './composition/magic.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -200,7 +201,7 @@ function usage(): string {
   warden magic catalog                 # list the module catalog (declared + discovered)
   warden magic apply [--into <dir>] [--executor claude|codex|agy] [--approve-secrets]  # inject resolved MCP capability (hash-chained composition.injected ledger record)
   warden magic show <magicRunId> [--into <dir>] [--executor ...]  # recompute the injection record from the ledger; flag contradiction
-  warden magic run "<goal>" [--executor claude|codex|agy] [--approve-secrets]  # inject resolved MCP then run the executor in that worktree; ledger composition.injected
+  warden magic run "<goal>" [--executor claude|codex|agy] [--approve-secrets] [--prove]  # inject resolved MCP then run; --prove adds a canary to prove consumption from a real side effect
   warden skills verify-contracts [--run <run-id>]
   warden worktrees cleanup
   warden maintenance reconcile-runs
@@ -816,14 +817,27 @@ async function main() {
       const plan = resolveMagicPlan({ root: process.cwd(), goal, catalog });
       const selectedMcpIds = new Set(plan.selected.filter((s) => s.kind === 'mcp').map((s) => s.moduleId));
       const mcpModules = catalog.modules.filter((m) => m.kind === 'mcp' && selectedMcpIds.has(m.id));
+      const magicRunId = `magic-${randomUUID()}`;
+      // --prove: inject a canary MCP + ask the executor to call it once, then prove consumption from
+      // the sentinel it leaves (real side effect, not prose). Without --prove, consumption stays
+      // honestly unproven.
+      let runAdapter = adapterFor(executorLabel);
+      let runModules = mcpModules;
+      let runGoal = goal;
+      if (has('--prove')) {
+        const canaryCfg = { token: magicRunId, sentinelRelPath: '.warden-canary' };
+        runAdapter = withCanaryProbe(runAdapter, canaryCfg);
+        runModules = [...mcpModules, canaryModule(canaryCfg)];
+        runGoal = `${goal}\n\n[warden consumption check] First call the MCP tool warden_canary_ping exactly once (this confirms your injected MCP config loaded), then proceed with the task.`;
+      }
       const result = await runMagicInjectionRun({
         root: process.cwd(),
-        goal,
-        magicRunId: `magic-${randomUUID()}`,
+        goal: runGoal,
+        magicRunId,
         executor,
         executorLabel,
-        mcpModules,
-        adapter: adapterFor(executorLabel),
+        mcpModules: runModules,
+        adapter: runAdapter,
         approveSecrets: has('--approve-secrets'),
       });
       console.log(JSON.stringify(result, null, 2));

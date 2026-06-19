@@ -8,6 +8,7 @@ import type { HarnessExecutor } from '../harness/harness-run.js';
 import type { CatalogModule } from './catalog.js';
 import { adapterFor } from './inject.js';
 import { runMagicInjectionRun } from './magic-run.js';
+import { withCanaryProbe } from './smoke-probe.js';
 
 function tmpRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'magic-run-'));
@@ -88,6 +89,33 @@ test('magic run: an executor that tampers the injected .mcp.json is caught (inte
   });
   assert.equal(res.verification.integrityOk, false, 'post-exec tampering of the injected file is caught');
   assert.equal(res.verification.mutated.length, 1);
+});
+
+test('magic run: consumptionProven flips true ONLY when the executor leaves the canary sentinel', async () => {
+  const cfg = { token: 'prove-tok', sentinelRelPath: '.warden-canary' };
+  const adapter = withCanaryProbe(adapterFor('claude'), cfg);
+
+  // (a) executor does NOT call the canary (no sentinel) → consumption stays unproven.
+  const idleExec: HarnessExecutor = async (o) => {
+    writeFileSync(join(o.cwd, 'out.txt'), 'idle\n');
+    return fakeResult(o.cwd, o.label);
+  };
+  const unproven = await runMagicInjectionRun({
+    root: tmpRepo(), goal: 'g', magicRunId: 'magic-prove-0', executor: idleExec, executorLabel: 'claude',
+    mcpModules: [mcpModule('ra', 'rust-analyzer', ['ra-mcp'])], adapter,
+  });
+  assert.equal(unproven.verification.consumptionProven, false);
+
+  // (b) executor "calls the canary" (writes the sentinel) → consumption proven by the real artifact.
+  const callingExec: HarnessExecutor = async (o) => {
+    writeFileSync(join(o.cwd, cfg.sentinelRelPath), cfg.token); // simulates the canary tool being called
+    return fakeResult(o.cwd, o.label);
+  };
+  const proven = await runMagicInjectionRun({
+    root: tmpRepo(), goal: 'g', magicRunId: 'magic-prove-1', executor: callingExec, executorLabel: 'claude',
+    mcpModules: [mcpModule('ra', 'rust-analyzer', ['ra-mcp'])], adapter,
+  });
+  assert.equal(proven.verification.consumptionProven, true);
 });
 
 test('magic run: an unsupported executor (codex) injects nothing — executor sees no .mcp.json', async () => {
