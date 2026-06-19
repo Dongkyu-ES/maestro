@@ -1,9 +1,13 @@
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { git, gitNoIndexPatch, isSecretPath, patchTouchedFiles } from '../util.js';
+import { confinedTarget } from './path-confine.js';
+
+/** Hard ceiling on the acceptance command, matching command-acceptance.ts. */
+const ACCEPTANCE_TIMEOUT_MS = 120_000;
 
 /**
  * Multi-file execute evidence for the orchestrator-skill path.
@@ -121,15 +125,19 @@ export function reconstructAndRun(opts: {
     }
   }
 
-  // Operator tests overlaid LAST so an executor edit to its own grader is overwritten.
+  // Operator tests overlaid LAST so an executor edit to its own grader is overwritten. Each write is
+  // realpath-confined to the reconstruction root (mirrors command-acceptance.ts): a `..`/absolute
+  // path, or one whose ancestor is a symlink the diff carried in, is refused rather than followed out.
+  const reconRealRoot = realpathSync(reconWt);
   for (const testFile of opts.testFiles ?? []) {
-    const testPath = join(reconWt, testFile.path);
+    const testPath = confinedTarget(reconRealRoot, testFile.path);
+    if (!testPath) return fail(`operator testFile path escapes the reconstruction root: ${testFile.path}`);
     mkdirSync(dirname(testPath), { recursive: true });
     writeFileSync(testPath, testFile.content);
   }
 
   try {
-    const result = spawnSync(command[0], command.slice(1), { cwd: reconWt, encoding: 'utf8', maxBuffer: 1024 * 1024 * 10 });
+    const result = spawnSync(command[0], command.slice(1), { cwd: reconWt, encoding: 'utf8', maxBuffer: 1024 * 1024 * 10, timeout: ACCEPTANCE_TIMEOUT_MS });
     const output = `${result.stdout ?? ''}${result.stderr ?? ''}`;
     const reason = result.error
       ? result.error.message

@@ -66,6 +66,22 @@ test('worktree-evidence: an unreachable base commit fails closed (never a silent
   assert.match(result.reason, /not reachable/);
 });
 
+test('worktree-evidence: an operator testFile path escaping the reconstruction root is refused', () => {
+  const root = initRepo();
+  writeFileSync(join(root, 'a.txt'), 'a\n');
+  commitAll(root, 'base');
+  const baseCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim();
+  const result = reconstructAndRun({
+    root,
+    baseCommit,
+    patch: '',
+    testFiles: [{ path: '../escaped.txt', content: 'pwned' }],
+    command: ['node', '-e', 'process.exit(0)'],
+  });
+  assert.equal(result.ran, false);
+  assert.match(result.reason, /escapes the reconstruction root/);
+});
+
 test('worktree-evidence: a patch that does not apply onto the base fails closed', () => {
   const root = initRepo();
   writeFileSync(join(root, 'a.txt'), 'original\n');

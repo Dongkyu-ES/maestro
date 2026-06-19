@@ -14,7 +14,8 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, relative, resolve, sep } from 'node:path';
+import { dirname, join } from 'node:path';
+import { confinedTarget } from './path-confine.js';
 
 /**
  * Executable task-correctness acceptance, M7-grade. This is the honest counterpart to the
@@ -81,29 +82,6 @@ function parseStatusZ(out: string): ChangedEntry[] {
     entries.push({ path, deleted: x === 'D' || y === 'D' });
   }
   return entries;
-}
-
-function isLexicalRelSafe(rel: string): boolean {
-  if (!rel || rel.startsWith('/') || rel.startsWith('\\')) return false;
-  return !rel.split(/[\\/]/).some((seg) => seg === '..' || seg === '' || seg === '.');
-}
-
-/**
- * Resolve a repo-relative path to a write target inside `cleanRealRoot`, refusing if it escapes the
- * root OR if any existing ancestor segment is a symlink (which an executor could have committed at
- * HEAD to redirect the write out of the sandbox). Returns null to skip the write.
- */
-function confinedTarget(cleanRealRoot: string, rel: string): string | null {
-  if (!isLexicalRelSafe(rel)) return null;
-  const target = resolve(cleanRealRoot, rel);
-  const lexRel = relative(cleanRealRoot, target);
-  if (lexRel === '..' || lexRel.startsWith(`..${sep}`)) return null;
-  let cur = cleanRealRoot;
-  for (const segment of lexRel.split(sep)) {
-    cur = join(cur, segment);
-    if (existsSync(cur) && lstatSync(cur).isSymbolicLink()) return null;
-  }
-  return target;
 }
 
 function stripSymlinks(dir: string): void {
