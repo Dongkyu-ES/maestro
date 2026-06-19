@@ -13,6 +13,13 @@ import type { InjectionAdapter } from './inject.js';
  *
  * Deterministic here: the canary server + the probe are unit-tested directly. The live end (a real
  * claude run loading the canary and calling its tool) is a documented dogfood.
+ *
+ * HONEST CEILING (R-native-ownership): the sentinel proves the canary tool was called by a
+ * COOPERATIVE executor — confirming the injected MCP config genuinely loaded. It is NOT an
+ * adversarial proof: an executor that owns the worktree could write the sentinel directly without
+ * ever loading the MCP. So `consumptionProven` means "consumption confirmed for a non-adversarial
+ * executor", not "the executor could not have faked it". Defeating a malicious executor would need
+ * the canary to leave a trace only Warden (not the executor) can produce — out of scope here.
  */
 
 export interface CanaryConfig {
