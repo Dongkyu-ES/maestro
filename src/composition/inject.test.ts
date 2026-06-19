@@ -220,3 +220,30 @@ test('Item A merge: a pre-existing CLAUDE.md is preserved (backed up) and append
   assert.equal(m.backed_up.some((b) => b.path === 'CLAUDE.md'), true, 'original backed up');
   assert.equal(m.instruction_files[0].merged, true);
 });
+
+test('Item A replay: non-merge instruction file is purely reproducible; merge file excluded but integrity-caught', () => {
+  const wt = tmpWorktree();
+  const writeMod = instrModule('w', 'soul.md', '# soul\n', false);
+  const manifest = applyCompositionToWorktree({
+    worktree: wt, mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [writeMod], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  const recomputed = recomputeInjectionFiles({
+    mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [writeMod], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  assert.equal(manifestReproducible(manifest, recomputed), true, 'non-merge instruction reproduces from inputs');
+
+  // A merge instruction file (base-dependent) is excluded from pure replay but caught by integrity.
+  const wt2 = tmpWorktree();
+  writeFileSync(join(wt2, 'CLAUDE.md'), '# base\n');
+  const mergeMod = instrModule('m', 'CLAUDE.md', '# add\n', true);
+  const m2 = applyCompositionToWorktree({
+    worktree: wt2, mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [mergeMod], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  const r2 = recomputeInjectionFiles({ mcpModules: [], adapter: adapterFor('claude'), instructionModules: [mergeMod], approveInstructions: true, acceptanceIsPinnedTest: true });
+  assert.equal(manifestReproducible(m2, r2), true, 'merge file excluded from pure replay → reproducible holds');
+  writeFileSync(join(wt2, 'CLAUDE.md'), 'tampered\n');
+  assert.equal(verifyInjection(wt2, m2, { adapter: adapterFor('claude') }).integrityOk, false, 'merge file tamper caught by integrity');
+});

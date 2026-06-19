@@ -271,22 +271,48 @@ export function applyCompositionToWorktree(opts: {
   };
 }
 
-/** Pure replay (B3): re-derive the intended injected files from ledgered inputs. */
+/**
+ * Pure replay (B3): re-derive the injected files whose bytes are a PURE function of the ledgered
+ * inputs — the MCP config and any NON-merge instruction files (`sha256(content)`). MERGE instruction
+ * files are deliberately excluded: their merged bytes depend on the pre-existing worktree file (base),
+ * which is not a catalog input, so they are not purely reproducible — they are covered by
+ * `verifyInjection` on-disk integrity instead (see manifestReproducible).
+ */
 export function recomputeInjectionFiles(opts: {
   mcpModules: CatalogModule[];
   adapter: InjectionAdapter;
   approveSecrets?: boolean;
+  instructionModules?: CatalogModule[];
+  approveInstructions?: boolean;
+  acceptanceIsPinnedTest?: boolean;
 }): InjectedFile[] {
-  if (!opts.adapter.supportsLocalMcp) return [];
-  const { safe } = partitionBySecret(opts.mcpModules, opts.approveSecrets ?? false);
-  if (safe.length === 0) return [];
-  return [{ path: opts.adapter.mcpConfigPath, sha256: sha256Hex(Buffer.from(buildMcpConfigJson(safe))) }];
+  const files: InjectedFile[] = [];
+  if (opts.adapter.supportsLocalMcp) {
+    const { safe } = partitionBySecret(opts.mcpModules, opts.approveSecrets ?? false);
+    if (safe.length > 0) files.push({ path: opts.adapter.mcpConfigPath, sha256: sha256Hex(Buffer.from(buildMcpConfigJson(safe))) });
+  }
+  if (opts.approveInstructions && opts.acceptanceIsPinnedTest) {
+    for (const m of opts.instructionModules ?? []) {
+      // Only non-merge (write) instruction files are purely reproducible from inputs.
+      if (m.instruction && !m.instruction.merge) {
+        files.push({ path: m.instruction.targetPath, sha256: sha256Hex(Buffer.from(m.instruction.content)) });
+      }
+    }
+  }
+  return files;
 }
 
+/**
+ * The manifest is reproducible iff every PURELY-reproducible written file (MCP + non-merge
+ * instruction) matches the pure recompute. Merge instruction files (base-dependent) are excluded
+ * from this check — their tamper-evidence is `verifyInjection`'s on-disk integrity, not pure replay.
+ */
 export function manifestReproducible(manifest: InjectionManifest, recomputed: InjectedFile[]): boolean {
-  if (manifest.files.length !== recomputed.length) return false;
+  const mergePaths = new Set(manifest.instruction_files.filter((f) => f.merged).map((f) => f.path));
+  const pureFiles = manifest.files.filter((f) => !mergePaths.has(f.path));
+  if (pureFiles.length !== recomputed.length) return false;
   const byPath = new Map(recomputed.map((f) => [f.path, f.sha256]));
-  return manifest.files.every((f) => byPath.get(f.path) === f.sha256);
+  return pureFiles.every((f) => byPath.get(f.path) === f.sha256);
 }
 
 /**

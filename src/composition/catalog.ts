@@ -56,6 +56,9 @@ function readDeclaredFile(path: string, origin: 'declared'): CatalogModule[] {
         description: m.description,
         mcp: m.mcp,
         source: m.source,
+        // Slice-7 Item A: carry the instruction descriptor so declared instruction modules actually
+        // load (without this the allowlist silently dropped it → instruction injection was a no-op).
+        instruction: m.instruction,
         // Carry acceptance through ONLY so resolve can reject it (B1); never act on it here.
         acceptance: (m as { acceptance?: unknown }).acceptance,
       }));

@@ -199,3 +199,16 @@ test('integration: resolveMagicPlan loads real repo+global+discovered catalogs a
   const text = formatMagicPlan(plan);
   assert.match(text, /rejected modules \(1\)/);
 });
+
+test('catalog: a declared instruction descriptor survives the allowlist loader (not silently dropped)', () => {
+  const root = tmpDir();
+  const home = tmpDir('home-');
+  writeFileSync(
+    join(root, 'warden.modules.json'),
+    JSON.stringify({ modules: [{ id: 'guide', kind: 'agents_md', tags: ['rust'], instruction: { targetPath: 'CLAUDE.md', content: '# g\n', merge: true } }] }),
+  );
+  const catalog = loadModuleCatalog({ root, home });
+  const mod = catalog.modules.find((m) => m.id === 'guide');
+  assert.ok(mod?.instruction, 'instruction descriptor preserved on load');
+  assert.equal(mod?.instruction?.targetPath, 'CLAUDE.md');
+});

@@ -1275,3 +1275,28 @@ test('Item A forgery: an injected "fake completion" instruction does NOT launder
   assert.equal(recomputeCompletionFromLedger(spec, { root, runId: 'skill-instr-forge' }).completion, 'failed');
   assert.equal(report.injection?.manifest.instruction_files.length, 1, 'instruction was injected + recorded');
 });
+
+test('Item A gate (skill path): instruction injection refused when acceptance has no pinned testFiles', async () => {
+  const root = tmpRepo();
+  const exec: HarnessExecutor = async (o) => {
+    if (o.prompt.includes('research')) writeFileSync(join(o.cwd, 'research.txt'), 'r\n');
+    else if (o.prompt.includes('execute')) writeFileSync(join(o.cwd, 'add.mjs'), 'export function add(a,b){return a+b}\n');
+    else if (o.prompt.includes('review')) writeFileSync(join(o.cwd, 'review.txt'), 'v\n');
+    return codexResult({ cwd: o.cwd, label: o.label });
+  };
+  // Acceptance command with NO pinned testFiles → acceptanceIsPinnedTest is false → instruction refused.
+  const spec: OrchestratorSkillSpec = {
+    ...addAcceptanceSpec(exec),
+    acceptance: { command: ['node', '-e', 'process.exit(0)'] }, // command-only, no testFiles
+    inject: {
+      mcpModules: [],
+      adapter: adapterFor('claude'),
+      approveInstructions: true,
+      instructionModules: [{ id: 'g', kind: 'agents_md', tags: [], origin: 'declared', instruction: { targetPath: 'CLAUDE.md', content: '# g\n' } }],
+    },
+  };
+  const report = await runOrchestratorSkill(spec, { what: 'no pinned test', root, runId: 'skill-instr-nopin' });
+  assert.equal(report.injection?.manifest.instruction_files.length, 0, 'no instruction written');
+  assert.equal(report.injection?.manifest.skipped_instructions.length, 1);
+  assert.match(report.injection?.manifest.skipped_instructions[0].reason ?? '', /pinned-test/);
+});
