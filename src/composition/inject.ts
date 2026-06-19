@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import type { CatalogModule } from './catalog.js';
 
@@ -70,13 +70,17 @@ export function adapterFor(label: string): InjectionAdapter {
   return INJECTION_ADAPTERS[label] ?? { label, supportsLocalMcp: false, mcpConfigPath: '.mcp.json' };
 }
 
-// Secret detection (B6): keyword set + connection-string (user:pass@host) + known token prefixes.
+// Secret detection (B6) is a BEST-EFFORT HEURISTIC, not a security boundary. Catalog modules are
+// operator-authored (repo `warden.modules.json` / `~/.warden/catalog`), so this gate's job is to
+// warn the operator before their OWN secret is copied into a worktree `.mcp.json` (where it could
+// be committed/leaked) — not to defend against a malicious author (who is the operator). A complete
+// secret-pattern denylist is unwinnable; we cover the obvious formats and document the rest as
+// operator responsibility (use `--approve-secrets` deliberately).
 const SECRET_KEY_RE =
-  /(secret|token|password|passwd|passphrase|auth|jwt|bearer|session|credential|api[-_]?key|access[-_]?key|connection[-_]?string|db[-_]?uri|dsn|\bkey\b)/i;
+  /(secret|token|password|passwd|passphrase|\bpass\b|\bpwd\b|\bcreds?\b|auth|jwt|bearer|session|credential|api[-_]?key|access[-_]?key|connection[-_]?string|db[-_]?uri|dsn|\bkey\b)/i;
 const CONNSTRING_RE = /\/\/[^/\s:@]+:[^/\s:@]+@/;
-// Token prefixes allow hyphens/underscores so e.g. Anthropic `sk-ant-...` is caught (was bypassed).
 const TOKEN_PREFIX_RE =
-  /(gh[pousr]_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{16,}|xox[baprs]-[A-Za-z0-9-]{10,})/;
+  /(gh[pousr]_[A-Za-z0-9]{16,}|sk[_-][A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{16,}|(?:AKIA|ASIA)[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{10,})/;
 
 function sha256Hex(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex');
@@ -154,6 +158,19 @@ export function applyCompositionToWorktree(opts: {
     };
   }
   const target = join(worktree, adapter.mcpConfigPath);
+  // A path collision where the config path is a directory is a broken worktree, not something to
+  // crash on (EISDIR). Refuse gracefully with an honest status.
+  if (existsSync(target) && !statSync(target).isFile()) {
+    return {
+      schema_version: 1,
+      executor: adapter.label,
+      mcp_injection: 'none',
+      files: [],
+      skipped_secret_servers: skipped,
+      backed_up: [],
+      note: `${adapter.mcpConfigPath} exists but is not a file — refusing to inject (no crash)`,
+    };
+  }
   mkdirSync(dirname(target), { recursive: true });
   const backed_up: { path: string; backup: string; sha256: string }[] = [];
   if (existsSync(target)) {
@@ -228,11 +245,10 @@ export function verifyInjection(
 ): InjectionVerification {
   const mutated: InjectedFile[] = [];
   const missing: string[] = [];
-  const checks: InjectedFile[] = [
-    ...manifest.files,
-    ...manifest.backed_up.map((b) => ({ path: b.backup, sha256: b.sha256 })),
-  ];
-  for (const f of checks) {
+  // Integrity is over injection's CAPABILITY writes only. Backups are recovery artifacts (a
+  // cleaned/removed `.warden-bak` via `git clean` must not fail verification); their hash stays in
+  // the manifest for audit but their presence is not integrity-required.
+  for (const f of manifest.files) {
     const fp = join(worktree, f.path);
     if (!existsSync(fp)) {
       missing.push(f.path);

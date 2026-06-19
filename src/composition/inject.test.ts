@@ -87,11 +87,32 @@ test('inject: a pre-existing .mcp.json is backed up (hashed), never silently des
   assert.equal(manifest.backed_up.length, 1);
   assert.equal(manifest.backed_up[0].path, '.mcp.json');
   assert.match(readFileSync(join(wt, manifest.backed_up[0].backup), 'utf8'), /"mine"/);
-  // The backup is hashed and re-checked by verifyInjection (tamper-evident).
-  const v = verifyInjection(wt, manifest, { adapter: adapterFor('claude') });
-  assert.equal(v.integrityOk, true);
-  writeFileSync(join(wt, manifest.backed_up[0].backup), 'tampered\n');
-  assert.equal(verifyInjection(wt, manifest, { adapter: adapterFor('claude') }).integrityOk, false, 'a tampered backup is caught');
+  assert.ok(manifest.backed_up[0].sha256, 'backup hash recorded for audit');
+  // Backups are recovery artifacts, NOT integrity-required: removing one (e.g. `git clean`) must
+  // not fail verification of injection's capability writes.
+  rmSync(join(wt, manifest.backed_up[0].backup));
+  assert.equal(verifyInjection(wt, manifest, { adapter: adapterFor('claude') }).integrityOk, true, 'a cleaned backup does not fail integrity');
+});
+
+test('inject robustness: apply refuses gracefully (no EISDIR crash) when the config path is a directory', () => {
+  const wt = tmpWorktree();
+  mkdirSync(join(wt, '.mcp.json')); // collision: a directory named like the config
+  const manifest = applyCompositionToWorktree({ worktree: wt, mcpModules: [mcpModule('m', 'm', ['m'])], adapter: adapterFor('claude') });
+  assert.equal(manifest.mcp_injection, 'none');
+  assert.match(manifest.note, /not a file/);
+});
+
+test('inject B6: broadened formats gated (sk_live_ underscore, AWS AKIA, --pass)', () => {
+  const cases: [string, string[]][] = [
+    ['stripe', ['srv', 'sk_live_abcdefghij0123456789']],
+    ['aws', ['srv', 'AKIAIOSFODNN7EXAMPLE']],
+    ['passflag', ['srv', '--pass', 'hunter2hunter2']],
+  ];
+  for (const [id, command] of cases) {
+    const wt = tmpWorktree();
+    const m = applyCompositionToWorktree({ worktree: wt, mcpModules: [mcpModule(id, 'srv', command)], adapter: adapterFor('claude') });
+    assert.equal(m.mcp_injection, 'none', `${id} must be gated`);
+  }
 });
 
 test('inject B3 replay: manifest reproducible from ledgered inputs AND order-independent', () => {
