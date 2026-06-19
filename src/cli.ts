@@ -46,6 +46,7 @@ import {
 } from './core.js';
 import { readRuntimeEvents } from './events/ledger.js';
 import { readClosedLoopAcceptanceFile, runClosedLoop } from './harness/closed-loop.js';
+import { readCommandAcceptanceFile } from './harness/command-acceptance.js';
 import { exerciseCodexAppServerLifecycle } from './harness/codex-lifecycle-exercise.js';
 import { verifyContextProvenance } from './harness/context-provenance.js';
 import { anthropicDirectTransport, makeDirectProviderExecutor } from './harness/direct-provider.js';
@@ -172,7 +173,7 @@ function usage(): string {
   warden run create|start|collect|cancel|latest
   warden run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
   warden run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
-  warden harness run <goal> [--executor codex|claude|agy|anthropic-direct] [--executor-bin <path>] [--model M]
+  warden harness run <goal> [--executor codex|claude|agy|anthropic-direct] [--executor-bin <path>] [--model M] [--acceptance-file <path>]
   warden loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]
   warden runtime projection
   warden context verify --run <run-id>
@@ -355,14 +356,14 @@ async function main() {
       return;
     }
     if (cmd === 'harness' && sub === 'run') {
-      const valueFlags = ['--executor-bin', '--executor'];
+      const valueFlags = ['--executor-bin', '--executor', '--model', '--acceptance-file'];
       const goal = rest
         .filter((item, index) => !valueFlags.includes(item) && !valueFlags.includes(rest[index - 1]))
         .join(' ')
         .trim();
       if (!goal)
         throw new Error(
-          'usage: warden harness run <goal> [--executor codex|claude|agy|anthropic-direct] [--executor-bin <path>]',
+          'usage: warden harness run <goal> [--executor codex|claude|agy|anthropic-direct] [--executor-bin <path>] [--acceptance-file <path>]',
         );
       const executorKind = arg('--executor') ?? 'codex';
       let executor: HarnessExecutor | undefined;
@@ -378,12 +379,19 @@ async function main() {
           throw new Error(`unknown executor: ${executorKind} (use codex|claude|agy|anthropic-direct)`);
         executor = registry.resolve(executorKind); // undefined for codex → native runCodexExec default
       }
+      // Opt-in build/test gate: with --acceptance-file, "a real diff" is no longer enough —
+      // runCommandAcceptance re-runs the operator's command over a clean checkout of the run's diff
+      // (harness-run.ts), so a wrong implementation is blocked despite producing a diff. Without it,
+      // completion stays diff-only (a real, non-forbidden change), as before.
+      const acceptanceFile = arg('--acceptance-file');
+      const acceptance = acceptanceFile ? readCommandAcceptanceFile(acceptanceFile) : undefined;
       const report = await runHarnessSlice({
         root: process.cwd(),
         goal,
         executor,
         executorLabel: executorKind,
         executorBin: arg('--executor-bin'),
+        acceptance,
         // Load this project's memory fabric into context (gate #4 admits only provenanced+fresh
         // facts). No-op when the fabric is empty, so this is safe to enable by default.
         fabricAgentDir: '.agent',

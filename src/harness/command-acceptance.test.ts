@@ -4,7 +4,7 @@ import { existsSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
-import { runCommandAcceptance } from './command-acceptance.js';
+import { readCommandAcceptanceFile, runCommandAcceptance } from './command-acceptance.js';
 
 function tmpRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'cmd-accept-'));
@@ -113,4 +113,29 @@ test('C2: a unicode-named changed file is materialized (no git quotepath diverge
   });
   // Without the -z/quotepath fix the file would be mis-parsed and dropped → exit 1 → passed false.
   assert.equal(result.passed, true);
+});
+
+test('readCommandAcceptanceFile parses a valid spec and rejects malformed ones (fail fast, not silent degrade)', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'accept-file-'));
+  const ok = join(dir, 'ok.json');
+  writeFileSync(ok, JSON.stringify({ command: ['node', 'accept.mjs'], testFiles: [{ path: 'accept.mjs', content: 'x' }] }));
+  const spec = readCommandAcceptanceFile(ok);
+  assert.deepEqual(spec.command, ['node', 'accept.mjs']);
+  assert.equal(spec.testFiles?.[0].path, 'accept.mjs');
+
+  // command must be a non-empty string[]
+  const noCmd = join(dir, 'nocmd.json');
+  writeFileSync(noCmd, JSON.stringify({ command: [] }));
+  assert.throws(() => readCommandAcceptanceFile(noCmd), /non-empty string\[\]/);
+
+  // testFiles entries must be {path,content} strings
+  const badTf = join(dir, 'badtf.json');
+  writeFileSync(badTf, JSON.stringify({ command: ['node'], testFiles: [{ path: 'a' }] }));
+  assert.throws(() => readCommandAcceptanceFile(badTf), /string "path" and "content"/);
+
+  // not JSON, and missing file
+  const notJson = join(dir, 'bad.json');
+  writeFileSync(notJson, 'not json');
+  assert.throws(() => readCommandAcceptanceFile(notJson), /not valid JSON/);
+  assert.throws(() => readCommandAcceptanceFile(join(dir, 'nope.json')), /not found/);
 });

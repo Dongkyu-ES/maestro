@@ -6,6 +6,7 @@ import {
   lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   readdirSync,
   realpathSync,
   rmSync,
@@ -204,4 +205,34 @@ export function runCommandAcceptance(opts: {
       ? 'acceptance command passed over a clean checkout of the run diff'
       : `acceptance command exited ${result.status}`,
   });
+}
+
+/**
+ * Read an operator-authored acceptance spec from a JSON file, for `warden harness run
+ * --acceptance-file`. Shape: `{ "command": string[], "testFiles"?: [{ "path", "content" }] }`.
+ * Strictly validated so a malformed file fails fast rather than silently degrading the gate to
+ * diff-only. This is what makes the honest build/test gate reachable from the harness-run CLI.
+ */
+export function readCommandAcceptanceFile(path: string): CommandAcceptanceSpec {
+  if (!existsSync(path)) throw new Error(`acceptance file not found: ${path}`);
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch (err) {
+    throw new Error(`acceptance file is not valid JSON: ${path}: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  const obj = (parsed ?? {}) as { command?: unknown; testFiles?: unknown };
+  if (!Array.isArray(obj.command) || obj.command.length === 0 || !obj.command.every((c) => typeof c === 'string'))
+    throw new Error(`acceptance file ${path}: "command" must be a non-empty string[]`);
+  let testFiles: { path: string; content: string }[] | undefined;
+  if (obj.testFiles !== undefined) {
+    if (!Array.isArray(obj.testFiles)) throw new Error(`acceptance file ${path}: "testFiles" must be an array`);
+    testFiles = obj.testFiles.map((t, i) => {
+      const tf = (t ?? {}) as { path?: unknown; content?: unknown };
+      if (typeof tf.path !== 'string' || typeof tf.content !== 'string')
+        throw new Error(`acceptance file ${path}: testFiles[${i}] needs string "path" and "content"`);
+      return { path: tf.path, content: tf.content };
+    });
+  }
+  return { command: obj.command as string[], testFiles };
 }
