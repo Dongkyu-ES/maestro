@@ -139,7 +139,10 @@ export function runVerifier(input: VerifierInput): VerifierResult {
     const changed = statusText
       .split('\n')
       .filter(Boolean)
-      .map((line) => line.slice(3));
+      .flatMap((line) => {
+        const path = line.slice(3);
+        return path.includes(' -> ') ? path.split(' -> ') : [path];
+      });
     const forbidden = input.forbiddenChangedPaths || [];
     const hit = changed.find((file) => forbidden.includes(file));
     return {

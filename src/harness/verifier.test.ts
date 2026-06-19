@@ -82,6 +82,22 @@ test('G012 diff verifier is non-executing and requires digest-bound status artif
   assert.equal(supported.status, 'supported');
 });
 
+test('G012 diff verifier catches a rename INTO a forbidden path (rename-aware parse)', () => {
+  const root = tmpRoot();
+  const statusText = 'R  scratch.txt -> .github/workflows/ci.yml\n';
+  writeFileSync(join(root, 'git-status.txt'), statusText);
+  const expected = createHash('sha256').update(statusText).digest('hex');
+  const blocked = runVerifier({
+    type: 'diff',
+    root,
+    diffStatusArtifactRef: 'git-status.txt',
+    diffStatusExpectedSha256: expected,
+    forbiddenChangedPaths: ['.github/workflows/ci.yml'],
+  });
+  assert.equal(blocked.status, 'blocked');
+  assert.match(blocked.reason, /\.github\/workflows\/ci\.yml/);
+});
+
 test('M7 ledger verifier rejects stale head bindings instead of accepting old evidence', () => {
   const root = tmpRoot();
   const runDir = join(root, 'run');
