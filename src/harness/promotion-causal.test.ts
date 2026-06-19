@@ -4,6 +4,7 @@ import { existsSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { makeCliExecutor } from './compare.js';
 import { verifyPromotionCausal } from './promotion-causal.js';
 
 const PROMOTION_MARKER = 'PROMOTION_MARKER_CAUSAL_ON';
@@ -93,6 +94,28 @@ test('T4 promotion causal verifier rejects equal-length ignored filler as non-ca
   assert.equal(report.baselineDecision, 'baseline');
   assert.equal(report.controlDecision, 'baseline');
   assert.equal(report.treatmentDecision, 'baseline');
+  assert.equal(report.contextDeltaIsPromotionOnly, true);
+});
+
+test('T4 promotion causal verifier accepts a pluggable executor (executor pass-through)', async () => {
+  // Guards the `executor` seam (used by `warden promotion verify-causal --executor claude`): a
+  // HarnessExecutor passed directly must drive all three arms, same as `executorBin`.
+  const root = tmpRepo();
+  const executor = makeCliExecutor({
+    name: 'fake-pluggable',
+    bin: fakeCodex(MARKER_DECISION_FAKE_CODEX),
+    buildArgs: (p) => ['exec', p],
+  });
+  const report = await verifyPromotionCausal({
+    root,
+    goal: 'decide based on causal promotion context',
+    promotion: { id: 'known-marker', text: PROMOTION_MARKER },
+    executor,
+  });
+
+  assert.equal(report.causal, true);
+  assert.equal(report.baselineDecision, report.controlDecision);
+  assert.equal(report.treatmentDecision, 'promoted');
   assert.equal(report.contextDeltaIsPromotionOnly, true);
 });
 

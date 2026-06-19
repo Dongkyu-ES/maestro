@@ -1,13 +1,19 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { runHarnessSlice, type HarnessRunReport } from './harness-run.js';
+import { type HarnessExecutor, runHarnessSlice, type HarnessRunReport } from './harness-run.js';
 
 export interface PromotionCausalInput {
   root: string;
   goal: string;
   promotion: { id: string; text: string };
   executorBin?: string;
+  /**
+   * Optional pluggable executor (e.g. a real `claude -p` wrapper) used for all three runs. When
+   * omitted the native codex-exec path (`executorBin` or default) drives the runs. Threaded through
+   * to every run identically so the ONLY between-arm difference stays the promotion context delta.
+   */
+  executor?: HarnessExecutor;
 }
 
 export interface PromotionCausalReport {
@@ -111,12 +117,14 @@ export async function verifyPromotionCausal(options: PromotionCausalInput): Prom
   const baseline = await runHarnessSlice({
     root: options.root,
     goal: options.goal,
+    executor: options.executor,
     executorBin: options.executorBin,
     runId: `${causalRunId}-baseline`,
   });
   const control = await runHarnessSlice({
     root: options.root,
     goal: options.goal,
+    executor: options.executor,
     executorBin: options.executorBin,
     runId: `${causalRunId}-control`,
   });
@@ -124,6 +132,7 @@ export async function verifyPromotionCausal(options: PromotionCausalInput): Prom
     root: options.root,
     goal: options.goal,
     contextExtras: promotion,
+    executor: options.executor,
     executorBin: options.executorBin,
     runId: `${causalRunId}-treatment`,
   });

@@ -64,6 +64,7 @@ import {
   type SkillSpecJson,
   writeSkillLaunchMarker,
 } from './harness/orchestrator-skill.js';
+import { verifyPromotionCausal } from './harness/promotion-causal.js';
 import { verifyPromotionDifferential } from './harness/promotion-differential.js';
 import { runProviderConformance } from './harness/provider-normalization.js';
 import { verifySkillContracts } from './harness/skill-contracts.js';
@@ -194,6 +195,7 @@ function usage(): string {
   warden promotions
   warden promotion approve|reject|apply <id>
   warden promotion verify-learning
+  warden promotion verify-causal --goal <g> --promotion-file <path> [--executor codex|claude|agy] [--executor-bin <path>]
   warden provider conformance --all
   warden skill run <spec.json> --what "<goal>"
   warden skill show <runId>            # operator projection: recomputes completion, flags contradictions
@@ -723,6 +725,32 @@ async function main() {
       const report = verifyPromotionDifferential({ root: process.cwd() });
       console.log(JSON.stringify(report, null, 2));
       if (report.decision !== 'PASS') process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'promotion' && sub === 'verify-causal') {
+      // Strong A/A/B causal proof: two identical runs must agree (stability) and adding ONLY the
+      // promotion to context must flip the executor's decision. Reachable as a product command (not
+      // only a unit test), over any executor — codex (native) or a real `claude -p` / `agy -p`.
+      const goal = arg('--goal');
+      const promotionFile = arg('--promotion-file');
+      if (!goal || !promotionFile)
+        throw new Error(
+          'usage: warden promotion verify-causal --goal <g> --promotion-file <path> [--executor codex|claude|agy] [--executor-bin <path>] [--promotion-id <id>]',
+        );
+      const text = readFileSync(promotionFile, 'utf8');
+      const executorKind = arg('--executor') ?? 'codex';
+      const registry = defaultExecutorRegistry();
+      if (!registry.has(executorKind))
+        throw new Error(`unknown executor: ${executorKind} (use codex|claude|agy)`);
+      const report = await verifyPromotionCausal({
+        root: process.cwd(),
+        goal,
+        promotion: { id: arg('--promotion-id') ?? 'cli-promotion', text },
+        executor: registry.resolve(executorKind),
+        executorBin: arg('--executor-bin'),
+      });
+      console.log(JSON.stringify(report, null, 2));
+      if (!report.causal) process.exitCode = 2;
       return;
     }
     if (cmd === 'provider' && sub === 'conformance') {
