@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import type { CatalogModule } from './catalog.js';
 
 /**
@@ -14,7 +14,10 @@ import type { CatalogModule } from './catalog.js';
  *     `mcpConfigPath` (+ a `.warden-bak` of any pre-existing config) and records every byte. There
  *     is no runtime "scan the whole worktree for AI surfaces" closure, because that is an
  *     unwinnable denylist over an executor-owned tree (nested CLAUDE.md/GEMINI.md/.cursorrules/…).
- *   - integrity of those written files is re-checkable from disk (catches post-exec tampering).
+ *   - integrity of those written files is re-checked from disk IN-RUN — after the executor finishes
+ *     and BEFORE the ephemeral worktree is cleaned up — and recorded as tamper-evident evidence
+ *     (`integrityOk`), NEVER as a completion gate (injection never advances/blocks the verdict;
+ *     R-native-ownership). There is no post-hoc on-disk re-check: the worktree is gone by then.
  *   - the manifest is reproducible from the ledgered inputs (replay).
  *   - consumption is NEVER asserted (B2): there is no `proven` status; `consumptionProven` is only
  *     flipped by a LIVE `smokeProbe` (the built-in adapters here ship none; slice 5's
@@ -158,17 +161,34 @@ function injectInstructions(
     for (const m of modules) out.skipped.push({ id: m.id, reason: 'instruction injection requires pinned-test acceptance (artifact/diff acceptance is trivially injectable)' });
     return out;
   }
+  const root = resolve(worktree);
+  const claimed = new Set<string>();
   for (const m of modules) {
     if (!m.instruction) {
       out.skipped.push({ id: m.id, reason: 'no instruction descriptor' });
       continue;
     }
     const { targetPath, content, merge } = m.instruction;
-    const abs = join(worktree, targetPath);
+    const abs = resolve(worktree, targetPath);
+    // Containment (claude slice-7 MAJOR): `targetPath` is operator-catalog data, not adapter-fixed
+    // like mcpConfigPath. A `../escape` or absolute path would write OUTSIDE the executor-owned
+    // worktree. Reject anything that does not resolve under the worktree root — assumed, now enforced.
+    if (abs !== root && !abs.startsWith(root + sep)) {
+      out.skipped.push({ id: m.id, reason: `instruction targetPath escapes the worktree: ${targetPath}` });
+      continue;
+    }
+    // Duplicate targetPath (agy slice-7 MAJOR): two modules writing the same file would record two
+    // InjectedFile entries with divergent hashes (the first captured pre-overwrite), making
+    // verifyInjection report a false `mutated` even absent any executor tampering. Reject the collision.
+    if (claimed.has(abs)) {
+      out.skipped.push({ id: m.id, reason: `instruction targetPath already injected by another module: ${targetPath}` });
+      continue;
+    }
     if (existsSync(abs) && !statSync(abs).isFile()) {
       out.skipped.push({ id: m.id, reason: `${targetPath} exists but is not a file` });
       continue;
     }
+    claimed.add(abs);
     mkdirSync(dirname(abs), { recursive: true });
     let base_sha: string | undefined;
     let existing = '';

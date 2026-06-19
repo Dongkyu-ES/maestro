@@ -37,6 +37,10 @@ export function recordInjectionEvent(
       executor: manifest.executor,
       mcp_injection: manifest.mcp_injection,
       files: manifest.files,
+      // instruction_files carry the `merged` flag so recompute can exclude base-dependent merge
+      // files from pure replay (they are not a pure function of catalog inputs) — see
+      // recomputeInjectionFromLedger. Empty for MCP-only injections (today's magic CLI path).
+      instruction_files: manifest.instruction_files,
       skipped_secret_servers: manifest.skipped_secret_servers,
       backed_up: manifest.backed_up,
       ...(scope ? { scope } : {}),
@@ -69,7 +73,18 @@ function sameFiles(a: InjectedFile[], b: InjectedFile[]): boolean {
  */
 export function recomputeInjectionFromLedger(
   runDir: string,
-  opts: { mcpModules: CatalogModule[]; adapter: InjectionAdapter; approveSecrets?: boolean },
+  opts: {
+    mcpModules: CatalogModule[];
+    adapter: InjectionAdapter;
+    approveSecrets?: boolean;
+    // Instruction modules + their gate, forwarded so recompute stays correct once instruction
+    // injection flows through this path (today only the MCP-only magic CLI path reaches here, so
+    // these default empty/false and behaviour is unchanged). Without forwarding, a future
+    // instruction-injected run would record instruction files the recompute omits → false contradiction.
+    instructionModules?: CatalogModule[];
+    approveInstructions?: boolean;
+    acceptanceIsPinnedTest?: boolean;
+  },
 ): InjectionLedgerCheck {
   const events = readRuntimeEvents(runDir);
   validateRuntimeLedger(events); // throws on any chain break — fail closed
@@ -77,7 +92,17 @@ export function recomputeInjectionFromLedger(
   if (!last) {
     return { ledgerValid: true, found: false, status: null, reproduced: false, recorded: [], expected: [], reason: 'no composition.injected event in ledger' };
   }
-  const recorded = ((last.payload.files as InjectedFile[] | undefined) ?? []).map((f) => ({ path: f.path, sha256: f.sha256 }));
+  // MERGE instruction files depend on the pre-existing worktree file (base), not purely on catalog
+  // inputs, so they are excluded from pure replay (mirrors manifestReproducible) — their tamper
+  // evidence is verifyInjection's on-disk integrity, not this recompute. Empty for MCP-only runs.
+  const mergePaths = new Set(
+    ((last.payload.instruction_files as { path: string; merged?: boolean }[] | undefined) ?? [])
+      .filter((f) => f.merged)
+      .map((f) => f.path),
+  );
+  const recorded = ((last.payload.files as InjectedFile[] | undefined) ?? [])
+    .filter((f) => !mergePaths.has(f.path))
+    .map((f) => ({ path: f.path, sha256: f.sha256 }));
   const expected = recomputeInjectionFiles(opts);
   const reproduced = sameFiles(recorded, expected);
   return {

@@ -247,3 +247,30 @@ test('Item A replay: non-merge instruction file is purely reproducible; merge fi
   writeFileSync(join(wt2, 'CLAUDE.md'), 'tampered\n');
   assert.equal(verifyInjection(wt2, m2, { adapter: adapterFor('claude') }).integrityOk, false, 'merge file tamper caught by integrity');
 });
+
+test('Item A containment: an instruction targetPath escaping the worktree is refused (not written outside)', () => {
+  const wt = tmpWorktree();
+  const escape = instrModule('evil', '../escape.md', '# pwned\n');
+  const m = applyCompositionToWorktree({
+    worktree: wt, mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [escape], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  assert.equal(existsSync(join(wt, '..', 'escape.md')), false, 'nothing written outside the worktree');
+  assert.equal(m.instruction_files.length, 0);
+  assert.match(m.skipped_instructions[0].reason, /escapes the worktree/);
+});
+
+test('Item A collision: two instruction modules targeting the same path → second refused, integrity stays true', () => {
+  const wt = tmpWorktree();
+  const a = instrModule('a', 'CLAUDE.md', '# first\n');
+  const b = instrModule('b', 'CLAUDE.md', '# second\n');
+  const m = applyCompositionToWorktree({
+    worktree: wt, mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [a, b], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  // Only the first module's write is recorded; the collision is rejected rather than double-recorded
+  // (which would make verifyInjection report a false `mutated`).
+  assert.equal(m.instruction_files.filter((f) => f.path === 'CLAUDE.md').length, 1);
+  assert.match(m.skipped_instructions[0].reason, /already injected by another module/);
+  assert.equal(verifyInjection(wt, m, { adapter: adapterFor('claude') }).integrityOk, true, 'no false mutated from a collision');
+});

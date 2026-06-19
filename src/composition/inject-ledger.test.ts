@@ -84,3 +84,50 @@ test('inject-ledger: an unsupported record carries its status so empty-reproduce
   assert.equal(check.reproduced, true); // empty matches empty — but `status` tells the reader why
   assert.equal(readRuntimeEvents(runDir).filter((e) => e.type === 'composition.injected').length, 1);
 });
+
+function instrModule(id: string, targetPath: string, content: string, merge = false): CatalogModule {
+  return { id, kind: 'agents_md', tags: [], origin: 'declared', instruction: { targetPath, content, merge } };
+}
+
+// Slice-7 latent gap (agy impl-panel BLOCKER): recomputeInjectionFromLedger did not forward the
+// instruction inputs, so once an instruction-injected run reached this path it would record
+// instruction files the re-derivation omitted → a FALSE contradiction. Forwarding closes it.
+test('inject-ledger: a non-merge instruction file reproduces ONLY when instruction inputs are forwarded', () => {
+  const runDir = tmpDir();
+  const instr = instrModule('guide', 'soul.md', '# guidance\n');
+  const manifest = applyCompositionToWorktree({
+    worktree: tmpDir(), mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [instr], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  recordInjectionEvent(runDir, 'skill-x', manifest);
+
+  const ok = recomputeInjectionFromLedger(runDir, {
+    mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [instr], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  assert.equal(ok.reproduced, true, 'forwarded instruction inputs reproduce the recorded soul.md');
+
+  // The pre-fix call shape (no instruction inputs) would treat the recorded instruction file as
+  // unexplained — the regression this test pins shut.
+  const gap = recomputeInjectionFromLedger(runDir, { mcpModules: [], adapter: adapterFor('claude') });
+  assert.equal(gap.reproduced, false, 'omitting instruction inputs → recorded file has no counterpart');
+});
+
+test('inject-ledger: a MERGE instruction file is excluded from pure replay (base-dependent) → no false contradiction', () => {
+  const runDir = tmpDir();
+  const wt = tmpDir();
+  writeFileSync(join(wt, 'CLAUDE.md'), '# base\n');
+  const merge = instrModule('m', 'CLAUDE.md', '# add\n', true);
+  const manifest = applyCompositionToWorktree({
+    worktree: wt, mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [merge], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  recordInjectionEvent(runDir, 'skill-y', manifest);
+  const check = recomputeInjectionFromLedger(runDir, {
+    mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [merge], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  // merge CLAUDE.md is excluded on BOTH sides (recorded via its `merged` flag, expected via recompute)
+  // so the comparison is empty-vs-empty → reproduced, not a spurious mismatch.
+  assert.equal(check.reproduced, true);
+});
