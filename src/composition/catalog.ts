@@ -25,6 +25,13 @@ export interface CatalogModule {
   mcp?: { server: string; command?: string[] };
   /** Slice-2 injection source path for file-backed kinds. */
   source?: string;
+  /**
+   * Slice-7 (Item A) instruction descriptor for kinds 'agents_md' | 'soul' | 'skill'. `targetPath`
+   * is worktree-relative (e.g. CLAUDE.md, AGENTS.md, soul.md); `merge:true` appends after a marker
+   * (preserving a pre-existing file), else it writes. Instruction injection is approval-gated AND
+   * mechanically restricted to pinned-test acceptance (a teaching-to-the-test channel).
+   */
+  instruction?: { targetPath: string; content: string; merge?: boolean };
   /** FORBIDDEN by B1 — present only so resolve can detect and reject it. */
   acceptance?: unknown;
 }

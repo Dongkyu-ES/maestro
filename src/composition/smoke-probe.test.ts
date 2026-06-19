@@ -60,7 +60,7 @@ test('verifyInjection: consumptionProven flips true only via the canary probe + 
   const cfg = { token: 'run-tok', sentinelPath: join(wt, '.warden-canary') };
   const adapter = withCanaryProbe(adapterFor('claude'), cfg);
   // A manifest with no files is fine for this check — we only exercise the consumption probe path.
-  const manifest = { schema_version: 1 as const, executor: 'claude', mcp_injection: 'applied-unproven' as const, files: [], skipped_secret_servers: [], backed_up: [], note: '' };
+  const manifest = { schema_version: 1 as const, executor: 'claude', mcp_injection: 'applied-unproven' as const, files: [], skipped_secret_servers: [], backed_up: [], instruction_files: [], skipped_instructions: [], note: '' };
 
   assert.equal(verifyInjection(wt, manifest, { adapter }).consumptionProven, false, 'no sentinel → unproven');
   writeFileSync(join(wt, '.warden-canary'), 'run-tok');

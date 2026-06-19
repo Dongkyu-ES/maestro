@@ -42,6 +42,10 @@ export interface InjectionManifest {
   skipped_secret_servers: string[];
   /** Pre-existing files backed up before overwrite, hashed so the backup is itself tamper-evident. */
   backed_up: { path: string; backup: string; sha256: string }[];
+  /** Slice-7 Item A: instruction files written (also included in `files` for integrity). Audit detail. */
+  instruction_files: { path: string; sha256: string; base_sha256?: string; injected_sha256: string; merged: boolean }[];
+  /** Instruction modules NOT injected (approval missing / acceptance not pinned-test), with reason. */
+  skipped_instructions: { id: string; reason: string }[];
   note: string;
 }
 
@@ -123,58 +127,131 @@ function partitionBySecret(
   return { safe, skipped };
 }
 
+interface InstructionResult {
+  files: InjectedFile[];
+  instruction_files: InjectionManifest['instruction_files'];
+  backed_up: InjectionManifest['backed_up'];
+  skipped: { id: string; reason: string }[];
+}
+
 /**
- * Write the resolved MCP set into the worktree and return a manifest hashed from the ACTUAL on-disk
- * bytes. Writes exactly the adapter's `mcpConfigPath` (+ a hashed backup of any pre-existing config)
- * and nothing else — injection's own write surface is closed by construction. Status is honest:
- * unsupported executor ⇒ `unsupported`, no safe servers ⇒ `none`, else `applied-unproven`.
+ * Slice-7 Item A: write instruction-kind modules (CLAUDE.md / soul / AGENTS.md) into the worktree.
+ * MECHANICALLY GATED (design-panel claude BLOCKER): instruction injection happens ONLY when
+ * `approveInstructions` AND `acceptanceIsPinnedTest` are both true — instruction content is a
+ * teaching-to-the-test channel, safe to inject only when completion is judged by a pinned,
+ * executor-uneditable test. Otherwise every instruction module is recorded in `skipped` with the
+ * reason and nothing is written. Written files land in `files` (integrity-checked) and `backed_up`
+ * preserves any pre-existing target (hashed).
+ */
+function injectInstructions(
+  worktree: string,
+  modules: CatalogModule[],
+  gate: { approveInstructions: boolean; acceptanceIsPinnedTest: boolean },
+): InstructionResult {
+  const out: InstructionResult = { files: [], instruction_files: [], backed_up: [], skipped: [] };
+  if (modules.length === 0) return out;
+  if (!gate.approveInstructions) {
+    for (const m of modules) out.skipped.push({ id: m.id, reason: 'instruction injection requires approveInstructions (teaching-to-the-test channel)' });
+    return out;
+  }
+  if (!gate.acceptanceIsPinnedTest) {
+    for (const m of modules) out.skipped.push({ id: m.id, reason: 'instruction injection requires pinned-test acceptance (artifact/diff acceptance is trivially injectable)' });
+    return out;
+  }
+  for (const m of modules) {
+    if (!m.instruction) {
+      out.skipped.push({ id: m.id, reason: 'no instruction descriptor' });
+      continue;
+    }
+    const { targetPath, content, merge } = m.instruction;
+    const abs = join(worktree, targetPath);
+    if (existsSync(abs) && !statSync(abs).isFile()) {
+      out.skipped.push({ id: m.id, reason: `${targetPath} exists but is not a file` });
+      continue;
+    }
+    mkdirSync(dirname(abs), { recursive: true });
+    let base_sha: string | undefined;
+    let existing = '';
+    if (existsSync(abs)) {
+      existing = readFileSync(abs, 'utf8');
+      base_sha = sha256Hex(existing);
+      const backupRel = `${targetPath}.warden-bak.${base_sha.slice(0, 12)}`;
+      copyFileSync(abs, join(worktree, backupRel));
+      out.backed_up.push({ path: targetPath, backup: backupRel, sha256: base_sha });
+    }
+    const fragment = `\n<!-- warden-injected -->\n${content}\n<!-- /warden-injected -->\n`;
+    const merged = Boolean(merge && existing);
+    writeFileSync(abs, merge ? existing + fragment : content);
+    const sha = sha256Hex(readFileSync(abs));
+    out.files.push({ path: targetPath, sha256: sha });
+    out.instruction_files.push({ path: targetPath, sha256: sha, base_sha256: base_sha, injected_sha256: sha256Hex(Buffer.from(content)), merged });
+  }
+  return out;
+}
+
+/**
+ * Write the resolved capability (MCP) + (gated) instruction set into the worktree and return a
+ * manifest hashed from the ACTUAL on-disk bytes. MCP writes exactly the adapter's `mcpConfigPath`;
+ * instruction kinds are approval+pinned-test gated (Item A). `mcp_injection` reports the capability
+ * outcome honestly (unsupported/none/applied-unproven); instruction outcomes are in
+ * `instruction_files`/`skipped_instructions`.
  */
 export function applyCompositionToWorktree(opts: {
   worktree: string;
   mcpModules: CatalogModule[];
   adapter: InjectionAdapter;
   approveSecrets?: boolean;
+  instructionModules?: CatalogModule[];
+  approveInstructions?: boolean;
+  acceptanceIsPinnedTest?: boolean;
 }): InjectionManifest {
   const { worktree, adapter } = opts;
+  const instr = injectInstructions(worktree, opts.instructionModules ?? [], {
+    approveInstructions: opts.approveInstructions ?? false,
+    acceptanceIsPinnedTest: opts.acceptanceIsPinnedTest ?? false,
+  });
+  const base = {
+    schema_version: 1 as const,
+    executor: adapter.label,
+    instruction_files: instr.instruction_files,
+    skipped_instructions: instr.skipped,
+  };
   if (!adapter.supportsLocalMcp) {
     return {
-      schema_version: 1,
-      executor: adapter.label,
+      ...base,
       mcp_injection: 'unsupported',
-      files: [],
+      files: instr.files,
       skipped_secret_servers: [],
-      backed_up: [],
-      note: `${adapter.label} does not load a project-local .mcp.json from cwd — nothing injected (B2: no false claim)`,
+      backed_up: instr.backed_up,
+      note: `${adapter.label} does not load a project-local .mcp.json from cwd — no MCP injected (B2: no false claim)`,
     };
   }
   const { safe, skipped } = partitionBySecret(opts.mcpModules, opts.approveSecrets ?? false);
+  const target = join(worktree, adapter.mcpConfigPath);
   if (safe.length === 0) {
     return {
-      schema_version: 1,
-      executor: adapter.label,
+      ...base,
       mcp_injection: 'none',
-      files: [],
+      files: instr.files,
       skipped_secret_servers: skipped,
-      backed_up: [],
+      backed_up: instr.backed_up,
       note: skipped.length ? 'all candidate MCP servers require approval (--approve-secrets)' : 'no MCP modules to inject',
     };
   }
-  const target = join(worktree, adapter.mcpConfigPath);
   // A path collision where the config path is a directory is a broken worktree, not something to
-  // crash on (EISDIR). Refuse gracefully with an honest status.
+  // crash on (EISDIR). Refuse the MCP write gracefully (instructions already handled above).
   if (existsSync(target) && !statSync(target).isFile()) {
     return {
-      schema_version: 1,
-      executor: adapter.label,
+      ...base,
       mcp_injection: 'none',
-      files: [],
+      files: instr.files,
       skipped_secret_servers: skipped,
-      backed_up: [],
-      note: `${adapter.mcpConfigPath} exists but is not a file — refusing to inject (no crash)`,
+      backed_up: instr.backed_up,
+      note: `${adapter.mcpConfigPath} exists but is not a file — refusing MCP injection (no crash)`,
     };
   }
   mkdirSync(dirname(target), { recursive: true });
-  const backed_up: { path: string; backup: string; sha256: string }[] = [];
+  const backed_up = [...instr.backed_up];
   if (existsSync(target)) {
     const existing = readFileSync(target);
     const existingSha = sha256Hex(existing);
@@ -185,10 +262,9 @@ export function applyCompositionToWorktree(opts: {
   writeFileSync(target, buildMcpConfigJson(safe));
   const onDisk = readFileSync(target); // B3: hash what LANDED on disk, not the intended buffer.
   return {
-    schema_version: 1,
-    executor: adapter.label,
+    ...base,
     mcp_injection: 'applied-unproven',
-    files: [{ path: adapter.mcpConfigPath, sha256: sha256Hex(onDisk) }],
+    files: [...instr.files, { path: adapter.mcpConfigPath, sha256: sha256Hex(onDisk) }],
     skipped_secret_servers: skipped,
     backed_up,
     note: 'applied; consumption NOT proven (no live smokeProbe) — treat applied-unproven as NOT-yet-consumed',

@@ -101,6 +101,13 @@ export interface OrchestratorSkillSpec {
     mcpModules: CatalogModule[];
     adapter: InjectionAdapter;
     approveSecrets?: boolean;
+    /**
+     * Slice 7 (Item A) instruction modules (CLAUDE.md/soul/AGENTS.md). Injected ONLY when
+     * `approveInstructions` AND the spec's acceptance is pinned-test (has `testFiles`) — the
+     * mechanical teaching-to-the-test gate. Otherwise recorded as skipped, never written.
+     */
+    instructionModules?: CatalogModule[];
+    approveInstructions?: boolean;
   };
 }
 
@@ -845,14 +852,18 @@ export async function runOrchestratorSkill(
       // Slice 7 (Item B): inject capability (MCP) into the EXECUTE worktree before the executor runs.
       beforeExecute:
         phase === 'execute' && spec.inject
-          ? ((injectSpec) => (worktreePath: string) => {
+          ? ((injectSpec, pinnedTest) => (worktreePath: string) => {
               injectionManifest = applyCompositionToWorktree({
                 worktree: worktreePath,
                 mcpModules: injectSpec.mcpModules,
                 adapter: injectSpec.adapter,
                 approveSecrets: injectSpec.approveSecrets,
+                instructionModules: injectSpec.instructionModules,
+                approveInstructions: injectSpec.approveInstructions,
+                // Mechanical teaching-to-the-test gate: instruction injection only with a pinned test.
+                acceptanceIsPinnedTest: pinnedTest,
               });
-            })(spec.inject)
+            })(spec.inject, Boolean(spec.acceptance?.testFiles?.length))
           : undefined,
     });
     // Post-exec verify + ledger composition.injected (evidence only — NEVER a completion input; the

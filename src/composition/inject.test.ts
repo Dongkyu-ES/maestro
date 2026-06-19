@@ -163,3 +163,60 @@ test('inject robustness: a manifest path replaced by a directory is reported mut
   assert.equal(v.integrityOk, false);
   assert.equal(v.mutated.length, 1);
 });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 7 Item A — instruction-kind injection (CLAUDE.md/soul) + mechanical gate
+// ─────────────────────────────────────────────────────────────────────────────
+
+function instrModule(id: string, targetPath: string, content: string, merge = false): CatalogModule {
+  return { id, kind: 'agents_md', tags: [], origin: 'declared', instruction: { targetPath, content, merge } };
+}
+
+test('Item A: instruction injected ONLY when approved AND acceptance is pinned-test', () => {
+  const wt = tmpWorktree();
+  const mod = instrModule('guide', 'CLAUDE.md', '# project guidance\n');
+  const ok = applyCompositionToWorktree({
+    worktree: wt, mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [mod], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  assert.equal(existsSync(join(wt, 'CLAUDE.md')), true);
+  assert.match(readFileSync(join(wt, 'CLAUDE.md'), 'utf8'), /project guidance/);
+  assert.equal(ok.instruction_files.length, 1);
+  assert.ok(ok.files.some((f) => f.path === 'CLAUDE.md'), 'instruction file is integrity-tracked in files[]');
+});
+
+test('Item A gate: instruction skipped (not written) without approveInstructions', () => {
+  const wt = tmpWorktree();
+  const m = applyCompositionToWorktree({
+    worktree: wt, mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [instrModule('g', 'CLAUDE.md', 'x\n')], approveInstructions: false, acceptanceIsPinnedTest: true,
+  });
+  assert.equal(existsSync(join(wt, 'CLAUDE.md')), false);
+  assert.equal(m.skipped_instructions.length, 1);
+  assert.match(m.skipped_instructions[0].reason, /approveInstructions/);
+});
+
+test('Item A gate: instruction skipped when acceptance is NOT pinned-test (teaching-to-the-test guard)', () => {
+  const wt = tmpWorktree();
+  const m = applyCompositionToWorktree({
+    worktree: wt, mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [instrModule('g', 'CLAUDE.md', 'x\n')], approveInstructions: true, acceptanceIsPinnedTest: false,
+  });
+  assert.equal(existsSync(join(wt, 'CLAUDE.md')), false);
+  assert.match(m.skipped_instructions[0].reason, /pinned-test/);
+});
+
+test('Item A merge: a pre-existing CLAUDE.md is preserved (backed up) and appended after a marker', () => {
+  const wt = tmpWorktree();
+  writeFileSync(join(wt, 'CLAUDE.md'), '# user rules\n');
+  const m = applyCompositionToWorktree({
+    worktree: wt, mcpModules: [], adapter: adapterFor('claude'),
+    instructionModules: [instrModule('g', 'CLAUDE.md', '# injected\n', true)], approveInstructions: true, acceptanceIsPinnedTest: true,
+  });
+  const merged = readFileSync(join(wt, 'CLAUDE.md'), 'utf8');
+  assert.match(merged, /# user rules/);
+  assert.match(merged, /warden-injected/);
+  assert.match(merged, /# injected/);
+  assert.equal(m.backed_up.some((b) => b.path === 'CLAUDE.md'), true, 'original backed up');
+  assert.equal(m.instruction_files[0].merged, true);
+});
