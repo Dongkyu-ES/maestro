@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import {
@@ -39,6 +39,17 @@ import {
   verifyInjection,
 } from '../composition/inject.js';
 import { recordInjectionEvent } from '../composition/inject-ledger.js';
+import { captureWorktreeDiff, reconstructAndRun } from './worktree-evidence.js';
+
+/**
+ * Execute-phase evidence granularity.
+ * - `artifact` (default): store ONE self-contained file (`acceptArtifact`); acceptance runs in an
+ *   empty temp dir with only that file + operator testFiles. Grades self-contained outputs only.
+ * - `diff`: store the FULL worktree diff (multi-file repo work); acceptance DETERMINISTICALLY
+ *   reconstructs `base@pinnedCommit + git apply(diff) + testFiles overlaid last` with the repo's
+ *   node_modules symlinked in. This is the mode that grades real `npm test`-style repo work.
+ */
+export type EvidenceMode = 'artifact' | 'diff';
 
 export interface PhaseSpec {
   executor?: HarnessExecutor;
@@ -46,12 +57,15 @@ export interface PhaseSpec {
   executorLabel?: string;
   goalTemplate: string;
   acceptArtifact?: string;
+  /** Execute-phase only; ignored elsewhere. Defaults to 'artifact' (byte-identical to pre-existing runs). */
+  evidence?: EvidenceMode;
 }
 
 export interface PhaseSpecJson {
   executor: string;
   goalTemplate: string;
   acceptArtifact?: string;
+  evidence?: EvidenceMode;
 }
 
 export interface ExecuteCandidateExecutor {
@@ -196,6 +210,7 @@ function phaseFromJson(
     executorLabel: phase.executor,
     goalTemplate: phase.goalTemplate,
     acceptArtifact: phase.acceptArtifact,
+    evidence: phase.evidence,
   };
 }
 
@@ -289,7 +304,25 @@ function completionFromReview(review: PhaseResult | undefined): 'passed' | 'fail
 export function runAcceptanceCheck(opts: {
   executeRefs: EvidenceRef[];
   acceptance: NonNullable<OrchestratorSkillSpec['acceptance']>;
+  /** Present iff execute evidence is a worktree diff: reconstruct base@commit + apply(diff) + tests. */
+  reconstruction?: { root: string; baseCommit: string };
 }): AcceptanceResult {
+  // Diff evidence: grade by deterministic reconstruction (multi-file repo work), not the empty-dir
+  // single-artifact path. The single executeRef is the stored patch; testFiles are overlaid LAST.
+  if (opts.reconstruction) {
+    const patchRef = opts.executeRefs[0];
+    if (!patchRef) {
+      return { ran: false, passed: false, exitCode: null, command: opts.acceptance.command, outputSha256: sha256Hex('no diff evidence'), cleanDir: '', reason: 'no diff evidence ref to reconstruct' };
+    }
+    const patch = readFileSync(patchRef.storePath, 'utf8');
+    return reconstructAndRun({
+      root: opts.reconstruction.root,
+      baseCommit: opts.reconstruction.baseCommit,
+      patch,
+      testFiles: opts.acceptance.testFiles,
+      command: opts.acceptance.command,
+    });
+  }
   const cleanDir = mkdtempSync(join(tmpdir(), 'orchestrator-skill-acceptance-'));
   const command = opts.acceptance.command;
 
@@ -466,6 +499,29 @@ export function recomputeCompletionFromLedger(
   if (!executeRefs.length) {
     return { completion: 'skipped', ledgerValid: true, reason: 'no execute evidence in store' };
   }
+
+  // Diff evidence: the chained `execute.evidence` event carries the pinned base + the content sha of
+  // each stored evidence file. BIND the graded bytes to the chain — assert the store's sha equals the
+  // chained sha before grading. A swapped store file is caught HERE (fail closed: 'failed'), not
+  // silently re-graded. Then grade by deterministic reconstruction from the pinned base.
+  const evidenceEvent = events.filter((event) => event.type === 'execute.evidence').at(-1);
+  if (evidenceEvent && evidenceEvent.payload.mode === 'diff') {
+    const recorded = (evidenceEvent.payload.files as { relativePath: string; sha256: string }[] | undefined) ?? [];
+    const byPath = new Map(executeRefs.map((ref) => [ref.relativePath, ref.sha256]));
+    for (const file of recorded) {
+      if (byPath.get(file.relativePath) !== file.sha256) {
+        return {
+          completion: 'failed',
+          ledgerValid: true,
+          reason: `execute evidence sha mismatch for ${file.relativePath}: store does not match the hash-chained record (tamper)`,
+        };
+      }
+    }
+    const baseCommit = String(evidenceEvent.payload.baseCommit ?? '');
+    const acceptance = runAcceptanceCheck({ executeRefs, acceptance: spec.acceptance, reconstruction: { root: opts.root, baseCommit } });
+    return { completion: acceptance.passed ? 'passed' : 'failed', ledgerValid: true, reason: acceptance.reason };
+  }
+
   const acceptance = runAcceptanceCheck({ executeRefs, acceptance: spec.acceptance });
   return {
     completion: acceptance.passed ? 'passed' : 'failed',
@@ -761,11 +817,23 @@ export async function runOrchestratorSkill(
   if (spec.inject && (spec.executeCandidates?.length || (spec.maxRefineIterations ?? 1) > 1)) {
     throw new Error('orchestrator-skill inject is single-executor only: not supported with execute fan-out or refinement');
   }
+  // Phase-1 scope: diff evidence is wired for the single-executor execute path only. Fan-out /
+  // refinement each produce their own worktree evidence (N× capture) and are deferred — refuse the
+  // combination rather than silently fall back to single-artifact capture.
+  if (
+    (spec.phases.execute.evidence ?? 'artifact') === 'diff' &&
+    (spec.executeCandidates?.length || (spec.maxRefineIterations ?? 1) > 1)
+  ) {
+    throw new Error("orchestrator-skill evidence:'diff' is single-executor only: not supported with execute fan-out or refinement");
+  }
   const nodes = compileSkillToGraphTemplate(spec, { what: input.what });
   const goalsByPhase = new Map(nodes.map((node) => [node.id, node.goal]));
   const phases: PhaseResult[] = [];
   const inputRefs: EvidenceRef[] = [];
   const executeRefs: EvidenceRef[] = [];
+  const executeEvidenceMode: EvidenceMode = spec.phases.execute.evidence ?? 'artifact';
+  // Set when execute evidence is a worktree diff: the pinned base for deterministic reconstruction.
+  let executeBaseCommit: string | undefined;
   let ledgerHead: RuntimeLedgerHeadBinding | undefined;
   let skillInjection: { manifest: InjectionManifest; verification: InjectionVerification } | undefined;
   const createdWorkerIds: string[] = [];
@@ -879,8 +947,29 @@ export async function runOrchestratorSkill(
 
     const phaseResult = toPhaseResult(result, phase);
     phases.push(phaseResult);
-    if (phaseResult.nodeState !== 'supported' || !spec.phases[phase].acceptArtifact) continue;
+    if (phaseResult.nodeState !== 'supported') continue;
 
+    // Diff evidence (execute phase): capture the full worktree change set as one patch + pin the base
+    // commit. No acceptArtifact required — the diff IS the evidence. node_modules/gitignored paths
+    // never enter the patch, so the executor can't smuggle deps through evidence.
+    if (phase === 'execute' && executeEvidenceMode === 'diff') {
+      try {
+        const diff = captureWorktreeDiff(result.worktreePath);
+        executeBaseCommit = diff.baseCommit;
+        const tmp = mkdtempSync(join(tmpdir(), 'skill-evidence-'));
+        const patchSrc = join(tmp, 'evidence.patch');
+        writeFileSync(patchSrc, diff.patch);
+        const ref = storePhaseArtifact({ root: input.root, skillRunId: runId, phase, sourceFile: patchSrc, relativePath: 'evidence.patch' });
+        rmSync(tmp, { recursive: true, force: true });
+        inputRefs.push(ref);
+        executeRefs.push(ref);
+      } catch {
+        phaseResult.nodeState = 'blocked';
+      }
+      continue;
+    }
+
+    if (!spec.phases[phase].acceptArtifact) continue;
     try {
       const ref = storePhaseArtifact({
         root: input.root,
@@ -902,9 +991,11 @@ export async function runOrchestratorSkill(
   if (!ledgerHead) throw new Error('runOrchestratorSkill could not bind a worker ledger head');
   const review = phases.find((phase) => phase.phase === 'review');
   const execute = phases.find((phase) => phase.phase === 'execute');
+  const reconstruction =
+    executeEvidenceMode === 'diff' && executeBaseCommit ? { root: input.root, baseCommit: executeBaseCommit } : undefined;
   const acceptance =
     spec.acceptance && execute?.nodeState === 'supported'
-      ? runAcceptanceCheck({ executeRefs, acceptance: spec.acceptance })
+      ? runAcceptanceCheck({ executeRefs, acceptance: spec.acceptance, reconstruction })
       : undefined;
   const completion = spec.acceptance
     ? acceptance
@@ -927,6 +1018,25 @@ export async function runOrchestratorSkill(
     injection: skillInjection,
   };
 
+  // Bind the graded evidence into the hash chain: the execute diff's content shas + pinned base are
+  // recorded as a chained event, so recompute can assert store-sha == chained-sha (Phase 2) and
+  // reconstruct deterministically from the pinned base. Emitted before the lifecycle projection so
+  // skill.completed stays the head event.
+  if (executeEvidenceMode === 'diff' && executeBaseCommit) {
+    const evDir = skillRunDir(input.root, runId);
+    mkdirSync(evDir, { recursive: true });
+    appendRuntimeEvent(evDir, {
+      runId,
+      source: 'harness',
+      type: 'execute.evidence',
+      payload: {
+        mode: 'diff',
+        baseCommit: executeBaseCommit,
+        files: executeRefs.map((ref) => ({ relativePath: ref.relativePath, sha256: ref.sha256 })),
+      },
+    });
+  }
+
   // Lifecycle events are derived projections appended AFTER the verdict is fixed;
   // they describe the run, they never decide it.
   emitLifecycleProjection({ root: input.root, runId, spec, phases });
@@ -943,7 +1053,7 @@ export async function runOrchestratorSkill(
 interface SerializableSkillSpec {
   id: string;
   acceptance?: OrchestratorSkillSpec['acceptance'];
-  phases: Record<PhaseId, { goalTemplate: string; acceptArtifact?: string }>;
+  phases: Record<PhaseId, { goalTemplate: string; acceptArtifact?: string; evidence?: EvidenceMode }>;
   maxRefineIterations?: number;
 }
 
@@ -951,6 +1061,7 @@ function toSerializableSpec(spec: OrchestratorSkillSpec): SerializableSkillSpec 
   const phase = (id: PhaseId) => ({
     goalTemplate: spec.phases[id].goalTemplate,
     acceptArtifact: spec.phases[id].acceptArtifact,
+    evidence: spec.phases[id].evidence,
   });
   return {
     id: spec.id,
@@ -1096,6 +1207,7 @@ export function projectSkillRun(opts: { root: string; runId: string }): SkillRun
       execute: {
         goalTemplate: specJson.phases.execute.goalTemplate,
         acceptArtifact: specJson.phases.execute.acceptArtifact,
+        evidence: specJson.phases.execute.evidence,
       },
       review: {
         goalTemplate: specJson.phases.review.goalTemplate,

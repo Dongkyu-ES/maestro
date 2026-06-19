@@ -1300,3 +1300,79 @@ test('Item A gate (skill path): instruction injection refused when acceptance ha
   assert.equal(report.injection?.manifest.skipped_instructions.length, 1);
   assert.match(report.injection?.manifest.skipped_instructions[0].reason ?? '', /pinned-test/);
 });
+
+// --- Phase 1/2: diff evidence grades real MULTI-FILE repo work + binds the graded bytes to the chain ---
+
+function multiFileRepo(): string {
+  const root = mkdtempSync(join(tmpdir(), 'skill-diff-'));
+  execFileSync('git', ['init'], { cwd: root, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 't@example.com'], { cwd: root });
+  execFileSync('git', ['config', 'user.name', 'T'], { cwd: root });
+  writeFileSync(join(root, 'lib.mjs'), 'export const base = 1;\n');
+  writeFileSync(join(root, 'main.mjs'), "import { base } from './lib.mjs';\nexport const out = base;\n");
+  execFileSync('git', ['add', '-A'], { cwd: root });
+  execFileSync('git', ['commit', '-m', 'seed'], { cwd: root, stdio: 'ignore' });
+  return root;
+}
+
+// Executor edits TWO tracked files; the operator test depends on both. The empty-dir single-artifact
+// model could never grade this — it proves the diff path grades genuine multi-file repo work (#1).
+function multiFileExecutor(): HarnessExecutor {
+  return async (opts) => {
+    // Every phase must produce worktree evidence or the worker is (correctly) not supported.
+    if (opts.prompt.includes('research')) {
+      writeFileSync(join(opts.cwd, 'research.txt'), 'research\n');
+    } else if (opts.prompt.includes('execute')) {
+      writeFileSync(join(opts.cwd, 'lib.mjs'), 'export const base = 10;\n');
+      writeFileSync(join(opts.cwd, 'main.mjs'), "import { base } from './lib.mjs';\nexport const out = base * 4;\n");
+    } else if (opts.prompt.includes('review')) {
+      writeFileSync(join(opts.cwd, 'review.txt'), 'review\n');
+    }
+    return codexResult({ cwd: opts.cwd, label: opts.label });
+  };
+}
+
+function diffEvidenceSpec(executor: HarnessExecutor): OrchestratorSkillSpec {
+  return {
+    id: 'diff-evidence',
+    phases: {
+      research: { goalTemplate: 'research {what}', executor, acceptArtifact: 'research.txt' },
+      execute: { goalTemplate: 'execute {what}', executor, evidence: 'diff' },
+      review: { goalTemplate: 'review {what}', executor, acceptArtifact: 'review.txt' },
+    },
+    acceptance: {
+      command: ['node', 'accept.mjs'],
+      testFiles: [{ path: 'accept.mjs', content: "import { out } from './main.mjs';\nif (out !== 40) process.exit(1);\n" }],
+    },
+  };
+}
+
+test('diff evidence: a multi-file change is graded by deterministic reconstruction + recomputes passed', async () => {
+  const root = multiFileRepo();
+  const report = await runOrchestratorSkill(diffEvidenceSpec(multiFileExecutor()), { what: 'multi-file fix', root, runId: 'skill-diff-pass' });
+  assert.equal(report.completion, 'passed', report.acceptance?.reason);
+  assert.equal(report.acceptance?.passed, true);
+  // The recomputable authority agrees, reconstructing from the pinned base + chained diff.
+  const recompute = recomputeCompletionFromLedger(diffEvidenceSpec(multiFileExecutor()), { root, runId: 'skill-diff-pass' });
+  assert.equal(recompute.completion, 'passed', recompute.reason);
+});
+
+test('diff evidence: tampering the stored patch is caught by the chain (fail closed, not silently re-graded)', async () => {
+  const root = multiFileRepo();
+  await runOrchestratorSkill(diffEvidenceSpec(multiFileExecutor()), { what: 'multi-file fix', root, runId: 'skill-diff-tamper' });
+  // Swap the stored evidence patch for garbage. Its sha no longer matches the hash-chained record.
+  const patchPath = join(root, '.agent', 'skill-runs', 'skill-diff-tamper', 'artifacts', 'execute', 'evidence.patch');
+  writeFileSync(patchPath, 'diff --git a/x b/x\n(tampered)\n');
+  const recompute = recomputeCompletionFromLedger(diffEvidenceSpec(multiFileExecutor()), { root, runId: 'skill-diff-tamper' });
+  assert.equal(recompute.completion, 'failed');
+  assert.match(recompute.reason, /sha mismatch|tamper/);
+});
+
+test('diff evidence: rejected alongside execute fan-out / refinement (single-executor only)', async () => {
+  const root = multiFileRepo();
+  const spec = diffEvidenceSpec(multiFileExecutor());
+  await assert.rejects(
+    () => runOrchestratorSkill({ ...spec, maxRefineIterations: 2 }, { what: 'x', root, runId: 'skill-diff-refine' }),
+    /single-executor only/,
+  );
+});
