@@ -77,7 +77,7 @@ import {
 } from './util.js';
 import { renderHtml, renderReviewGate, renderRun, renderSkillRun } from './view.js';
 import { loadModuleCatalog } from './composition/catalog.js';
-import { adapterFor, applyCompositionToWorktree, captureInjectionBaseline, verifyInjection } from './composition/inject.js';
+import { adapterFor, applyCompositionToWorktree, verifyInjection } from './composition/inject.js';
 import { formatMagicPlan, resolveMagicPlan } from './composition/magic.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -784,20 +784,15 @@ async function main() {
       const plan = resolveMagicPlan({ root: process.cwd(), goal, catalog });
       const selectedMcpIds = new Set(plan.selected.filter((s) => s.kind === 'mcp').map((s) => s.moduleId));
       const mcpModules = catalog.modules.filter((m) => m.kind === 'mcp' && selectedMcpIds.has(m.id));
-      const baseline = captureInjectionBaseline(into);
-      const manifest = applyCompositionToWorktree({
-        worktree: into,
-        mcpModules,
-        adapter: adapterFor(executor),
-        approveSecrets: has('--approve-secrets'),
-      });
-      const verification = verifyInjection(into, manifest, { baseline, phase: 'post-write' });
+      const adapter = adapterFor(executor);
+      const manifest = applyCompositionToWorktree({ worktree: into, mcpModules, adapter, approveSecrets: has('--approve-secrets') });
+      const verification = verifyInjection(into, manifest, { adapter });
       mkdirSync(join(into, '.agent'), { recursive: true });
       writeFileSync(join(into, '.agent', 'composition-injected.json'), `${JSON.stringify({ manifest, verification }, null, 2)}\n`);
       console.log(JSON.stringify({ into, executor, manifest, verification }, null, 2));
-      // A real injection that fails its own integrity/closure check is an error; an honest
-      // 'unsupported'/'none' is not. Consumption is never proven here — applied-unproven is not success.
-      if (manifest.files.length > 0 && !(verification.integrityOk && verification.closureOk)) process.exitCode = 2;
+      // A real injection whose own writes fail integrity is an error; honest 'unsupported'/'none' is not.
+      // Consumption is never proven here (no live smokeProbe) — applied-unproven is not success.
+      if (manifest.files.length > 0 && !verification.integrityOk) process.exitCode = 2;
       return;
     }
     if (cmd === 'worktrees' && sub === 'cleanup') {
