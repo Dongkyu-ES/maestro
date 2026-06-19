@@ -52,6 +52,12 @@ Slice 1 ships the **planning half** only — the visible "magic" (analyze → de
 - **B6 (agy):** no exec-time installs in the ephemeral worktree; injected configs point to pre-installed binaries; write-lock + post-exec hash re-verify (slice 2).
 - **B7 (agy+codex):** first slice was too thick → re-scoped to detect+resolve+dry-run, injection deferred (above).
 
+### Slice-2 corrections from the slice-2 code panel (2 BLOCK → fixed)
+
+The slice-2 code panel BLOCKED on two real defects; both fixed before merge:
+- **Closure was a denylist (missed surfaces AND false-positived on a repo's own CLAUDE.md/.claude).** Replaced with a **baseline diff**: `captureInjectionBaseline` snapshots the (broadened) injection-scope BEFORE apply; `verifyInjection(phase:'post-write')` flags only the delta (created/modified) not in the manifest — pre-existing operator files are ignored; `phase:'post-exec'` skips closure (executor may create files) and checks only injected-file integrity. Scope broadened to `AGENTS.md`, `.claude/settings*.json`, nested `CLAUDE.md`, `.claude/commands`, `.codex/**`, `.cursor/mcp.json`; dir walk hardened against a same-named file.
+- **`verifyInjection.ok` conflated integrity with consumption.** Split into `integrityOk` + `closureOk` + `consumptionProven` (always `false` — only a deferred LIVE smokeProbe can prove a CLI loaded the config; `applied-unproven` must never be read as success). Also: pre-existing `.mcp.json` is backed up not destroyed; secret detection broadened (keywords + `user:pass@host` conn-strings + token prefixes); server order sorted so replay is order-independent.
+
 ## 6. Honest risks
 
 - **R-inject-loop:** active injection means Warden now shapes the in-loop surface (it previously deliberately did not — CORRECTED_PLAN §10 R-native-ownership). Mitigation: everything injected is hashed+ledgered and completion stays verifier-gated; but this IS a real expansion of what the harness touches. Stated, not hidden.
