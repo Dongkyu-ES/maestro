@@ -76,6 +76,8 @@ import {
   sha256Text,
 } from './util.js';
 import { renderHtml, renderReviewGate, renderRun, renderSkillRun } from './view.js';
+import { loadModuleCatalog } from './composition/catalog.js';
+import { formatMagicPlan, resolveMagicPlan } from './composition/magic.js';
 
 function arg(name: string, fallback?: string): string | undefined {
   const idx = process.argv.indexOf(name);
@@ -191,6 +193,8 @@ function usage(): string {
   warden provider conformance --all
   warden skill run <spec.json> --what "<goal>"
   warden skill show <runId>            # operator projection: recomputes completion, flags contradictions
+  warden magic plan "<goal>"           # dry-run: detect project tags + resolve composable modules (no injection)
+  warden magic catalog                 # list the module catalog (declared + discovered)
   warden skills verify-contracts [--run <run-id>]
   warden worktrees cleanup
   warden maintenance reconcile-runs
@@ -752,6 +756,21 @@ async function main() {
           'CONTRADICTION: stored/display completion disagrees with the authoritative ledger recompute — trust the recompute, not the report.',
         );
         process.exitCode = 2;
+      }
+      return;
+    }
+    if (cmd === 'magic' && sub === 'plan') {
+      const goal = firstNonFlag(rest) ?? '';
+      if (!goal) throw new Error('usage: warden magic plan "<goal>"');
+      const plan = resolveMagicPlan({ root: process.cwd(), goal });
+      console.log(formatMagicPlan(plan));
+      return;
+    }
+    if (cmd === 'magic' && sub === 'catalog') {
+      const catalog = loadModuleCatalog({ root: process.cwd() });
+      console.log(`catalog sources: ${catalog.sources.length ? catalog.sources.join(', ') : '(none)'}`);
+      for (const m of catalog.modules) {
+        console.log(`  - ${m.id} [${m.kind}] ${m.origin} (tags: ${m.tags.length ? m.tags.join(', ') : 'none — not auto-selected'})`);
       }
       return;
     }
