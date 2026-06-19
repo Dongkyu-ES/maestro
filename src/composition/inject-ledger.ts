@@ -22,7 +22,13 @@ import {
  * This module does NOT touch the orchestrator hot path; it is wired into `warden magic apply`.
  */
 
-export function recordInjectionEvent(runDir: string, runId: string, manifest: InjectionManifest): void {
+export function recordInjectionEvent(
+  runDir: string,
+  runId: string,
+  manifest: InjectionManifest,
+  /** Optional scope (e.g. {phase:'execute',executor:'primary',fanout:false}) recorded for audit. */
+  scope?: { phase: string; executor: string; fanout: boolean },
+): void {
   appendRuntimeEvent(runDir, {
     runId,
     source: 'harness',
@@ -33,6 +39,7 @@ export function recordInjectionEvent(runDir: string, runId: string, manifest: In
       files: manifest.files,
       skipped_secret_servers: manifest.skipped_secret_servers,
       backed_up: manifest.backed_up,
+      ...(scope ? { scope } : {}),
     },
   });
 }

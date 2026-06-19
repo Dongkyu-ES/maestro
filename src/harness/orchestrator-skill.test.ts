@@ -30,6 +30,8 @@ import {
   storePhaseArtifact,
   writeSkillLaunchMarker,
 } from './orchestrator-skill.js';
+import type { CatalogModule } from '../composition/catalog.js';
+import { adapterFor } from '../composition/inject.js';
 
 function tmpRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'orchestrator-skill-'));
@@ -1159,4 +1161,84 @@ test('U1 forgery: a forged report.completion=passed on an exhausted refinement r
   // the forged field entirely.
   const rc = recomputeCompletionFromLedger(spec, { root, runId: 'refine-forge' });
   assert.equal(rc.completion, 'failed');
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Slice 7 Item B — opt-in capability (MCP) injection into the skill execute phase
+// ─────────────────────────────────────────────────────────────────────────────
+
+function mcpModuleT(id: string, server: string, command: string[]): CatalogModule {
+  return { id, kind: 'mcp', tags: ['rust'], origin: 'declared', mcp: { server, command } };
+}
+
+test('Item B: execute runs WITH the injected .mcp.json; injection is ledgered but never a verdict input', async () => {
+  const root = tmpRepo();
+  let sawMcp = false;
+  const exec: HarnessExecutor = async (o) => {
+    if (o.prompt.includes('research')) writeFileSync(join(o.cwd, 'research.txt'), 'research\n');
+    else if (o.prompt.includes('execute')) {
+      sawMcp = existsSync(join(o.cwd, '.mcp.json'));
+      writeFileSync(join(o.cwd, 'add.mjs'), 'export function add(a,b){return a+b}\n');
+    } else if (o.prompt.includes('review')) writeFileSync(join(o.cwd, 'review.txt'), 'review\n');
+    return codexResult({ cwd: o.cwd, label: o.label });
+  };
+  const spec: OrchestratorSkillSpec = {
+    ...addAcceptanceSpec(exec),
+    inject: { mcpModules: [mcpModuleT('ra', 'rust-analyzer', ['ra-mcp'])], adapter: adapterFor('claude') },
+  };
+  const report = await runOrchestratorSkill(spec, { what: 'inject', root, runId: 'skill-inject-1' });
+  assert.equal(sawMcp, true, 'execute executor saw the injected .mcp.json at run time');
+  assert.equal(report.completion, 'passed');
+  assert.equal(report.injection?.manifest.mcp_injection, 'applied-unproven');
+  const events = readRuntimeEvents(skillRunDir(root, 'skill-inject-1'));
+  validateRuntimeLedger(events);
+  assert.ok(events.some((e) => e.type === 'composition.injected'), 'composition.injected ledgered');
+  assert.equal(recomputeCompletionFromLedger(spec, { root, runId: 'skill-inject-1' }).completion, 'passed');
+});
+
+test('Item B forgery: injection does NOT rescue a failing run (capability is not a verdict input)', async () => {
+  const root = tmpRepo();
+  const exec: HarnessExecutor = async (o) => {
+    if (o.prompt.includes('research')) writeFileSync(join(o.cwd, 'research.txt'), 'r\n');
+    else if (o.prompt.includes('execute')) writeFileSync(join(o.cwd, 'add.mjs'), 'export function add(a,b){return a-b}\n');
+    else if (o.prompt.includes('review')) writeFileSync(join(o.cwd, 'review.txt'), 'v\n');
+    return codexResult({ cwd: o.cwd, label: o.label });
+  };
+  const spec: OrchestratorSkillSpec = {
+    ...addAcceptanceSpec(exec),
+    inject: { mcpModules: [mcpModuleT('ra', 'rust-analyzer', ['ra-mcp'])], adapter: adapterFor('claude') },
+  };
+  const report = await runOrchestratorSkill(spec, { what: 'x', root, runId: 'skill-inject-fail' });
+  assert.equal(report.completion, 'failed', 'injection cannot rescue a failing acceptance');
+  assert.ok(report.injection, 'injection still happened and is recorded');
+  assert.equal(recomputeCompletionFromLedger(spec, { root, runId: 'skill-inject-fail' }).completion, 'failed');
+});
+
+test('Item B: inject unset → no injection record, byte-identical to a normal skill run', async () => {
+  const root = tmpRepo();
+  const exec = addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' });
+  const report = await runOrchestratorSkill(addAcceptanceSpec(exec), { what: 'noinject', root, runId: 'skill-noinject' });
+  assert.equal(report.completion, 'passed');
+  assert.equal(report.injection, undefined);
+  assert.ok(!readRuntimeEvents(skillRunDir(root, 'skill-noinject')).some((e) => e.type === 'composition.injected'));
+});
+
+test('Item B: inject is rejected alongside execute fan-out or refinement (single-executor only)', async () => {
+  const root = tmpRepo();
+  const exec = addAcceptanceExecutor({ implementation: 'export function add(a,b){return a+b}\n' });
+  const base = addAcceptanceSpec(exec);
+  await assert.rejects(
+    runOrchestratorSkill(
+      { ...base, executeCandidates: [{ label: 'claude', executor: exec, executorLabel: 'claude' }], inject: { mcpModules: [], adapter: adapterFor('claude') } },
+      { what: 'x', root, runId: 'skill-inj-fan' },
+    ),
+    /single-executor only/,
+  );
+  await assert.rejects(
+    runOrchestratorSkill(
+      { ...base, maxRefineIterations: 2, inject: { mcpModules: [], adapter: adapterFor('claude') } },
+      { what: 'x', root, runId: 'skill-inj-ref' },
+    ),
+    /single-executor only/,
+  );
 });

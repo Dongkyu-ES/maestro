@@ -30,6 +30,15 @@ import {
   runWorkersConcurrently,
   type WorkerResult,
 } from './orchestrator.js';
+import type { CatalogModule } from '../composition/catalog.js';
+import {
+  type InjectionAdapter,
+  type InjectionManifest,
+  type InjectionVerification,
+  applyCompositionToWorktree,
+  verifyInjection,
+} from '../composition/inject.js';
+import { recordInjectionEvent } from '../composition/inject-ledger.js';
 
 export interface PhaseSpec {
   executor?: HarnessExecutor;
@@ -80,6 +89,19 @@ export interface OrchestratorSkillSpec {
    * consulted. See REVKA_BORROW_UPGRADE_PLAN.md §3 U1 / §6.
    */
   maxRefineIterations?: number;
+  /**
+   * Slice 7 (Item B) — opt-in Warden Magic injection into the EXECUTE phase. Default unset = the M12
+   * hot path is byte-identical. CAPABILITY-ONLY (MCP) this slice: instruction kinds are NOT injected
+   * into the completion-gated skill run (design-panel: premature before M7 + unsafe for non-test
+   * acceptance). Rejected when execute fan-out / refinement is active (single-executor only). The
+   * injected set is recorded as `composition.injected` in the skill-run ledger and NEVER read by
+   * `recomputeCompletionFromLedger` — injection shapes the executor's tools, never the verdict.
+   */
+  inject?: {
+    mcpModules: CatalogModule[];
+    adapter: InjectionAdapter;
+    approveSecrets?: boolean;
+  };
 }
 
 export interface SkillSpecJson {
@@ -134,6 +156,11 @@ export interface SkillRunReport {
    * declared, acceptance/completion is the authoritative recomputable gate.
    */
   completionDisplay: NodeState;
+  /**
+   * Slice 7 (Item B): present only when the spec opted into execute-phase Magic injection. It is
+   * audit evidence (what was injected + post-exec integrity), NEVER a completion input.
+   */
+  injection?: { manifest: InjectionManifest; verification: InjectionVerification };
 }
 
 export interface AcceptanceResult {
@@ -722,12 +749,18 @@ export async function runOrchestratorSkill(
   input: { what: string; root: string; runId?: string },
 ): Promise<SkillRunReport> {
   const runId = input.runId ?? `skill-${randomUUID()}`;
+  // Slice 7 (Item B): injection is single-executor only — refuse it alongside fan-out / refinement
+  // so the public shape can't silently grow fan-out semantics (design-panel codex #4).
+  if (spec.inject && (spec.executeCandidates?.length || (spec.maxRefineIterations ?? 1) > 1)) {
+    throw new Error('orchestrator-skill inject is single-executor only: not supported with execute fan-out or refinement');
+  }
   const nodes = compileSkillToGraphTemplate(spec, { what: input.what });
   const goalsByPhase = new Map(nodes.map((node) => [node.id, node.goal]));
   const phases: PhaseResult[] = [];
   const inputRefs: EvidenceRef[] = [];
   const executeRefs: EvidenceRef[] = [];
   let ledgerHead: RuntimeLedgerHeadBinding | undefined;
+  let skillInjection: { manifest: InjectionManifest; verification: InjectionVerification } | undefined;
   const createdWorkerIds: string[] = [];
   const cleanupSkillWorktrees = () => {
     for (const id of createdWorkerIds) {
@@ -801,6 +834,7 @@ export async function runOrchestratorSkill(
 
     const workerId = workerIdFor(runId, phase);
     createdWorkerIds.push(workerId);
+    let injectionManifest: InjectionManifest | undefined;
     const result = await runIsolatedWorker({
       root: input.root,
       workerId,
@@ -808,7 +842,28 @@ export async function runOrchestratorSkill(
       executor: spec.phases[phase].executor,
       executorLabel: spec.phases[phase].executorLabel,
       inputRefs,
+      // Slice 7 (Item B): inject capability (MCP) into the EXECUTE worktree before the executor runs.
+      beforeExecute:
+        phase === 'execute' && spec.inject
+          ? ((injectSpec) => (worktreePath: string) => {
+              injectionManifest = applyCompositionToWorktree({
+                worktree: worktreePath,
+                mcpModules: injectSpec.mcpModules,
+                adapter: injectSpec.adapter,
+                approveSecrets: injectSpec.approveSecrets,
+              });
+            })(spec.inject)
+          : undefined,
     });
+    // Post-exec verify + ledger composition.injected (evidence only — NEVER a completion input; the
+    // event is appended to the same chain recompute validates but is ignored by the verdict path).
+    if (phase === 'execute' && spec.inject && injectionManifest) {
+      const verification = verifyInjection(result.worktreePath, injectionManifest, { adapter: spec.inject.adapter });
+      const dir = skillRunDir(input.root, runId);
+      mkdirSync(dir, { recursive: true });
+      recordInjectionEvent(dir, runId, injectionManifest, { phase: 'execute', executor: 'primary', fanout: false });
+      skillInjection = { manifest: injectionManifest, verification };
+    }
     ledgerHead = readWorkerLedgerHead(result) ?? ledgerHead;
 
     const phaseResult = toPhaseResult(result, phase);
@@ -858,6 +913,7 @@ export async function runOrchestratorSkill(
     acceptance,
     completion,
     completionDisplay: review?.nodeState ?? 'failed',
+    injection: skillInjection,
   };
 
   // Lifecycle events are derived projections appended AFTER the verdict is fixed;
