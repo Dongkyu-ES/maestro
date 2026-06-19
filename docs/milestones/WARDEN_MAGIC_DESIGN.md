@@ -76,7 +76,10 @@ thesis says isn't owned. **Resolution — narrow the claim to what is enforceabl
 
 **Honest residual (R-native-ownership ceiling):** injection guarantees integrity + replayability of
 *what Warden wrote*, and never asserts the executor loaded it. Proving consumption (smokeProbe) and
-anything about other files the executor writes are out of injection's ownership by design.
+anything about other files the executor writes are out of injection's ownership by design. Named
+residuals not closed here (R-native-ownership): a nested `.mcp.json` in a subdirectory could override
+the injected root config; the executor can add any AI-surface file post-write. These are the native
+loop's domain — the harness records what it injected, it does not police the worktree.
 
 ## 6. Honest risks
 

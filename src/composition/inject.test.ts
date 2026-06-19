@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -111,4 +111,34 @@ test('inject B2: consumptionProven only flips via a live smokeProbe (else always
   // A hypothetical adapter WITH a probe is the only thing that can assert consumption.
   const probed: InjectionAdapter = { label: 'claude', supportsLocalMcp: true, mcpConfigPath: '.mcp.json', smokeProbe: () => true };
   assert.equal(verifyInjection(wt, manifest, { adapter: probed }).consumptionProven, true);
+});
+
+test('inject robustness: a malformed module (mcp without server) is skipped, never crashes the sort', () => {
+  const wt = tmpWorktree();
+  const malformed = { id: 'bad', kind: 'mcp', tags: ['rust'], origin: 'declared', mcp: { command: ['x'] } } as unknown as CatalogModule;
+  const good = mcpModule('ok', 'alpha', ['alpha-mcp']);
+  // Must not throw even with the malformed module present alongside a valid one.
+  const manifest = applyCompositionToWorktree({ worktree: wt, mcpModules: [malformed, good], adapter: adapterFor('claude') });
+  assert.equal(manifest.mcp_injection, 'applied-unproven');
+  assert.match(readFileSync(join(wt, '.mcp.json'), 'utf8'), /"alpha"/);
+  assert.doesNotMatch(readFileSync(join(wt, '.mcp.json'), 'utf8'), /"bad"/);
+});
+
+test('inject B6: hyphenated/Google token formats are gated (sk-ant-, AIza)', () => {
+  for (const tok of ['sk-ant-api03-abcdefghijklmnop', 'AIzaSyA1234567890abcdefghij']) {
+    const wt = tmpWorktree();
+    const m = applyCompositionToWorktree({ worktree: wt, mcpModules: [mcpModule('t', 'srv', ['srv', tok])], adapter: adapterFor('claude') });
+    assert.equal(m.mcp_injection, 'none', `${tok} must be gated`);
+  }
+});
+
+test('inject robustness: a manifest path replaced by a directory is reported mutated, not a crash', () => {
+  const wt = tmpWorktree();
+  const manifest = applyCompositionToWorktree({ worktree: wt, mcpModules: [mcpModule('m', 'm', ['m'])], adapter: adapterFor('claude') });
+  // Replace the injected file with a directory (EISDIR on read).
+  rmSync(join(wt, '.mcp.json'));
+  mkdirSync(join(wt, '.mcp.json'));
+  const v = verifyInjection(wt, manifest, { adapter: adapterFor('claude') }); // must not throw
+  assert.equal(v.integrityOk, false);
+  assert.equal(v.mutated.length, 1);
 });

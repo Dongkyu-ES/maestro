@@ -74,7 +74,9 @@ export function adapterFor(label: string): InjectionAdapter {
 const SECRET_KEY_RE =
   /(secret|token|password|passwd|passphrase|auth|jwt|bearer|session|credential|api[-_]?key|access[-_]?key|connection[-_]?string|db[-_]?uri|dsn|\bkey\b)/i;
 const CONNSTRING_RE = /\/\/[^/\s:@]+:[^/\s:@]+@/;
-const TOKEN_PREFIX_RE = /\b(gh[pousr]_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9]{16,}|xox[baprs]-[A-Za-z0-9-]{10,})\b/;
+// Token prefixes allow hyphens/underscores so e.g. Anthropic `sk-ant-...` is caught (was bypassed).
+const TOKEN_PREFIX_RE =
+  /(gh[pousr]_[A-Za-z0-9]{16,}|sk-[A-Za-z0-9_-]{16,}|AIza[0-9A-Za-z_-]{16,}|xox[baprs]-[A-Za-z0-9-]{10,})/;
 
 function sha256Hex(content: string | Buffer): string {
   return createHash('sha256').update(content).digest('hex');
@@ -106,7 +108,9 @@ function partitionBySecret(
   const safe: CatalogModule[] = [];
   const skipped: string[] = [];
   for (const m of mcpModules) {
-    if (!m.mcp) continue;
+    // A malformed module (mcp present but no server name) is not injectable — skip it rather than
+    // crash the sort comparator / config builder downstream.
+    if (!m.mcp?.server) continue;
     if (serverRequiresApproval(m) && !approveSecrets) skipped.push(m.mcp.server);
     else safe.push(m);
   }
@@ -234,7 +238,15 @@ export function verifyInjection(
       missing.push(f.path);
       continue;
     }
-    if (sha256Hex(readFileSync(fp)) !== f.sha256) mutated.push({ path: f.path, sha256: sha256Hex(readFileSync(fp)) });
+    // Read defensively: a path replaced by a directory (EISDIR) or otherwise unreadable is treated
+    // as tampered/mutated, never an uncaught crash of the verification run.
+    let cur: string | null;
+    try {
+      cur = sha256Hex(readFileSync(fp));
+    } catch {
+      cur = null;
+    }
+    if (cur === null || cur !== f.sha256) mutated.push({ path: f.path, sha256: cur ?? 'UNREADABLE' });
   }
   return {
     integrityOk: mutated.length === 0 && missing.length === 0,
