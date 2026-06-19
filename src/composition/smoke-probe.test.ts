@@ -46,17 +46,18 @@ test('canary server: tools/list advertises exactly the warden_canary_ping tool',
 
 test('probe: proven only when the sentinel exists with the expected token', () => {
   const wt = tmpDir();
-  const probe = makeCanarySmokeProbe({ token: 'abc', sentinelRelPath: '.warden-canary' });
+  const sentinelPath = join(wt, '.warden-canary');
+  const probe = makeCanarySmokeProbe({ token: 'abc', sentinelPath });
   assert.equal(probe(wt), false, 'no sentinel → unproven');
-  writeFileSync(join(wt, '.warden-canary'), 'WRONG');
+  writeFileSync(sentinelPath, 'WRONG');
   assert.equal(probe(wt), false, 'wrong token → unproven');
-  writeFileSync(join(wt, '.warden-canary'), 'abc');
+  writeFileSync(sentinelPath, 'abc');
   assert.equal(probe(wt), true, 'right token → proven');
 });
 
 test('verifyInjection: consumptionProven flips true only via the canary probe + sentinel', () => {
   const wt = tmpDir();
-  const cfg = { token: 'run-tok', sentinelRelPath: '.warden-canary' };
+  const cfg = { token: 'run-tok', sentinelPath: join(wt, '.warden-canary') };
   const adapter = withCanaryProbe(adapterFor('claude'), cfg);
   // A manifest with no files is fine for this check — we only exercise the consumption probe path.
   const manifest = { schema_version: 1 as const, executor: 'claude', mcp_injection: 'applied-unproven' as const, files: [], skipped_secret_servers: [], backed_up: [], note: '' };

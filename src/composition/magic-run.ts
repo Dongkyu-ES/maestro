@@ -11,6 +11,7 @@ import {
   applyCompositionToWorktree,
   verifyInjection,
 } from './inject.js';
+import { type CanaryConfig, canaryConfigForWorktree, canaryModule, withCanaryProbe } from './smoke-probe.js';
 
 /**
  * Slice 4 — `warden magic run`: a standalone run that INJECTS the resolved capability into the
@@ -43,6 +44,9 @@ export async function runMagicInjectionRun(opts: {
   mcpModules: CatalogModule[];
   adapter: InjectionAdapter;
   approveSecrets?: boolean;
+  /** Slice 6: when set, also inject the consumption canary and prove consumption from its sentinel.
+   *  The absolute sentinel path is resolved against the run worktree (cwd-independent). */
+  prove?: { token: string };
 }): Promise<MagicRunResult> {
   const runDir = magicRunDir(opts.root, opts.magicRunId);
   mkdirSync(runDir, { recursive: true });
@@ -50,6 +54,9 @@ export async function runMagicInjectionRun(opts: {
   // The hook fires after evidence materialization and before the executor — so the executor runs
   // in a worktree that ALREADY contains the injected `.mcp.json`. Captured for post-run evidence.
   let manifest: InjectionManifest | undefined;
+  // In --prove mode the canary config (with an ABSOLUTE worktree sentinel) is only knowable once the
+  // worktree exists, so it is built inside beforeExecute and reused for the post-run probe.
+  let proveCfg: CanaryConfig | undefined;
   try {
     const worker = await runIsolatedWorker({
       root: opts.root,
@@ -58,9 +65,14 @@ export async function runMagicInjectionRun(opts: {
       executor: opts.executor,
       executorLabel: opts.executorLabel,
       beforeExecute: (worktreePath) => {
+        let modules = opts.mcpModules;
+        if (opts.prove) {
+          proveCfg = canaryConfigForWorktree(worktreePath, opts.prove.token);
+          modules = [...opts.mcpModules, canaryModule(proveCfg)];
+        }
         manifest = applyCompositionToWorktree({
           worktree: worktreePath,
-          mcpModules: opts.mcpModules,
+          mcpModules: modules,
           adapter: opts.adapter,
           approveSecrets: opts.approveSecrets,
         });
@@ -68,8 +80,9 @@ export async function runMagicInjectionRun(opts: {
     });
     if (!manifest) throw new Error('magic run: beforeExecute did not produce an injection manifest');
 
-    // Post-exec integrity over the worktree before it is cleaned up (what Warden wrote is intact).
-    const verification = verifyInjection(worker.worktreePath, manifest, { adapter: opts.adapter });
+    // Post-exec integrity + (when proving) consumption via the canary's absolute sentinel.
+    const verifyAdapter = proveCfg ? withCanaryProbe(opts.adapter, proveCfg) : opts.adapter;
+    const verification = verifyInjection(worker.worktreePath, manifest, { adapter: verifyAdapter });
     recordInjectionEvent(runDir, opts.magicRunId, manifest);
     const ledgerCheck = recomputeInjectionFromLedger(runDir, {
       mcpModules: opts.mcpModules,

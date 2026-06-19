@@ -30,13 +30,16 @@ export interface CanaryConfig {
    */
   token: string;
   /**
-   * Sentinel path the canary writes and the probe reads. The probe resolves it under the worktree
-   * (`join(worktree, sentinelRelPath)`); the canary server writes `WARDEN_CANARY_SENTINEL` as given.
-   * LIVE caveat (dogfood): the two agree only if the MCP host launches the canary server with cwd =
-   * the run worktree (the usual case). A fully cwd-independent absolute path is a slice-6 refinement;
-   * the deterministic tests pin both sides to the same path.
+   * ABSOLUTE sentinel path (slice 6 — cwd-independent). The canary server writes
+   * `WARDEN_CANARY_SENTINEL` verbatim and the probe reads this exact path, so server and probe agree
+   * regardless of the MCP host's cwd. Build it with `canaryConfigForWorktree(worktree, token)`.
    */
-  sentinelRelPath: string;
+  sentinelPath: string;
+}
+
+/** Build a per-worktree canary config with an ABSOLUTE sentinel path (cwd-independent). */
+export function canaryConfigForWorktree(worktree: string, token: string): CanaryConfig {
+  return { token, sentinelPath: join(worktree, '.warden-canary') };
 }
 
 /** Absolute path to the bundled canary MCP server script. */
@@ -49,11 +52,11 @@ export function canaryServerPath(): string {
  * This is the only function permitted to assert consumption, and it does so from a real artifact.
  */
 export function makeCanarySmokeProbe(cfg: CanaryConfig): (worktree: string) => boolean {
-  return (worktree: string) => {
-    const p = join(worktree, cfg.sentinelRelPath);
-    if (!existsSync(p)) return false;
+  // Uses the ABSOLUTE cfg.sentinelPath directly (cwd-independent); the worktree arg is ignored.
+  return () => {
+    if (!existsSync(cfg.sentinelPath)) return false;
     try {
-      return readFileSync(p, 'utf8') === cfg.token;
+      return readFileSync(cfg.sentinelPath, 'utf8') === cfg.token;
     } catch {
       return false;
     }
@@ -78,7 +81,7 @@ export function canaryModule(cfg: CanaryConfig): CatalogModule {
       command: [
         'node',
         '-e',
-        `process.env.WARDEN_CANARY_TOKEN=${JSON.stringify(cfg.token)};process.env.WARDEN_CANARY_SENTINEL=${JSON.stringify(cfg.sentinelRelPath)};import(${JSON.stringify(canaryServerPath())})`,
+        `process.env.WARDEN_CANARY_TOKEN=${JSON.stringify(cfg.token)};process.env.WARDEN_CANARY_SENTINEL=${JSON.stringify(cfg.sentinelPath)};import(${JSON.stringify(canaryServerPath())})`,
       ],
     },
   };

@@ -80,7 +80,6 @@ import { loadModuleCatalog } from './composition/catalog.js';
 import { adapterFor, applyCompositionToWorktree, verifyInjection } from './composition/inject.js';
 import { recomputeInjectionFromLedger, recordInjectionEvent } from './composition/inject-ledger.js';
 import { runMagicInjectionRun } from './composition/magic-run.js';
-import { canaryModule, withCanaryProbe } from './composition/smoke-probe.js';
 import { formatMagicPlan, resolveMagicPlan } from './composition/magic.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -819,26 +818,23 @@ async function main() {
       const mcpModules = catalog.modules.filter((m) => m.kind === 'mcp' && selectedMcpIds.has(m.id));
       const magicRunId = `magic-${randomUUID()}`;
       // --prove: inject a canary MCP + ask the executor to call it once, then prove consumption from
-      // the sentinel it leaves (real side effect, not prose). Without --prove, consumption stays
-      // honestly unproven.
-      let runAdapter = adapterFor(executorLabel);
-      let runModules = mcpModules;
-      let runGoal = goal;
-      if (has('--prove')) {
-        const canaryCfg = { token: magicRunId, sentinelRelPath: '.warden-canary' };
-        runAdapter = withCanaryProbe(runAdapter, canaryCfg);
-        runModules = [...mcpModules, canaryModule(canaryCfg)];
-        runGoal = `${goal}\n\n[warden consumption check] First call the MCP tool warden_canary_ping exactly once (this confirms your injected MCP config loaded), then proceed with the task.`;
-      }
+      // the sentinel it leaves (real side effect, not prose). The canary's absolute sentinel path is
+      // resolved against the run worktree inside runMagicInjectionRun (cwd-independent). Without
+      // --prove, consumption stays honestly unproven.
+      const prove = has('--prove');
+      const runGoal = prove
+        ? `${goal}\n\n[warden consumption check] First call the MCP tool warden_canary_ping exactly once (this confirms your injected MCP config loaded), then proceed with the task.`
+        : goal;
       const result = await runMagicInjectionRun({
         root: process.cwd(),
         goal: runGoal,
         magicRunId,
         executor,
         executorLabel,
-        mcpModules: runModules,
-        adapter: runAdapter,
+        mcpModules,
+        adapter: adapterFor(executorLabel),
         approveSecrets: has('--approve-secrets'),
+        prove: prove ? { token: magicRunId } : undefined,
       });
       console.log(JSON.stringify(result, null, 2));
       // Fail on integrity loss OR a recorded-but-unreproducible injection — independent of file count

@@ -8,7 +8,6 @@ import type { HarnessExecutor } from '../harness/harness-run.js';
 import type { CatalogModule } from './catalog.js';
 import { adapterFor } from './inject.js';
 import { runMagicInjectionRun } from './magic-run.js';
-import { withCanaryProbe } from './smoke-probe.js';
 
 function tmpRepo(): string {
   const root = mkdtempSync(join(tmpdir(), 'magic-run-'));
@@ -91,10 +90,7 @@ test('magic run: an executor that tampers the injected .mcp.json is caught (inte
   assert.equal(res.verification.mutated.length, 1);
 });
 
-test('magic run: consumptionProven flips true ONLY when the executor leaves the canary sentinel', async () => {
-  const cfg = { token: 'prove-tok', sentinelRelPath: '.warden-canary' };
-  const adapter = withCanaryProbe(adapterFor('claude'), cfg);
-
+test('magic run --prove: consumptionProven flips true ONLY when the executor leaves the canary sentinel', async () => {
   // (a) executor does NOT call the canary (no sentinel) → consumption stays unproven.
   const idleExec: HarnessExecutor = async (o) => {
     writeFileSync(join(o.cwd, 'out.txt'), 'idle\n');
@@ -102,18 +98,21 @@ test('magic run: consumptionProven flips true ONLY when the executor leaves the 
   };
   const unproven = await runMagicInjectionRun({
     root: tmpRepo(), goal: 'g', magicRunId: 'magic-prove-0', executor: idleExec, executorLabel: 'claude',
-    mcpModules: [mcpModule('ra', 'rust-analyzer', ['ra-mcp'])], adapter,
+    mcpModules: [mcpModule('ra', 'rust-analyzer', ['ra-mcp'])], adapter: adapterFor('claude'),
+    prove: { token: 'magic-prove-0' },
   });
   assert.equal(unproven.verification.consumptionProven, false);
 
-  // (b) executor "calls the canary" (writes the sentinel) → consumption proven by the real artifact.
+  // (b) executor "calls the canary" — writes the absolute worktree sentinel with the prove token.
+  // (Its cwd IS the run worktree, so join(cwd, '.warden-canary') == the canary's absolute sentinel.)
   const callingExec: HarnessExecutor = async (o) => {
-    writeFileSync(join(o.cwd, cfg.sentinelRelPath), cfg.token); // simulates the canary tool being called
+    writeFileSync(join(o.cwd, '.warden-canary'), 'magic-prove-1');
     return fakeResult(o.cwd, o.label);
   };
   const proven = await runMagicInjectionRun({
     root: tmpRepo(), goal: 'g', magicRunId: 'magic-prove-1', executor: callingExec, executorLabel: 'claude',
-    mcpModules: [mcpModule('ra', 'rust-analyzer', ['ra-mcp'])], adapter,
+    mcpModules: [mcpModule('ra', 'rust-analyzer', ['ra-mcp'])], adapter: adapterFor('claude'),
+    prove: { token: 'magic-prove-1' },
   });
   assert.equal(proven.verification.consumptionProven, true);
 });
