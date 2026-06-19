@@ -77,6 +77,7 @@ import {
 } from './util.js';
 import { renderHtml, renderReviewGate, renderRun, renderSkillRun } from './view.js';
 import { loadModuleCatalog } from './composition/catalog.js';
+import { adapterFor, applyCompositionToWorktree, verifyInjection } from './composition/inject.js';
 import { formatMagicPlan, resolveMagicPlan } from './composition/magic.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -195,6 +196,7 @@ function usage(): string {
   warden skill show <runId>            # operator projection: recomputes completion, flags contradictions
   warden magic plan "<goal>"           # dry-run: detect project tags + resolve composable modules (no injection)
   warden magic catalog                 # list the module catalog (declared + discovered)
+  warden magic apply [--into <dir>] [--executor claude|codex|agy] [--approve-secrets]  # inject resolved MCP capability (records a tamper-evident manifest)
   warden skills verify-contracts [--run <run-id>]
   warden worktrees cleanup
   warden maintenance reconcile-runs
@@ -772,6 +774,28 @@ async function main() {
       for (const m of catalog.modules) {
         console.log(`  - ${m.id} [${m.kind}] ${m.origin} (tags: ${m.tags.length ? m.tags.join(', ') : 'none — not auto-selected'})`);
       }
+      return;
+    }
+    if (cmd === 'magic' && sub === 'apply') {
+      const into = arg('--into') ?? process.cwd();
+      const executor = arg('--executor') ?? 'claude';
+      const goal = firstNonFlag(rest) ?? '(apply)';
+      const catalog = loadModuleCatalog({ root: process.cwd() });
+      const plan = resolveMagicPlan({ root: process.cwd(), goal, catalog });
+      const selectedMcpIds = new Set(plan.selected.filter((s) => s.kind === 'mcp').map((s) => s.moduleId));
+      const mcpModules = catalog.modules.filter((m) => m.kind === 'mcp' && selectedMcpIds.has(m.id));
+      const manifest = applyCompositionToWorktree({
+        worktree: into,
+        mcpModules,
+        adapter: adapterFor(executor),
+        approveSecrets: has('--approve-secrets'),
+      });
+      const verification = verifyInjection(into, manifest);
+      mkdirSync(join(into, '.agent'), { recursive: true });
+      writeFileSync(join(into, '.agent', 'composition-injected.json'), `${JSON.stringify({ manifest, verification }, null, 2)}\n`);
+      console.log(JSON.stringify({ into, executor, manifest, verification }, null, 2));
+      // A real injection that fails its own closure/hash check is an error; an honest 'unsupported'/'none' is not.
+      if (manifest.files.length > 0 && !verification.ok) process.exitCode = 2;
       return;
     }
     if (cmd === 'worktrees' && sub === 'cleanup') {
