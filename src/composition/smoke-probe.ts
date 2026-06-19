@@ -23,9 +23,19 @@ import type { InjectionAdapter } from './inject.js';
  */
 
 export interface CanaryConfig {
-  /** Token the canary writes and the probe checks — make it per-run-unique to avoid stale sentinels. */
+  /**
+   * Token the canary writes and the probe checks. MUST be per-run-unique (the CLI uses the
+   * magicRunId) — this is the STRUCTURAL defense against a stale-sentinel replay: a leftover
+   * sentinel from another run carries a different token and so does not prove consumption.
+   */
   token: string;
-  /** Worktree-relative sentinel path the canary writes and the probe reads. */
+  /**
+   * Sentinel path the canary writes and the probe reads. The probe resolves it under the worktree
+   * (`join(worktree, sentinelRelPath)`); the canary server writes `WARDEN_CANARY_SENTINEL` as given.
+   * LIVE caveat (dogfood): the two agree only if the MCP host launches the canary server with cwd =
+   * the run worktree (the usual case). A fully cwd-independent absolute path is a slice-6 refinement;
+   * the deterministic tests pin both sides to the same path.
+   */
   sentinelRelPath: string;
 }
 

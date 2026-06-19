@@ -17,7 +17,8 @@ import type { CatalogModule } from './catalog.js';
  *   - integrity of those written files is re-checkable from disk (catches post-exec tampering).
  *   - the manifest is reproducible from the ledgered inputs (replay).
  *   - consumption is NEVER asserted (B2): there is no `proven` status; `consumptionProven` is only
- *     flipped by a LIVE `smokeProbe` (interface present, live impl deferred). `applied-unproven`
+ *     flipped by a LIVE `smokeProbe` (the built-in adapters here ship none; slice 5's
+ *     `withCanaryProbe` supplies one that proves consumption from a real sentinel). `applied-unproven`
  *     must never be read as "the CLI loaded it".
  *   - B6: secret-bearing servers are skipped unless explicitly approved.
  *   - B1: MCP is capability-only; injection never writes an acceptance bar.
@@ -52,7 +53,8 @@ export interface InjectionAdapter {
   mcpConfigPath: string;
   /**
    * LIVE consumption probe (B2). Returns true only if a real run of this executor demonstrably
-   * loaded the injected config. Deferred — no adapter ships one yet, so consumption stays unproven.
+   * loaded the injected config. The built-in adapters ship none (consumption stays unproven); slice
+   * 5's `withCanaryProbe` (smoke-probe.ts) supplies a canary probe that proves it from a real sentinel.
    */
   smokeProbe?: (worktree: string) => boolean;
 }
@@ -223,7 +225,7 @@ export function proveConsumption(worktree: string, adapter: InjectionAdapter): b
 export interface InjectionVerification {
   /** Every manifest file (and every backup) exists and its on-disk hash matches (intact). */
   integrityOk: boolean;
-  /** Consumption is proven ONLY by a live smokeProbe (deferred). False unless a probe confirmed it. */
+  /** Consumption is proven ONLY by a live smokeProbe (e.g. slice 5's canary). False unless one confirmed it. */
   consumptionProven: boolean;
   /** Manifest files whose current on-disk hash differs (post-exec tampering, surfaced not silent). */
   mutated: InjectedFile[];
