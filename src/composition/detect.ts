@@ -27,6 +27,8 @@ const MANIFEST_TAGS: { path: string; tags: string[] }[] = [
   { path: 'Package.swift', tags: ['swift', 'swiftpm'] },
   { path: 'Cargo.toml', tags: ['rust', 'cargo'] },
   { path: 'package.json', tags: ['node'] },
+  { path: 'package-lock.json', tags: ['node', 'npm'] },
+  { path: 'yarn.lock', tags: ['node', 'yarn'] },
   { path: 'pnpm-lock.yaml', tags: ['node', 'pnpm'] },
   { path: 'pnpm-workspace.yaml', tags: ['node', 'pnpm', 'monorepo'] },
   { path: 'go.mod', tags: ['go'] },

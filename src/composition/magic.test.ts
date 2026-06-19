@@ -122,3 +122,80 @@ test('resolve: dry-run output is honest about injecting nothing', () => {
   assert.match(text, /dry-run only/);
   assert.match(text, /injects nothing/);
 });
+
+// ── B1 defense-depth: pin the coupling that keeps acceptance out (critic follow-up) ──────────────
+
+test('B1 coupling: the declared loader drops a renamed acceptance-shaped field (allowlist)', () => {
+  const root = tmpDir();
+  const home = tmpDir('home-');
+  writeFileSync(
+    join(root, 'warden.modules.json'),
+    JSON.stringify({ modules: [{ id: 'sneaky', kind: 'mcp', tags: ['rust'], acceptanceContract: { command: ['true'] }, gate: 'x' }] }),
+  );
+  const catalog = loadModuleCatalog({ root, home });
+  const mod = catalog.modules.find((m) => m.id === 'sneaky') as CatalogModule & { acceptanceContract?: unknown; gate?: unknown };
+  assert.ok(mod);
+  // The allowlist loader reconstructs only known keys; a renamed acceptance-shaped field never enters the graph.
+  assert.equal(mod.acceptanceContract, undefined);
+  assert.equal(mod.gate, undefined);
+});
+
+test('B1 coupling: a selected module never propagates mcp/source/description into the plan selection', () => {
+  const root = tmpDir();
+  writeFileSync(join(root, 'Cargo.toml'), '[package]\nname="x"\n');
+  const catalog = {
+    sources: ['inline'],
+    modules: [
+      { id: 'rust-mcp', kind: 'mcp' as const, tags: ['rust'], origin: 'declared' as const, mcp: { server: 's', command: ['x'] }, source: '/abs/path', description: 'd' },
+    ],
+  };
+  const plan = resolveMagicPlan({ root, goal: 'g', catalog });
+  assert.equal(plan.selected.length, 1);
+  // The selection must carry ONLY these keys — no mcp/source/description leak that a later consumer could misread.
+  assert.deepEqual(Object.keys(plan.selected[0]).sort(), ['kind', 'matchedTags', 'moduleId', 'selectedBecause']);
+});
+
+// ── catalog dedup precedence (critic follow-up) ──────────────────────────────────────────────────
+
+test('catalog: a declared id overrides a discovered id of the same name (dedup, first wins)', () => {
+  const root = tmpDir();
+  const home = tmpDir('home-');
+  // Discovered skill named "shared"
+  const skill = join(home, '.claude', 'skills', 'shared');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# skill\n');
+  // Declared module with the SAME id, tagged so it can be auto-selected.
+  writeFileSync(
+    join(root, 'warden.modules.json'),
+    JSON.stringify({ modules: [{ id: 'installed:shared', kind: 'skill', tags: ['rust'] }] }),
+  );
+  const catalog = loadModuleCatalog({ root, home });
+  const matches = catalog.modules.filter((m) => m.id === 'installed:shared');
+  assert.equal(matches.length, 1, 'no duplicate id in the catalog');
+  assert.deepEqual(matches[0].tags, ['rust'], 'declared (first) wins over discovered');
+  assert.equal(matches[0].origin, 'declared');
+});
+
+// ── filesystem integration: real catalog sources end-to-end (critic follow-up) ───────────────────
+
+test('integration: resolveMagicPlan loads real repo+global+discovered catalogs and resolves correctly', () => {
+  const root = tmpDir();
+  const home = tmpDir('home-');
+  writeFileSync(join(root, 'Cargo.toml'), '[package]\nname="x"\n'); // → rust, cargo
+  // repo catalog
+  writeFileSync(join(root, 'warden.modules.json'), JSON.stringify({ modules: [{ id: 'repo-rust', kind: 'mcp', tags: ['rust'] }] }));
+  // global catalog
+  const globalDir = join(home, '.warden', 'catalog');
+  mkdirSync(globalDir, { recursive: true });
+  writeFileSync(join(globalDir, 'g.json'), JSON.stringify({ modules: [{ id: 'global-swift', kind: 'skill', tags: ['swift'] }, { id: 'global-bad', kind: 'harness', tags: ['rust'], acceptance: { command: ['true'] } }] }));
+  // discovered skill (untagged)
+  const skill = join(home, '.claude', 'skills', 'disc');
+  mkdirSync(skill, { recursive: true });
+  writeFileSync(join(skill, 'SKILL.md'), '# s\n');
+
+  const plan = resolveMagicPlan({ root, goal: 'build', home }); // no catalog → loads from disk
+  assert.deepEqual(plan.selected.map((s) => s.moduleId), ['repo-rust'], 'rust module selected; swift excluded; untagged not selected');
+  assert.ok(plan.rejected.some((r) => r.moduleId === 'global-bad'), 'acceptance-bearing global module rejected (B1)');
+  const text = formatMagicPlan(plan);
+  assert.match(text, /rejected modules \(1\)/);
+});

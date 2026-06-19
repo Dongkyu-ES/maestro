@@ -117,7 +117,17 @@ export function loadModuleCatalog(opts: { root: string; home?: string }): Module
     sources.push(join(home, '.claude', 'skills'));
   }
 
-  return { modules, sources };
+  // De-dup by id with precedence = assembly order (repo declared > global declared > discovered):
+  // the FIRST occurrence of an id wins, so a repo/global declaration overrides a discovered entry
+  // (and resolve never emits the same module twice). Critic-panel agy follow-up.
+  const deduped: CatalogModule[] = [];
+  const seen = new Set<string>();
+  for (const module of modules) {
+    if (seen.has(module.id)) continue;
+    seen.add(module.id);
+    deduped.push(module);
+  }
+  return { modules: deduped, sources };
 }
 
 /** A module matches a project iff it has at least one tag and all its tags are detected. */

@@ -32,8 +32,8 @@ Slice 1 ships the **planning half** only — the visible "magic" (analyze → de
 **Slice 1 (this implementation):**
 - `detect.ts` — deterministic, emits **flat tags only** (`swift`,`tuist`,`rust`,`node`,`monorepo`, native-surface tags), NO predicate DSL.
 - `catalog.ts` — declared `warden.modules.json` (repo) + `~/.warden/catalog/*.json` (global) + discovered installed; module match = **module tags ⊆ detected tags** (flat subset, no boolean/version logic).
-- dynamic `buildCompositionPlan` resolves from signals(tags) + catalog + `recommendModules` + operator overrides → extended `CompositionPlan` (`detection`, `selected_because`), still `composition.resolved`/`composition.json`.
-- CLI: **`warden magic plan <goal>`** (dry-run: print detected tags + resolved plan; no run, **no injection**). `warden magic catalog list`.
+- a SEPARATE pure resolver `resolveMagicPlan` (`magic.ts`) selects catalog modules whose tags subset the detected tags → `MagicPlan` (`detection`, `selected[]`, `rejected[]`). **Slice-1 selection is `declared`/`discovered` provenance only**; the `learned` (`recommendModules`) and `operator` provenance, and wiring this into the live-run `buildCompositionPlan`/`composition.resolved` path, are deferred to slice 2 (the `selectedBecause` enum is forward-declared). Slice 1 changes NO run lifecycle — it is a standalone dry-run.
+- CLI: **`warden magic plan <goal>`** (dry-run: print detected tags + resolved plan; no run, **no injection**). `warden magic catalog`.
 - **Acceptance-independence invariant encoded now (claude BLOCKER #1):** a catalog module MUST NOT carry an `AcceptanceContract`; resolve rejects any module that does. Acceptance stays operator-owned, frozen before composition.
 
 **Slice 2 (deferred, own critic pass):** the `InjectionAdapter` (per-executor, with `smokeProbe` proving consumption — else `mcp_injection: unsupported`), `inject.ts` for MCP `.mcp.json` only (local, no-secret, pre-installed binaries; exec-time installs forbidden), `composition.injected` as a **post-write disk re-read + closure check + replay re-derivation + pre/post-exec hashes**, write-lock + post-exec re-verify, `warden magic run`.
