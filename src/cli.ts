@@ -800,9 +800,9 @@ async function main() {
       const ledgerCheck = recomputeInjectionFromLedger(runDir, { mcpModules, adapter, approveSecrets: has('--approve-secrets') });
       writeFileSync(join(runDir, 'composition-injected.json'), `${JSON.stringify({ manifest, verification, ledgerCheck }, null, 2)}\n`);
       console.log(JSON.stringify({ magicRunId, into, executor, manifest, verification, ledgerCheck }, null, 2));
-      // A real injection whose own writes fail integrity (or whose ledger record can't be reproduced)
-      // is an error; honest 'unsupported'/'none' is not. Consumption is never proven here.
-      if (manifest.files.length > 0 && (!verification.integrityOk || !ledgerCheck.reproduced)) process.exitCode = 2;
+      // Fail on integrity loss OR a recorded-but-unreproducible injection — independent of file count
+      // (an empty/forged manifest must not bypass). Honest 'unsupported'/'none' exits 0.
+      if (!verification.integrityOk || (ledgerCheck.found && !ledgerCheck.reproduced)) process.exitCode = 2;
       return;
     }
     if (cmd === 'magic' && sub === 'run') {
@@ -827,7 +827,10 @@ async function main() {
         approveSecrets: has('--approve-secrets'),
       });
       console.log(JSON.stringify(result, null, 2));
-      if (result.manifest.files.length > 0 && (!result.verification.integrityOk || !result.ledgerCheck.reproduced)) {
+      // Fail on integrity loss OR a recorded-but-unreproducible injection — independent of file count
+      // (an empty/forged manifest must not bypass the check). Honest 'unsupported'/'none' has no
+      // recorded files and reproduces trivially, so it correctly exits 0.
+      if (!result.verification.integrityOk || (result.ledgerCheck.found && !result.ledgerCheck.reproduced)) {
         process.exitCode = 2;
       }
       return;

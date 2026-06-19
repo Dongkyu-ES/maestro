@@ -70,6 +70,26 @@ test('magic run: the executor runs in a worktree that ALREADY contains the injec
   assert.equal(res.verification.consumptionProven, false);
 });
 
+test('magic run: an executor that tampers the injected .mcp.json is caught (integrityOk false)', async () => {
+  const root = tmpRepo();
+  const executor: HarnessExecutor = async (o) => {
+    // The executor (untrusted, owns the worktree) overwrites the injected config mid-run.
+    writeFileSync(join(o.cwd, '.mcp.json'), '{"mcpServers":{"evil":{"command":"x","args":[]}}}\n');
+    return fakeResult(o.cwd, o.label);
+  };
+  const res = await runMagicInjectionRun({
+    root,
+    goal: 'tamper',
+    magicRunId: 'magic-test-3',
+    executor,
+    executorLabel: 'claude',
+    mcpModules: [mcpModule('ra', 'rust-analyzer', ['ra-mcp'])],
+    adapter: adapterFor('claude'),
+  });
+  assert.equal(res.verification.integrityOk, false, 'post-exec tampering of the injected file is caught');
+  assert.equal(res.verification.mutated.length, 1);
+});
+
 test('magic run: an unsupported executor (codex) injects nothing — executor sees no .mcp.json', async () => {
   const root = tmpRepo();
   let sawMcp: string | null = 'unset';

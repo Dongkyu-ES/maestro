@@ -50,44 +50,47 @@ export async function runMagicInjectionRun(opts: {
   // The hook fires after evidence materialization and before the executor — so the executor runs
   // in a worktree that ALREADY contains the injected `.mcp.json`. Captured for post-run evidence.
   let manifest: InjectionManifest | undefined;
-  const worker = await runIsolatedWorker({
-    root: opts.root,
-    workerId: opts.magicRunId,
-    goal: opts.goal,
-    executor: opts.executor,
-    executorLabel: opts.executorLabel,
-    beforeExecute: (worktreePath) => {
-      manifest = applyCompositionToWorktree({
-        worktree: worktreePath,
-        mcpModules: opts.mcpModules,
-        adapter: opts.adapter,
-        approveSecrets: opts.approveSecrets,
-      });
-    },
-  });
-  if (!manifest) throw new Error('magic run: beforeExecute did not produce an injection manifest');
-
-  // Post-exec integrity over the worktree before it is cleaned up (what Warden wrote is intact).
-  const verification = verifyInjection(worker.worktreePath, manifest, { adapter: opts.adapter });
-  recordInjectionEvent(runDir, opts.magicRunId, manifest);
-  const ledgerCheck = recomputeInjectionFromLedger(runDir, {
-    mcpModules: opts.mcpModules,
-    adapter: opts.adapter,
-    approveSecrets: opts.approveSecrets,
-  });
-
-  // Best-effort cleanup of the run worktree (evidence is content-addressed / ledgered already).
   try {
-    removeWorktreeAndBranch(opts.root, opts.magicRunId, { force: true });
-  } catch {
-    // a leftover worktree must not fail the run or hide the verdict
-  }
+    const worker = await runIsolatedWorker({
+      root: opts.root,
+      workerId: opts.magicRunId,
+      goal: opts.goal,
+      executor: opts.executor,
+      executorLabel: opts.executorLabel,
+      beforeExecute: (worktreePath) => {
+        manifest = applyCompositionToWorktree({
+          worktree: worktreePath,
+          mcpModules: opts.mcpModules,
+          adapter: opts.adapter,
+          approveSecrets: opts.approveSecrets,
+        });
+      },
+    });
+    if (!manifest) throw new Error('magic run: beforeExecute did not produce an injection manifest');
 
-  return {
-    magicRunId: opts.magicRunId,
-    manifest,
-    verification,
-    ledgerCheck,
-    worker: { state: worker.state, verifierStatus: worker.verifierStatus, outputRef: worker.outputRef },
-  };
+    // Post-exec integrity over the worktree before it is cleaned up (what Warden wrote is intact).
+    const verification = verifyInjection(worker.worktreePath, manifest, { adapter: opts.adapter });
+    recordInjectionEvent(runDir, opts.magicRunId, manifest);
+    const ledgerCheck = recomputeInjectionFromLedger(runDir, {
+      mcpModules: opts.mcpModules,
+      adapter: opts.adapter,
+      approveSecrets: opts.approveSecrets,
+    });
+
+    return {
+      magicRunId: opts.magicRunId,
+      manifest,
+      verification,
+      ledgerCheck,
+      worker: { state: worker.state, verifierStatus: worker.verifierStatus, outputRef: worker.outputRef },
+    };
+  } finally {
+    // Always clean up the run worktree — even on an early throw — so a failed run never leaks a
+    // worktree/branch (evidence is content-addressed / ledgered already).
+    try {
+      removeWorktreeAndBranch(opts.root, opts.magicRunId, { force: true });
+    } catch {
+      // a leftover worktree must not fail the run or hide the verdict
+    }
+  }
 }
