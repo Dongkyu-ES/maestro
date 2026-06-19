@@ -78,6 +78,7 @@ import {
 import { renderHtml, renderReviewGate, renderRun, renderSkillRun } from './view.js';
 import { loadModuleCatalog } from './composition/catalog.js';
 import { adapterFor, applyCompositionToWorktree, verifyInjection } from './composition/inject.js';
+import { recomputeInjectionFromLedger, recordInjectionEvent } from './composition/inject-ledger.js';
 import { formatMagicPlan, resolveMagicPlan } from './composition/magic.js';
 
 function arg(name: string, fallback?: string): string | undefined {
@@ -196,7 +197,8 @@ function usage(): string {
   warden skill show <runId>            # operator projection: recomputes completion, flags contradictions
   warden magic plan "<goal>"           # dry-run: detect project tags + resolve composable modules (no injection)
   warden magic catalog                 # list the module catalog (declared + discovered)
-  warden magic apply [--into <dir>] [--executor claude|codex|agy] [--approve-secrets]  # inject resolved MCP capability (records a tamper-evident manifest)
+  warden magic apply [--into <dir>] [--executor claude|codex|agy] [--approve-secrets]  # inject resolved MCP capability (hash-chained composition.injected ledger record)
+  warden magic show <magicRunId> [--into <dir>] [--executor ...]  # recompute the injection record from the ledger; flag contradiction
   warden skills verify-contracts [--run <run-id>]
   warden worktrees cleanup
   warden maintenance reconcile-runs
@@ -787,12 +789,38 @@ async function main() {
       const adapter = adapterFor(executor);
       const manifest = applyCompositionToWorktree({ worktree: into, mcpModules, adapter, approveSecrets: has('--approve-secrets') });
       const verification = verifyInjection(into, manifest, { adapter });
-      mkdirSync(join(into, '.agent'), { recursive: true });
-      writeFileSync(join(into, '.agent', 'composition-injected.json'), `${JSON.stringify({ manifest, verification }, null, 2)}\n`);
-      console.log(JSON.stringify({ into, executor, manifest, verification }, null, 2));
-      // A real injection whose own writes fail integrity is an error; honest 'unsupported'/'none' is not.
-      // Consumption is never proven here (no live smokeProbe) — applied-unproven is not success.
-      if (manifest.files.length > 0 && !verification.integrityOk) process.exitCode = 2;
+      // Record the injection into a hash-chained ledger so it is recomputable evidence, not a flat
+      // side-file. `magic show <id>` re-derives it from the same catalog inputs and flags mismatch.
+      const magicRunId = `magic-${randomUUID()}`;
+      const runDir = join(into, '.agent', 'magic-runs', magicRunId);
+      mkdirSync(runDir, { recursive: true });
+      recordInjectionEvent(runDir, magicRunId, manifest);
+      const ledgerCheck = recomputeInjectionFromLedger(runDir, { mcpModules, adapter, approveSecrets: has('--approve-secrets') });
+      writeFileSync(join(runDir, 'composition-injected.json'), `${JSON.stringify({ manifest, verification, ledgerCheck }, null, 2)}\n`);
+      console.log(JSON.stringify({ magicRunId, into, executor, manifest, verification, ledgerCheck }, null, 2));
+      // A real injection whose own writes fail integrity (or whose ledger record can't be reproduced)
+      // is an error; honest 'unsupported'/'none' is not. Consumption is never proven here.
+      if (manifest.files.length > 0 && (!verification.integrityOk || !ledgerCheck.reproduced)) process.exitCode = 2;
+      return;
+    }
+    if (cmd === 'magic' && sub === 'show') {
+      const magicRunId = firstNonFlag(rest);
+      if (!magicRunId) throw new Error('usage: warden magic show <magicRunId> [--into <dir>] [--executor ...]');
+      const into = arg('--into') ?? process.cwd();
+      const executor = arg('--executor') ?? 'claude';
+      const runDir = join(into, '.agent', 'magic-runs', magicRunId);
+      // Re-resolve the same catalog inputs and re-derive the injection from the ledger — recompute,
+      // never trust the stored side-file.
+      const catalog = loadModuleCatalog({ root: process.cwd() });
+      const plan = resolveMagicPlan({ root: process.cwd(), goal: '(show)', catalog });
+      const selectedMcpIds = new Set(plan.selected.filter((s) => s.kind === 'mcp').map((s) => s.moduleId));
+      const mcpModules = catalog.modules.filter((m) => m.kind === 'mcp' && selectedMcpIds.has(m.id));
+      const ledgerCheck = recomputeInjectionFromLedger(runDir, { mcpModules, adapter: adapterFor(executor), approveSecrets: has('--approve-secrets') });
+      console.log(JSON.stringify({ magicRunId, ledgerCheck }, null, 2));
+      if (ledgerCheck.found && !ledgerCheck.reproduced) {
+        console.log('CONTRADICTION: the ledgered composition.injected record does not match a re-derivation from the current catalog — trust the recompute.');
+        process.exitCode = 2;
+      }
       return;
     }
     if (cmd === 'worktrees' && sub === 'cleanup') {
