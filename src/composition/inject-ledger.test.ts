@@ -67,12 +67,20 @@ test('inject-ledger: a tampered MIDDLE event fails the hash chain (validateRunti
   assert.throws(() => recomputeInjectionFromLedger(runDir, { mcpModules: mods, adapter: adapterFor('claude') }));
 });
 
-test('inject-ledger: no injection event → found false, reproduced false', () => {
+test('inject-ledger: a genuinely empty ledger → found false', () => {
+  const runDir = tmpDir(); // no events at all
+  const check = recomputeInjectionFromLedger(runDir, { mcpModules: [], adapter: adapterFor('claude') });
+  assert.equal(check.found, false);
+  assert.equal(check.status, null);
+  assert.equal(check.reproduced, false);
+});
+
+test('inject-ledger: an unsupported record carries its status so empty-reproduced is not misread', () => {
   const runDir = tmpDir();
   recordInjectionEvent(runDir, 'm', applyCompositionToWorktree({ worktree: tmpDir(), mcpModules: [], adapter: adapterFor('codex') }));
-  // codex is unsupported → manifest has no files; event recorded but it's a 'none-ish' unsupported record.
   const check = recomputeInjectionFromLedger(runDir, { mcpModules: [], adapter: adapterFor('codex') });
   assert.equal(check.found, true);
-  assert.equal(check.reproduced, true); // both recorded and expected are empty for unsupported
-  assert.deepEqual(readRuntimeEvents(runDir).filter((e) => e.type === 'composition.injected').length, 1);
+  assert.equal(check.status, 'unsupported'); // distinguishes "nothing injected" from a real applied match
+  assert.equal(check.reproduced, true); // empty matches empty — but `status` tells the reader why
+  assert.equal(readRuntimeEvents(runDir).filter((e) => e.type === 'composition.injected').length, 1);
 });
