@@ -1,5 +1,14 @@
 # PRD: Dominic Orchestration
 
+> **⚠️ HISTORICAL / SUPERSEDED (2026-06-21).** This is the original product framing
+> ("Dominic Orchestration", local web orchestration board, "OMX/Codex first"). The project has
+> since been renamed **Warden** and pivoted to a **provider-neutral evidence-and-control layer**
+> ("own the evidence and the gate, rent the loop"). This PRD is retained as historical scope
+> context only. Where it conflicts with current direction, the controlling records are
+> `docs/milestones/_CURRENT_TRUTH.md`, `docs/milestones/HARNESS_OS_CORRECTED_PLAN.md`, and
+> `docs/adr/0001-provider-neutral-supersedes-omx-first.md`. In particular, §19.1 "OMX First" is
+> retired by ADR-0001. **Start at `docs/milestones/_CURRENT_TRUTH.md`.**
+
 **문서 상태:** Draft v0.1  
 **작성일:** 2026-05-31  
 **저장 경로:** `~/Documents/github/dominic_orchestration/dominic_orchestration_PRD.md`  

@@ -994,7 +994,7 @@ test('renderSkillRun flags an exited-without-verdict launch as a stuck launch, n
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// U1 — verifier-gated refinement loop (REVKA_BORROW_UPGRADE_PLAN.md §3 U1 / §6)
+// U1 — verifier-gated refinement loop (docs/milestones/archive/REVKA_BORROW_UPGRADE_PLAN.md §3 U1 / §6)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const ADD_BROKEN = 'export function add(a,b){return a-b}\n'; // add(1,2) = -1 ≠ 3 → acceptance fails

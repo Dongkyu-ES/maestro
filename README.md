@@ -107,8 +107,9 @@ Design and implementation are reviewed by an in-repo **critic panel** — three 
 - `src/events/ledger.ts` — hash-chained runtime event ledger
 - `src/memory/` — provenance-keyed memory fabric
 - `src/cli.ts` — the `warden` CLI; `src/view.ts` — operator web UI
-- `docs/milestones/` — design docs, critic panels, and the binding corrected plan
-- Upstream/scope: `dominic_orchestration_PRD.md`, `docs/milestones/HARNESS_OS_CORRECTED_PLAN.md`
+- `docs/milestones/` — current canonical docs; finished milestones + one-off panels are under `docs/milestones/archive/`
+- **Start here:** `docs/milestones/_CURRENT_TRUTH.md` (single source of truth: direction, status, doc map)
+- Upstream/scope: `docs/milestones/HARNESS_OS_CORRECTED_PLAN.md` (binding); `dominic_orchestration_PRD.md` (historical/superseded)
 
 ## License
 

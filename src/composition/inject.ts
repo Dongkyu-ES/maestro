@@ -7,7 +7,7 @@ import type { CatalogModule } from './catalog.js';
  * Slice 2 — active injection of resolved CAPABILITY modules (MCP only) into a run worktree,
  * recorded as a tamper-evident, replayable manifest.
  *
- * HONEST SCOPE (the slice-2 code panel forced this narrowing; WARDEN_MAGIC_DESIGN.md §7
+ * HONEST SCOPE (the slice-2 code panel forced this narrowing; docs/milestones/archive/WARDEN_MAGIC_DESIGN.md §7
  * "slice-2 corrections"): Warden does NOT own the in-loop worktree — the native executor owns it
  * (CORRECTED_PLAN §10, R-native-ownership). So this module guarantees ONLY what it can enforce:
  *   - what INJECTION itself wrote is closed BY CONSTRUCTION — apply writes exactly the adapter's

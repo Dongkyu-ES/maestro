@@ -100,7 +100,7 @@ export interface OrchestratorSkillSpec {
    * iteration whose acceptance passes (chosen by RE-RUNNING acceptance over each iteration's
    * isolated evidence — never by rank/self-claim), promoted to the canonical execute store. The
    * loop's only continue/stop signal is `runAcceptanceCheck.passed`; no critic/model score is ever
-   * consulted. See REVKA_BORROW_UPGRADE_PLAN.md §3 U1 / §6.
+   * consulted. See docs/milestones/archive/REVKA_BORROW_UPGRADE_PLAN.md §3 U1 / §6.
    */
   maxRefineIterations?: number;
   /**
