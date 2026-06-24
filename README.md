@@ -1,5 +1,7 @@
 # Warden
 
+*Read this in other languages: **English** · [한국어](README.ko.md)*
+
 **A provider-neutral evidence & control layer for AI coding agents.** Warden rents the agent loop (Codex CLI, Claude Code, Antigravity/agy — driven headless) and owns the layer that doesn't exist elsewhere: a hash-chained event ledger, a recomputable verifier, content-addressed evidence, promotion, policy, and an operator UI. **Completion is declared only by re-running acceptance over the ledgered evidence — never by a model, a CLI, a score, or review prose.**
 
 > Local, file-backed, single-operator. State lives under `.agent/`. No hosted service, no SaaS, no auto-push.
