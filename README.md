@@ -37,6 +37,7 @@ Self-contained: the engine ships *inside* the plugin, zero runtime dependencies,
 - [How it works](#how-it-works)
   - [The four patterns](#the-four-patterns)
   - [Role to CLI mapping](#role-to-cli-mapping)
+  - [Bring your own executor](#bring-your-own-executor)
   - [maestro magic — dependency composition](#maestro-magic--dependency-composition)
 - [Usage](#usage)
   - [As a Claude Code skill](#as-a-claude-code-skill)
@@ -93,6 +94,23 @@ Default heuristics, overridable per role:
 # read-only advisor / reviewer, in-session, no worktree:
 codex exec -m gpt-5.5 -c model_reasoning_effort="high" --sandbox read-only "<prompt>" </dev/null
 ```
+
+### Bring your own executor
+
+maestro ships three executors and accepts any fourth. The trick that makes opening the set safe: **completion is graded the same way for all of them** — acceptance is re-run over the produced diff in a clean checkout — so an executor is judged by what it *did*, never by what it claims.
+
+```bash
+# any headless CLI invoked as `<bin> -p "<prompt>"`:
+maestro harness run "<goal>" --executor opencode --executor-bin "$(command -v opencode)"
+```
+
+| Executor | How to use | Lifecycle proof | Completion authority |
+| --- | --- | --- | --- |
+| `codex` | built-in (default) | full — resume / fork / interrupt / launch-proof | acceptance recompute |
+| `claude`, `agy` | built-in | none (generic headless) | acceptance recompute |
+| **any other CLI** | `--executor <name> --executor-bin <path>` | none, labeled `native-harness-assisted` | acceptance recompute |
+
+Bring-your-own assumes the `<bin> -p "<prompt>"` convention (the one `claude` / `agy` use); wrap anything that differs in a one-line shim. The one thing a BYO executor doesn't get is codex's deeper lifecycle proof — and that gap is labeled, not hidden.
 
 ### maestro magic — dependency composition
 

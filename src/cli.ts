@@ -52,7 +52,9 @@ import { verifyContextProvenance } from './harness/context-provenance.js';
 import { anthropicDirectTransport, makeDirectProviderExecutor } from './harness/direct-provider.js';
 import { writeFullTargetGateArtifact } from './harness/full-target-gate.js';
 import { verifyFullTargetGateArtifact } from './harness/full-target-verifier.js';
+import { resolveHarnessExecutor } from './harness/executor-resolve.js';
 import { type HarnessExecutor, runHarnessSlice } from './harness/harness-run.js';
+import { detectExternalCli } from './runtime/external-cli-adapter.js';
 import { appendM8BoundaryEvidence } from './harness/m8-boundary-evidence.js';
 import { runNativeEvidenceSmoke, verifyNativeEvidenceRun } from './harness/native-evidence.js';
 import { createOrchestratorServer, defaultExecutorRegistry, runSubmittedGraph } from './harness/orchestrator-server.js';
@@ -174,7 +176,7 @@ function usage(): string {
   maestro run create|start|collect|cancel|latest
   maestro run native-evidence-smoke --task <fixture-task> [--timeout-ms N]
   maestro run start <run-id> [--command cmd] [--sandbox read-only|workspace-write|danger-full-access] [--timeout-ms N]
-  maestro harness run <goal> [--executor codex|claude|agy|anthropic-direct] [--executor-bin <path>] [--model M] [--acceptance-file <path>]
+  maestro harness run <goal> [--executor codex|claude|agy|anthropic-direct|<custom>] [--executor-bin <path>] [--model M] [--acceptance-file <path>]
   maestro loop run <goal> --acceptance-file <path> [--max-iters N] [--stall K]
   maestro runtime projection
   maestro context verify --run <run-id>
@@ -365,9 +367,10 @@ async function main() {
         .trim();
       if (!goal)
         throw new Error(
-          'usage: maestro harness run <goal> [--executor codex|claude|agy|anthropic-direct] [--executor-bin <path>] [--acceptance-file <path>]',
+          'usage: maestro harness run <goal> [--executor codex|claude|agy|anthropic-direct|<custom>] [--executor-bin <path>] [--acceptance-file <path>]',
         );
       const executorKind = arg('--executor') ?? 'codex';
+      const executorBinArg = arg('--executor-bin');
       let executor: HarnessExecutor | undefined;
       if (executorKind === 'anthropic-direct') {
         // Stage D: optional direct-provider executor (product-owned single turn; not native-assisted).
@@ -376,10 +379,12 @@ async function main() {
           transport: anthropicDirectTransport({ model: arg('--model') }),
         });
       } else {
-        const registry = defaultExecutorRegistry();
-        if (!registry.has(executorKind))
-          throw new Error(`unknown executor: ${executorKind} (use codex|claude|agy|anthropic-direct)`);
-        executor = registry.resolve(executorKind); // undefined for codex → native runCodexExec default
+        // Built-ins (codex/claude/agy) resolve through the registry; ANY other name is a
+        // bring-your-own headless CLI (`<bin> -p "<prompt>"`, bin = --executor-bin ?? name).
+        // BYO is graded by the same acceptance recompute — the executor is never trusted.
+        const detect = (bin: string) =>
+          bin.includes('/') ? existsSync(bin) : detectExternalCli(bin).available;
+        executor = resolveHarnessExecutor(executorKind, executorBinArg, detect).executor;
       }
       // Opt-in build/test gate: with --acceptance-file, "a real diff" is no longer enough —
       // runCommandAcceptance re-runs the operator's command over a clean checkout of the run's diff
