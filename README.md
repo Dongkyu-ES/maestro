@@ -12,7 +12,25 @@
 
 maestro **composes existing tools instead of building new infrastructure**: `git worktree`, the native CLIs and their own logins (your subscription is the runtime — no per-call API spend), and a tested engine for detect → resolve → inject → spawn → cleanup. On top of that sits an **opt-in** evidence layer — a hash-chained ledger, a recomputable verifier, content-addressed evidence — for when you want a completion verdict you can recompute and audit (`--prove` / `--gate`). It stays off the default path: orchestration first, proof only when you ask for it.
 
-## Install / local run
+## Install as a Claude Code plugin
+
+The short path: maestro ships as a **self-contained Claude Code plugin** — the orchestration engine travels *inside* the plugin (`bin/maestro` → a bundled `dist/`), so there is nothing to `npm install`, nothing to build, no PATH surgery.
+
+```text
+/plugin marketplace add Dongkyu-ES/maestro
+/plugin install maestro@maestro
+```
+
+Enabling it does exactly three things: it drops `maestro` onto the Bash tool's PATH, registers the `/maestro:maestro` skill, and leaves the rest of your machine untouched. The CLI carries **zero runtime dependencies** — the bundled `dist/` runs on Node and nothing else — so *installed* and *works* are the same moment.
+
+**What it expects you to already have** (deliberately not bundled):
+
+- `node` and `git` — the substrate.
+- One executor CLI on its own login — `codex` (recommended), `claude`, or `agy`. This is the muscle: maestro *composes* executors, it doesn't replace them. With none present the read-only patterns (panel · scout · review) still run; anything that mutates files waits for a real executor.
+
+Updates are a `git push` away — users pull them with `/plugin marketplace update`. No registry, no release pipeline, no drift between "the repo" and "the plugin": the repo **is** the plugin.
+
+## Build from source (development)
 
 ```bash
 npm install
@@ -21,7 +39,7 @@ npm link            # puts `maestro` on PATH (state is still per-cwd .agent/)
 maestro --version
 ```
 
-Without linking: `node dist/cli.js --help`.
+Without linking: `node dist/cli.js --help`. After changing `src/`, rebuild and recommit `dist/` — that committed build is what the plugin ships.
 
 ## Core operator flow (v0–v2 product)
 

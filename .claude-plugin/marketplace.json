@@ -1,0 +1,15 @@
+{
+  "name": "maestro",
+  "owner": { "name": "Dongkyu-ES" },
+  "metadata": {
+    "description": "Task-aware multi-agent orchestration for AI coding agents — classify the task, pick a pattern (fan-out · panel · build→review · scout→plan→build→verify), and compose codex/claude/agy by role."
+  },
+  "plugins": [
+    {
+      "name": "maestro",
+      "source": "./",
+      "description": "Task-aware multi-agent orchestration harness (codex/claude/agy)",
+      "version": "0.1.0"
+    }
+  ]
+}

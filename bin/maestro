@@ -1,0 +1,19 @@
+#!/bin/sh
+# maestro plugin launcher.
+# When this plugin is enabled, Claude Code adds this bin/ dir to the Bash tool's
+# PATH, so `maestro ...` resolves here and runs the bundled CLI (dist/cli.js).
+# No npm install or build is required on the user's machine — dist/ ships with
+# the plugin and the CLI has zero runtime dependencies (Node builtins only).
+#
+# Requires: node (>= the version the dist was built for) and git on PATH.
+# Executor engines (codex / claude / agy) are NOT bundled; install at least one
+# for orchestration that mutates files. See README.
+
+# Resolve the plugin root: prefer Claude Code's env var, else derive from $0.
+if [ -n "${CLAUDE_PLUGIN_ROOT}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" ]; then
+  ROOT="${CLAUDE_PLUGIN_ROOT}"
+else
+  ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd -P)
+fi
+
+exec node "${ROOT}/dist/cli.js" "$@"

@@ -16,7 +16,12 @@ reports/
 
 # Node / build artifacts
 node_modules/
-dist/
+# dist/ is intentionally committed: it ships as the bundled engine for the
+# Claude Code plugin (bin/maestro -> dist/cli.js). Rebuild + recommit on change.
+# Test artifacts inside dist/ are excluded to keep the plugin payload lean.
+dist/**/*.test.js
+dist/**/*.test.d.ts
+dist/**/*.test.js.map
 build/
 coverage/
 .env

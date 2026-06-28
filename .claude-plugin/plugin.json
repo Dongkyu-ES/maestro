@@ -1,0 +1,8 @@
+{
+  "name": "maestro",
+  "description": "Task-aware multi-agent orchestration: classify a task, pick a pattern (fan-out, panel/debate, build→independent-review, scout→plan→build→verify), and compose codex/claude/agy CLIs by role. Bundles the maestro engine on PATH.",
+  "version": "0.1.0",
+  "author": { "name": "Dongkyu-ES" },
+  "homepage": "https://github.com/Dongkyu-ES/maestro",
+  "repository": "https://github.com/Dongkyu-ES/maestro"
+}

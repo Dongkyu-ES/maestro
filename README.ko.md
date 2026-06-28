@@ -12,7 +12,25 @@
 
 maestro는 **새 인프라를 만들지 않고 이미 있는 도구를 조합**합니다: `git worktree`, 네이티브 CLI와 각자의 로그인(구독이 곧 런타임 — per-call API 비용 없음), 그리고 detect → resolve → inject → spawn → cleanup을 담당하는 검증된 엔진. 그 위에 **옵트인** 증거 계층 — 해시 체인 원장(ledger), 재계산 가능한 검증기(verifier), 내용 주소화된 증거 — 이 얹혀, 재계산·감사 가능한 완료 판정이 필요할 때(`--prove` / `--gate`)만 켜집니다. 기본 경로에서는 꺼져 있습니다: 오케스트레이션이 먼저, 증명은 요청할 때만.
 
-## 설치 / 로컬 실행
+## Claude Code 플러그인으로 설치
+
+가장 짧은 길: maestro는 **자체완결형 Claude Code 플러그인**으로 배포됩니다 — 오케스트레이션 엔진이 플러그인 *안에* 함께 실립니다(`bin/maestro` → 동봉된 `dist/`). 그래서 `npm install`도, 빌드도, PATH 손질도 필요 없습니다.
+
+```text
+/plugin marketplace add Dongkyu-ES/maestro
+/plugin install maestro@maestro
+```
+
+활성화하면 딱 세 가지가 일어납니다: `maestro`를 Bash 도구 PATH에 올리고, `/maestro:maestro` 스킬을 등록하고, 그 외에는 기기를 건드리지 않습니다. CLI는 **런타임 의존성 0** — 동봉된 `dist/`는 Node 위에서만 돌아갑니다 — 라서 *설치됨*과 *작동함*이 같은 순간입니다.
+
+**이미 갖추고 있어야 하는 것**(의도적으로 동봉하지 않음):
+
+- `node` 와 `git` — 토대.
+- 각자 로그인으로 도는 실행 엔진 CLI 하나 — `codex`(권장)·`claude`·`agy`. 이게 근육입니다: maestro는 실행기를 *조합*할 뿐 대체하지 않습니다. 하나도 없으면 읽기 전용 패턴(패널 · 스카우트 · 리뷰)은 그대로 돌고, 파일을 바꾸는 작업은 실제 실행기를 기다립니다.
+
+업데이트는 `git push` 한 번 거리입니다 — 사용자는 `/plugin marketplace update`로 당겨받습니다. 레지스트리도, 릴리스 파이프라인도, "repo"와 "플러그인" 사이의 드리프트도 없습니다: repo가 **곧** 플러그인입니다.
+
+## 소스에서 빌드 (개발)
 
 ```bash
 npm install
@@ -21,7 +39,7 @@ npm link            # `maestro`를 PATH에 등록 (상태는 여전히 cwd별 .a
 maestro --version
 ```
 
-링크 없이 실행: `node dist/cli.js --help`.
+링크 없이 실행: `node dist/cli.js --help`. `src/`를 바꾼 뒤에는 `dist/`를 다시 빌드해 커밋하세요 — 그 커밋된 빌드가 플러그인으로 실리는 실물입니다.
 
 ## 핵심 운영자 플로우 (v0–v2 제품)
 
