@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const REPO = '/Users/dominic/Documents/github/dominic_orchestration';
+const REPO = process.cwd();
 
 function seed() {
   const root = mkdtempSync(join(tmpdir(), 'm12-p4-'));

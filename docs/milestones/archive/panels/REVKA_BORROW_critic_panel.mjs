@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-const REPO = '/Users/dominic/Documents/github/dominic_orchestration';
+const REPO = process.cwd();
 const DOCS = `${REPO}/docs/milestones`;
 
 function seed() {

@@ -1,7 +1,0 @@
-{
-  "promotion_id": "promotion-20260602020316192-0yauv5-run-20260602020315846-ak",
-  "status": "applied",
-  "promotion_approval_sha256": "04f8176b1f25b238f6b05ac1b2e615e761470e00c15548635c93ebf3c67663d9",
-  "applied_path": ".agent/memory/project-facts.md",
-  "loaded_promotion_artifact_sha256": "4db8f6cdd4a412dcb8ca2a8f9a8a5999c584c64eb13a14a6a9699702ee795940"
-}

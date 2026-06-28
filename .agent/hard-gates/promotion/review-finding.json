@@ -1,6 +1,0 @@
-{
-  "promotion_id": "promotion-20260602020316192-0yauv5-run-20260602020315846-ak",
-  "source_run_id": "run-20260602020315846-akx2wo-task-20260602020315662-v",
-  "finding": "Run passed review; result summary is a verified project fact.",
-  "proposal_path": ".agent/runs/run-20260602020315846-akx2wo-task-20260602020315662-v/promotions/promotion-20260602020316192-0yauv5-run-20260602020315846-ak.md"
-}
