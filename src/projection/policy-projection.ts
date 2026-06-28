@@ -2,8 +2,8 @@ import type { PolicyDecision, ToolRiskClass } from '../harness/tool-policy.js';
 import type { OntologyEdge, OntologyNode, OntologySubgraph } from './ontology-projection.js';
 
 /**
- * Policy / ReBAC overlay — renders Warden's tool-policy decisions in the MetaOntology policy grammar
- * so the same allow/ask/deny gate Warden already enforces can be *read* as a graph of subjects,
+ * Policy / ReBAC overlay — renders maestro's tool-policy decisions in the MetaOntology policy grammar
+ * so the same allow/ask/deny gate maestro already enforces can be *read* as a graph of subjects,
  * policies, sensitivities, and the permissions they grant over tool resources.
  *
  * THESIS GUARD (corrected after review): this produces an `OntologySubgraph`, NOT a standalone
@@ -29,7 +29,7 @@ export function policyRelationForDecision(decision: PolicyDecision): 'permits' |
   return 'requires_approval';
 }
 
-/** Map a Warden risk class to a ReBAC permission + a sensitivity level over the tool resource. */
+/** Map a maestro risk class to a ReBAC permission + a sensitivity level over the tool resource. */
 export function rebacForRisk(risk: ToolRiskClass): {
   permission: 'view' | 'edit' | 'execute';
   capability: 'can_view' | 'can_edit' | 'can_execute';
@@ -105,7 +105,7 @@ export function projectToolPolicyDecisions(inputs: ToolPolicyDecisionInput[]): O
     const sensitivityId = `policy:sensitivity:${sensitivity}`;
     const provenance = provenanceOf(input);
     // The tool resource and the tool-scoped rule carry NO risk attr — risk is per-invocation, not a
-    // property of the tool/rule (Warden's own classifier rates the same tool name differently by args).
+    // property of the tool/rule (maestro's own classifier rates the same tool name differently by args).
     upsertNode({ id: toolId, space: 'resource', type: 'Tool', label: input.tool, source_event_ids: provenance, attrs: {} });
     upsertNode({
       id: policyId,

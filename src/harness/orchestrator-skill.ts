@@ -104,7 +104,7 @@ export interface OrchestratorSkillSpec {
    */
   maxRefineIterations?: number;
   /**
-   * Slice 7 (Item B) — opt-in Warden Magic injection into the EXECUTE phase. Default unset = the M12
+   * Slice 7 (Item B) — opt-in maestro magic injection into the EXECUTE phase. Default unset = the M12
    * hot path is byte-identical. CAPABILITY-ONLY (MCP) this slice: instruction kinds are NOT injected
    * into the completion-gated skill run (design-panel: premature before M7 + unsafe for non-test
    * acceptance). Rejected when execute fan-out / refinement is active (single-executor only). The

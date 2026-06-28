@@ -116,7 +116,7 @@ async function runWorkerSlice(options: {
   inputRefs?: EvidenceRef[];
   /** Absolute path to the PROJECT memory fabric, injected read-only into the worker's context. */
   fabricAgentDir?: string;
-  /** Opt-in hook run AFTER evidence is materialized and BEFORE the executor runs — used by Warden
+  /** Opt-in hook run AFTER evidence is materialized and BEFORE the executor runs — used by maestro
    *  Magic to inject composed capability (.mcp.json) into the worktree the executor will run in.
    *  Default undefined = no-op (zero behavior change for existing callers). */
   beforeExecute?: (worktreePath: string) => void;
@@ -172,7 +172,7 @@ export async function runIsolatedWorker(options: {
   executorLabel?: string;
   timeoutMs?: number;
   inputRefs?: EvidenceRef[];
-  /** Opt-in pre-executor hook (Warden Magic injection). Default no-op. */
+  /** Opt-in pre-executor hook (maestro magic injection). Default no-op. */
   beforeExecute?: (worktreePath: string) => void;
 }): Promise<WorkerResult> {
   const root = resolve(options.root);

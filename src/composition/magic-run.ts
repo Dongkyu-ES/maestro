@@ -14,14 +14,14 @@ import {
 import { type CanaryConfig, canaryConfigForWorktree, canaryModule, withCanaryProbe } from './smoke-probe.js';
 
 /**
- * Slice 4 — `warden magic run`: a standalone run that INJECTS the resolved capability into the
+ * Slice 4 — `maestro magic run`: a standalone run that INJECTS the resolved capability into the
  * executor's worktree BEFORE the executor runs (via runIsolatedWorker's opt-in `beforeExecute`
  * hook), then records `composition.injected` into a persistent, hash-chained magic-run ledger. This
  * is the end-to-end payoff: the spawned executor actually runs with the injected `.mcp.json`.
  *
  * It does NOT modify any existing run caller (orchestrator-skill / fan-out are untouched); it is a
  * NEW caller of runIsolatedWorker. Honest scope is unchanged from slice 2/3: injection guarantees
- * integrity + replay of what Warden wrote; consumption is never asserted (no live smokeProbe).
+ * integrity + replay of what maestro wrote; consumption is never asserted (no live smokeProbe).
  */
 export interface MagicRunResult {
   magicRunId: string;

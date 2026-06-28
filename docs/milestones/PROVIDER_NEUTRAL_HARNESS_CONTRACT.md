@@ -63,7 +63,7 @@ A run using these surfaces must label which surfaces are unowned.
 | `degraded` | Product-owned path works with reduced capability, cost, fidelity, or automation. |
 | `unproven` | The system may work, but evidence is insufficient or not recomputable. |
 | `unsupported` | The system does not support the behavior. |
-| `native-harness-assisted` | A vendor-native warden harness materially participated; evidence must be separated from product-owned proof. |
+| `native-harness-assisted` | A vendor-native maestro harness materially participated; evidence must be separated from product-owned proof. |
 
 Rules:
 

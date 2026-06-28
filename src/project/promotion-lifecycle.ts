@@ -2,9 +2,9 @@ import type { PromotionRecord } from '../util.js';
 
 /**
  * Formal promotion lifecycle — makes the previously-implicit promotion state transitions explicit
- * and guarded, and aligns Warden's status vocabulary to the MetaOntology promotion grammar.
+ * and guarded, and aligns maestro's status vocabulary to the MetaOntology promotion grammar.
  *
- * Warden has always used the vocabulary `proposed -> approved -> applied` (+ `rejected`). The
+ * maestro has always used the vocabulary `proposed -> approved -> applied` (+ `rejected`). The
  * MetaOntology OS promotion grammar names the same lifecycle `candidate -> validated -> promoted`
  * (+ `rejected`) — register a candidate, validate it, then promote it. They are one lifecycle with
  * two vocabularies; this module pins the mapping and the legal transitions so:
@@ -18,7 +18,7 @@ import type { PromotionRecord } from '../util.js';
 
 export type PromotionStatus = PromotionRecord['status'];
 
-/** The MetaOntology promotion grammar stage corresponding to each Warden status. */
+/** The MetaOntology promotion grammar stage corresponding to each maestro status. */
 export type OntologyPromotionStage = 'candidate' | 'validated' | 'promoted' | 'rejected';
 
 export const PROMOTION_STATUS_TO_STAGE: Record<PromotionStatus, OntologyPromotionStage> = {

@@ -1,10 +1,10 @@
 {
-  "name": "warden",
+  "name": "maestro",
   "version": "0.1.0",
   "private": true,
   "type": "module",
   "bin": {
-    "warden": "./dist/cli.js"
+    "maestro": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

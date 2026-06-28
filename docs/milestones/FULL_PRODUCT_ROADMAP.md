@@ -53,7 +53,7 @@ A real operator can install/run Warden locally, register real projects, create/m
 
 #### V0-PF-02 Project registry
 - Add global or repo-local registry.
-- Support `warden project add/list/show/remove`.
+- Support `maestro project add/list/show/remove`.
 - Store project id, name, root path, agent dir, last opened.
 - Recover invalid/missing projects safely.
 
@@ -241,7 +241,7 @@ This matrix must be read as PRD-scoped v0-v2, not as a universal final-platform 
 
 | Area | 95% Product Pass Definition | Current Baseline | Status |
 | --- | --- | --- | --- |
-| Installable CLI | `agent` usable outside repo after documented install/link | package bin, README install/link docs, `warden --version` smoke | PASS |
+| Installable CLI | `agent` usable outside repo after documented install/link | package bin, README install/link docs, `maestro --version` smoke | PASS |
 | Web UI | operator can create/control tasks/runs and inspect evidence | operator/permission lane, agent work lanes, advanced shell separation, and run evidence summary implemented | PASS |
 | Project registry | multiple real projects managed | CLI registry add/list/show/remove implemented | PASS |
 | Durable index | index/recovery across projects/tasks/runs | `.agent/index.json` rebuild/show implemented and smoke-verified | PASS |

@@ -11,7 +11,7 @@
 
 ```mermaid
 flowchart TD
-    Browser["User Browser"] -->|"HTTP GET or POST<br/>localhost:4317"| WebServer["warden web<br/>Node.js process<br/>dist/cli.js"]
+    Browser["User Browser"] -->|"HTTP GET or POST<br/>localhost:4317"| WebServer["maestro web<br/>Node.js process<br/>dist/cli.js"]
     Terminal["Terminal<br/>agent command"] --> WebServer
     Terminal --> CLI["src/cli.ts<br/>compiled to dist/cli.js"]
 
@@ -48,7 +48,7 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant B as Browser
-    participant S as warden web dist_cli_js
+    participant S as maestro web dist_cli_js
     participant C as src_core_ts
     participant F as dot_agent_file_store
     participant E as events_jsonl
@@ -327,5 +327,5 @@ browser-client E2E guarantee beyond server-render smoke
 1. signed independent-review provenance를 reviewer/CI-owned key custody로 운영화.
 2. `gate.full_target.verified`를 문서와 운영 절차의 authoritative completion event로 고정.
 3. fresh target run으로 과거 noisy events 없이 최종 evidence 재생성.
-4. Browser/Playwright 기반 실제 `warden web` run detail + SSE E2E smoke 추가.
+4. Browser/Playwright 기반 실제 `maestro web` run detail + SSE E2E smoke 추가.
 5. OMX/agy adapter를 detection/evidence 수준에서 session lifecycle 수준으로 확장할지 별도 PRD로 결정.

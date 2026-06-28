@@ -3,7 +3,7 @@ import { type RuntimeEventEnvelope, validateRuntimeLedger } from '../events/ledg
 /**
  * MetaOntology projection — a derived read-model of the hash-chained runtime ledger expressed in the
  * 9-space MetaOntology OS grammar (subject / resource / evidence / concept / claim / community /
- * outcome / lever / policy). It exists so the same facts Warden already records as ledger events can
+ * outcome / lever / policy). It exists so the same facts maestro already records as ledger events can
  * be *queried as a graph* (cross-run knowledge, provenance walks, contradiction surfaces) without
  * standing up an external graph service.
  *

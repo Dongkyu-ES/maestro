@@ -63,7 +63,7 @@ export function readMemoryFabric(agentDir: string): MemoryFabricStore {
   const path = memoryFabricPath(agentDir);
   if (!existsSync(path)) return { schema_version: 1, facts: [] };
   // Fail open on a malformed/foreign/oversized store: a corrupt fabric.json must not crash a run
-  // that merely wants to read memory (the read path is default-on for `warden harness run`). An
+  // that merely wants to read memory (the read path is default-on for `maestro harness run`). An
   // unreadable fabric simply contributes no facts — the safe direction.
   try {
     if (statSync(path).size > MAX_FABRIC_BYTES) return { schema_version: 1, facts: [] };

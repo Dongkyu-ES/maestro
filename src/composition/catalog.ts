@@ -68,7 +68,7 @@ function readDeclaredFile(path: string, origin: 'declared'): CatalogModule[] {
 }
 
 /** Discover installed CLI skills as untagged catalog entries (listed, never auto-selected — they
- *  carry no warden tags, so their empty-but-present listing is informational). Read-only. */
+ *  carry no maestro tags, so their empty-but-present listing is informational). Read-only. */
 function discoverInstalledSkills(home: string): CatalogModule[] {
   const skillsDir = join(home, '.claude', 'skills');
   if (!existsSync(skillsDir)) return [];

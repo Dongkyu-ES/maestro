@@ -186,7 +186,7 @@ export function runCommandAcceptance(opts: {
 }
 
 /**
- * Read an operator-authored acceptance spec from a JSON file, for `warden harness run
+ * Read an operator-authored acceptance spec from a JSON file, for `maestro harness run
  * --acceptance-file`. Shape: `{ "command": string[], "testFiles"?: [{ "path", "content" }] }`.
  * Strictly validated so a malformed file fails fast rather than silently degrading the gate to
  * diff-only. This is what makes the honest build/test gate reachable from the harness-run CLI.

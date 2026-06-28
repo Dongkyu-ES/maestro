@@ -15,7 +15,7 @@ const ACCEPTANCE_TIMEOUT_MS = 120_000;
  * The single-`acceptArtifact` evidence model could only grade a self-contained file in an empty
  * temp dir (no repo, no deps) — so the headline `--command "npm test"` / "fix a bounded issue" path
  * could never pass. This module makes the execute evidence the FULL worktree diff (the same model the
- * mature `warden run` path already uses) and grades acceptance by DETERMINISTICALLY reconstructing
+ * mature `maestro run` path already uses) and grades acceptance by DETERMINISTICALLY reconstructing
  * `base@pinnedCommit + git apply(diff) + testFiles overlaid last`.
  *
  * The anti-tamper property is preserved and broadened: the operator `testFiles` are written LAST, so
@@ -51,7 +51,7 @@ function sha256Hex(content: string | Buffer): string {
  * Capture the executor worktree's complete change set vs its base commit as one patch. node_modules
  * and other gitignored paths never enter the patch (`--exclude-standard`), so the executor cannot
  * smuggle dependencies or build output through evidence. Throws if a secret-bearing path changed —
- * secret diffs are never stored as evidence (mirrors the `warden run` apply-proposal denial posture).
+ * secret diffs are never stored as evidence (mirrors the `maestro run` apply-proposal denial posture).
  */
 export function captureWorktreeDiff(worktreePath: string): WorktreeDiffEvidence {
   const baseCommit = git(['rev-parse', 'HEAD'], worktreePath).trim();

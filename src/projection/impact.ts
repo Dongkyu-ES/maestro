@@ -2,7 +2,7 @@ import type { OntologyProjection, OntologySpace } from './ontology-projection.js
 
 /**
  * Impact analysis (I1–I7) + lever simulation — the MetaOntology change-impact and lever grammar
- * applied to Warden's own change kinds.
+ * applied to maestro's own change kinds.
  *
  * Both are descriptive, read-only analyses. Impact analysis answers "if I make this change, which
  * categories does it touch?"; lever simulation answers "which observed outcomes does this control
@@ -68,7 +68,7 @@ export function analyzeImpact(change: ImpactChange): ImpactReport {
 }
 
 /**
- * Pre-built impact classifiers for Warden's concrete change kinds. These encode the grounded truth
+ * Pre-built impact classifiers for maestro's concrete change kinds. These encode the grounded truth
  * of what each operation actually does in the codebase (e.g. applying a promotion calls
  * `rebuildIndex`, so it always touches I6).
  */

@@ -55,7 +55,7 @@ test('sensitivity is keyed by level and classifies the tool resource', () => {
 });
 
 test('same tool at different risks classifies at multiple levels without overwriting (no false single risk)', () => {
-  // Warden's classifier rates the same tool name differently by args (e.g. shell: read_only vs destructive).
+  // maestro's classifier rates the same tool name differently by args (e.g. shell: read_only vs destructive).
   const { nodes, edges } = projectToolPolicyDecisions([
     { tool: 'shell', decision: 'allow', risk: 'read_only', subjectId: 'subject:agent:a' },
     { tool: 'shell', decision: 'allow', risk: 'destructive', subjectId: 'subject:agent:b' },

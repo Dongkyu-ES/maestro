@@ -98,7 +98,7 @@ test('T4 promotion causal verifier rejects equal-length ignored filler as non-ca
 });
 
 test('T4 promotion causal verifier accepts a pluggable executor (executor pass-through)', async () => {
-  // Guards the `executor` seam (used by `warden promotion verify-causal --executor claude`): a
+  // Guards the `executor` seam (used by `maestro promotion verify-causal --executor claude`): a
   // HarnessExecutor passed directly must drive all three arms, same as `executorBin`.
   const root = tmpRepo();
   const executor = makeCliExecutor({
