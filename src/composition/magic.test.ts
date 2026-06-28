@@ -45,11 +45,11 @@ test('detect: empty dir yields no tags', () => {
 
 // ── catalog + matching ────────────────────────────────────────────────────────
 
-test('catalog: declared warden.modules.json loads; subset match selects, non-subset excludes', () => {
+test('catalog: declared maestro.modules.json loads; subset match selects, non-subset excludes', () => {
   const root = tmpDir();
   const home = tmpDir('home-');
   writeFileSync(
-    join(root, 'warden.modules.json'),
+    join(root, 'maestro.modules.json'),
     JSON.stringify({
       modules: [
         { id: 'rust-mcp', kind: 'mcp', tags: ['rust'] },
@@ -129,7 +129,7 @@ test('B1 coupling: the declared loader drops a renamed acceptance-shaped field (
   const root = tmpDir();
   const home = tmpDir('home-');
   writeFileSync(
-    join(root, 'warden.modules.json'),
+    join(root, 'maestro.modules.json'),
     JSON.stringify({ modules: [{ id: 'sneaky', kind: 'mcp', tags: ['rust'], acceptanceContract: { command: ['true'] }, gate: 'x' }] }),
   );
   const catalog = loadModuleCatalog({ root, home });
@@ -166,7 +166,7 @@ test('catalog: a declared id overrides a discovered id of the same name (dedup, 
   writeFileSync(join(skill, 'SKILL.md'), '# skill\n');
   // Declared module with the SAME id, tagged so it can be auto-selected.
   writeFileSync(
-    join(root, 'warden.modules.json'),
+    join(root, 'maestro.modules.json'),
     JSON.stringify({ modules: [{ id: 'installed:shared', kind: 'skill', tags: ['rust'] }] }),
   );
   const catalog = loadModuleCatalog({ root, home });
@@ -183,9 +183,9 @@ test('integration: resolveMagicPlan loads real repo+global+discovered catalogs a
   const home = tmpDir('home-');
   writeFileSync(join(root, 'Cargo.toml'), '[package]\nname="x"\n'); // → rust, cargo
   // repo catalog
-  writeFileSync(join(root, 'warden.modules.json'), JSON.stringify({ modules: [{ id: 'repo-rust', kind: 'mcp', tags: ['rust'] }] }));
+  writeFileSync(join(root, 'maestro.modules.json'), JSON.stringify({ modules: [{ id: 'repo-rust', kind: 'mcp', tags: ['rust'] }] }));
   // global catalog
-  const globalDir = join(home, '.warden', 'catalog');
+  const globalDir = join(home, '.maestro', 'catalog');
   mkdirSync(globalDir, { recursive: true });
   writeFileSync(join(globalDir, 'g.json'), JSON.stringify({ modules: [{ id: 'global-swift', kind: 'skill', tags: ['swift'] }, { id: 'global-bad', kind: 'harness', tags: ['rust'], acceptance: { command: ['true'] } }] }));
   // discovered skill (untagged)
@@ -204,7 +204,7 @@ test('catalog: a declared instruction descriptor survives the allowlist loader (
   const root = tmpDir();
   const home = tmpDir('home-');
   writeFileSync(
-    join(root, 'warden.modules.json'),
+    join(root, 'maestro.modules.json'),
     JSON.stringify({ modules: [{ id: 'guide', kind: 'agents_md', tags: ['rust'], instruction: { targetPath: 'CLAUDE.md', content: '# g\n', merge: true } }] }),
   );
   const catalog = loadModuleCatalog({ root, home });

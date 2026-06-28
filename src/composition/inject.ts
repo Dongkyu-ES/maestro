@@ -80,7 +80,7 @@ export function adapterFor(label: string): InjectionAdapter {
 }
 
 // Secret detection (B6) is a BEST-EFFORT HEURISTIC, not a security boundary. Catalog modules are
-// operator-authored (repo `warden.modules.json` / `~/.warden/catalog`), so this gate's job is to
+// operator-authored (repo `maestro.modules.json` / `~/.maestro/catalog`), so this gate's job is to
 // warn the operator before their OWN secret is copied into a worktree `.mcp.json` (where it could
 // be committed/leaked) — not to defend against a malicious author (who is the operator). A complete
 // secret-pattern denylist is unwinnable; we cover the obvious formats and document the rest as

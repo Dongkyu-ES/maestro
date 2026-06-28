@@ -74,7 +74,7 @@ maestro magic run "<goal>" [--executor ...] [--prove]                     # inje
 ```
 
 - **Detect** (deterministic, flat tags): manifests/lockfiles (Tuist, SwiftPM, Cargo, npm/pnpm/yarn, go, python…) + AI-surface markers. No predicate DSL.
-- **Catalog**: declared `warden.modules.json` (repo) + `~/.warden/catalog/*.json` (global) + discovered installed skills; a module matches when its tags ⊆ the detected tags.
+- **Catalog**: declared `maestro.modules.json` (repo) + `~/.maestro/catalog/*.json` (global) + discovered installed skills; a module matches when its tags ⊆ the detected tags.
 - **Inject**: writes the resolved set into the run worktree; recorded as a tamper-evident, replayable `composition.injected` ledger event.
 - **`--prove`**: injects a canary MCP server; consumption is proven by the sentinel it writes *when actually called* — never by the model's word.
 

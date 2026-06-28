@@ -91,8 +91,8 @@ function discoverInstalledSkills(home: string): CatalogModule[] {
 }
 
 /**
- * Assemble the module catalog from declared sources (repo `warden.modules.json` + global
- * `~/.warden/catalog/*.json`) and discovered installed skills. Declared entries are the
+ * Assemble the module catalog from declared sources (repo `maestro.modules.json` + global
+ * `~/.maestro/catalog/*.json`) and discovered installed skills. Declared entries are the
  * tag-bearing, auto-selectable ones; discovered entries are listed but untagged (informational
  * until a declared entry tags them). Pure read; never throws on a bad file (fails open per source).
  */
@@ -101,13 +101,13 @@ export function loadModuleCatalog(opts: { root: string; home?: string }): Module
   const modules: CatalogModule[] = [];
   const sources: string[] = [];
 
-  const repoCatalog = join(opts.root, 'warden.modules.json');
+  const repoCatalog = join(opts.root, 'maestro.modules.json');
   if (existsSync(repoCatalog)) {
     modules.push(...readDeclaredFile(repoCatalog, 'declared'));
     sources.push(repoCatalog);
   }
 
-  const globalDir = join(home, '.warden', 'catalog');
+  const globalDir = join(home, '.maestro', 'catalog');
   if (existsSync(globalDir)) {
     try {
       for (const name of readdirSync(globalDir)) {
