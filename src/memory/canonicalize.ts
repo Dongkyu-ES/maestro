@@ -174,10 +174,13 @@ export function canonicalizeFabric(agentDir: string): {
   driftCandidates: DuplicateFactCandidate[];
 } {
   const store = readMemoryFabric(agentDir);
-  const driftCandidates = findDuplicateFactCandidates(store.facts).filter(
-    (c) => c.method === 'layer_key_value_drift',
-  );
   const { facts, merges } = canonicalizeExactDuplicates(store.facts);
   if (merges.length > 0) writeMemoryFabric(agentDir, { schema_version: 1, facts });
+  // Compute drift on the SURVIVING facts (after exact-duplicate collapse), so a reported drift
+  // candidate can never reference an alias id that was just merged away — it only points at facts
+  // that still exist in the store for an operator to resolve.
+  const driftCandidates = findDuplicateFactCandidates(facts).filter(
+    (c) => c.method === 'layer_key_value_drift',
+  );
   return { merged: merges.length, merges, driftCandidates };
 }

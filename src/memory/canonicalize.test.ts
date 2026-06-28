@@ -134,3 +134,22 @@ test('canonicalizeFabric dedups a real on-disk fabric provenance-preservingly', 
   assert.equal(second.merged, 0);
   assert.equal(second.driftCandidates.length, 1);
 });
+
+test('drift candidates never reference an alias merged away in the same pass', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'canon-'));
+  // a=one, b=two, c=two: b and c are exact dups (collapse), a drifts from them.
+  appendMemoryFact(dir, { layer: 'vertical_project', key: 'k', value: 'one', source_event_ids: ['e1'], artifact_refs: [] });
+  appendMemoryFact(dir, { layer: 'vertical_project', key: 'k', value: 'two', source_event_ids: ['e2'], artifact_refs: [] });
+  appendMemoryFact(dir, { layer: 'vertical_project', key: 'k', value: 'two', source_event_ids: ['e3'], artifact_refs: [] });
+
+  const result = canonicalizeFabric(dir);
+  assert.equal(result.merged, 1); // c merged into b
+
+  const survivingIds = new Set(readMemoryFabric(dir).facts.map((f) => f.id));
+  // Every reported drift candidate references only facts that still exist (no merged-away alias).
+  for (const c of result.driftCandidates) {
+    assert.ok(survivingIds.has(c.canonical_id), `canonical ${c.canonical_id} survives`);
+    assert.ok(survivingIds.has(c.alias_id), `alias ${c.alias_id} survives`);
+  }
+  assert.equal(result.driftCandidates.length, 1); // a <-> b, with c gone
+});
