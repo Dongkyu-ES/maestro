@@ -42,6 +42,6 @@ A hard gate can move to PASS only when all are true:
 2. live local-web smoke evidence exists;
 3. Result-Reality Delta is updated;
 4. no known contradictory run artifacts remain unreconciled;
-5. `warden quality gate --write` returns PASS;
+5. `maestro quality gate --write` returns PASS;
 6. independent review explicitly attacks the 90/95% claim;
 7. the independent-review gate has valid artifact HMAC provenance and valid custody attestation from keys stored outside the repo and held by a reviewer/CI boundary rather than the implementer.

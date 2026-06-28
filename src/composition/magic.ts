@@ -85,7 +85,7 @@ function isAcceptanceBearing(module: CatalogModule): boolean {
   return module.acceptance !== undefined && module.acceptance !== null;
 }
 
-/** Render a MagicPlan as plain text for `warden magic plan`. */
+/** Render a MagicPlan as plain text for `maestro magic plan`. */
 export function formatMagicPlan(plan: MagicPlan): string {
   const lines: string[] = [];
   lines.push(`magic plan for ${plan.root}`);

@@ -52,7 +52,7 @@ Non-lifting / disallowed custody for completion claims:
 First prepare the gate from external reviewer artifacts and matching notification envelopes:
 
 ```bash
-warden runtime prepare-review-gate \
+maestro runtime prepare-review-gate \
   --code-reviewer-artifact .agent/review-gates/code-reviewer.md \
   --architect-artifact .agent/review-gates/architect.md \
   --code-reviewer-notification .agent/review-gates/subagent-notifications/code-reviewer.json \
@@ -64,7 +64,7 @@ warden runtime prepare-review-gate \
 Then sign only inside trusted reviewer CI custody:
 
 ```bash
-warden runtime sign-review --custody reviewer-ci --custody-issuer <reviewer-ci-name> --review-session <ci-run-or-review-session-id>
+maestro runtime sign-review --custody reviewer-ci --custody-issuer <reviewer-ci-name> --review-session <ci-run-or-review-session-id>
 ```
 
 The signer reads `AGENT_REVIEW_HMAC_KEY` or `~/.dominic_orchestration/review-signing.key`, computes the current review-input hash, hashes the referenced reviewer/architect artifacts, and writes `provenance.signature` into `.agent/independent-review-gate.json`. The prepare command refuses mismatched artifact/notification text before writing `.agent/independent-review-gate.json`. The signer also requires `provenance.custody` via `--custody`, existing gate metadata, or `AGENT_REVIEW_CUSTODY`; requires custody issuer/session metadata via `--custody-issuer` and `--review-session` (or `AGENT_REVIEW_CUSTODY_ISSUER` and `AGENT_REVIEW_SESSION_ID`/CI run env); then reads `AGENT_REVIEW_CUSTODY_HMAC_KEY` or `~/.dominic_orchestration/review-custody.key` and writes `provenance.custody_signature` bound to that metadata.
@@ -95,7 +95,7 @@ Use `.github/workflows/independent-review-gate.yml` only with a successful `Trus
 
 ```bash
 npm test
-warden runtime sign-review --custody reviewer-ci --custody-issuer <trusted-reviewer-ci> --review-session <ci-run-or-review-session-id>
+maestro runtime sign-review --custody reviewer-ci --custody-issuer <trusted-reviewer-ci> --review-session <ci-run-or-review-session-id>
 node dist/cli.js quality gate --write
 ```
 

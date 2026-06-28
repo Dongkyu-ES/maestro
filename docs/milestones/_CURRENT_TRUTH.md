@@ -38,7 +38,7 @@ only; where they conflict, the controlling records are:
   dogfood (2026-06-20): Warden drove a real `claude` executor to find + fix a real rename-bypass security
   bug *in Warden's own verifier*, gated by its own clean-checkout acceptance command, then independently
   revert-checked. See `archive/M23_SELF_CRITIC_CLOSED_LOOP_2026-06-20.md`.
-- **The §9 "daily-usable slice" is shipped** as `warden harness run "<goal>" --executor <codex|claude>
+- **The §9 "daily-usable slice" is shipped** as `maestro harness run "<goal>" --executor <codex|claude>
   --acceptance-file <accept.json>`: task → ContextBundle → native adapter → ledger → M7 verifier →
   state transition. (Slice defined in `HARNESS_OS_CORRECTED_PLAN.md` §9.)
 - **Hard completion is BLOCKED by design at ceiling ~60–75.** The product gate fails closed because

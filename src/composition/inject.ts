@@ -8,7 +8,7 @@ import type { CatalogModule } from './catalog.js';
  * recorded as a tamper-evident, replayable manifest.
  *
  * HONEST SCOPE (the slice-2 code panel forced this narrowing; docs/milestones/archive/WARDEN_MAGIC_DESIGN.md §7
- * "slice-2 corrections"): Warden does NOT own the in-loop worktree — the native executor owns it
+ * "slice-2 corrections"): maestro does NOT own the in-loop worktree — the native executor owns it
  * (CORRECTED_PLAN §10, R-native-ownership). So this module guarantees ONLY what it can enforce:
  *   - what INJECTION itself wrote is closed BY CONSTRUCTION — apply writes exactly the adapter's
  *     `mcpConfigPath` (+ a `.warden-bak` of any pre-existing config) and records every byte. There
@@ -80,7 +80,7 @@ export function adapterFor(label: string): InjectionAdapter {
 }
 
 // Secret detection (B6) is a BEST-EFFORT HEURISTIC, not a security boundary. Catalog modules are
-// operator-authored (repo `warden.modules.json` / `~/.warden/catalog`), so this gate's job is to
+// operator-authored (repo `maestro.modules.json` / `~/.maestro/catalog`), so this gate's job is to
 // warn the operator before their OWN secret is copied into a worktree `.mcp.json` (where it could
 // be committed/leaked) — not to defend against a malicious author (who is the operator). A complete
 // secret-pattern denylist is unwinnable; we cover the obvious formats and document the rest as

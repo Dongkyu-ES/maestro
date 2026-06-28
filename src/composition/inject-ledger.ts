@@ -9,7 +9,7 @@ import {
 } from './inject.js';
 
 /**
- * Slice 3 — make injection part of Warden's RECOMPUTABLE evidence layer, not just a side-file.
+ * Slice 3 — make injection part of maestro's RECOMPUTABLE evidence layer, not just a side-file.
  * `composition.injected` is appended to the hash-chained runtime ledger (refs/hashes only, no
  * free-form decision field), and `recomputeInjectionFromLedger` re-derives the injected file set
  * from the CALLER-SUPPLIED current catalog inputs (NOT recovered from the ledger — the inputs are
@@ -19,7 +19,7 @@ import {
  *   - the hash chain (validateRuntimeLedger) makes any tampered MIDDLE event fail closed;
  *   - the re-derivation catches a forged HEAD event (a record the chain alone can't refute) — the
  *     recorded injection must equal what re-resolving the same catalog+inputs produces.
- * This module does NOT touch the orchestrator hot path; it is wired into `warden magic apply`.
+ * This module does NOT touch the orchestrator hot path; it is wired into `maestro magic apply`.
  */
 
 export function recordInjectionEvent(

@@ -603,11 +603,11 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     commandEvidence(
       root,
       ['dist/cli.js', '--help'],
-      ['warden quality gate [--write]', 'warden run create|start|collect|cancel|latest', 'warden apply propose|approved'],
+      ['maestro quality gate [--write]', 'maestro run create|start|collect|cancel|latest', 'maestro apply propose|approved'],
     );
   const versionOk =
     existsSync(join(root, 'dist', 'cli.js')) &&
-    commandEvidence(root, ['dist/cli.js', '--version'], ['warden']);
+    commandEvidence(root, ['dist/cli.js', '--version'], ['maestro']);
   const requiredRows = [
     'Installable CLI',
     'Web UI',
@@ -645,7 +645,7 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
   const promotionLearningOk = promotionLearningGateOk(root);
   const operatorBrowserE2EOk = operatorBrowserE2EGateOk(root);
   const productCompletenessOk =
-    Boolean(packageJson?.bin?.warden === './dist/cli.js') &&
+    Boolean(packageJson?.bin?.maestro === './dist/cli.js') &&
     helpOk &&
     versionOk &&
     acceptanceOk &&
@@ -764,7 +764,7 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     ),
     deltaRow(
       'Runnable operator surface: installable CLI and command help/version',
-      Boolean(packageJson?.bin?.warden === './dist/cli.js') && helpOk && versionOk,
+      Boolean(packageJson?.bin?.maestro === './dist/cli.js') && helpOk && versionOk,
       'package.json bin + dist/cli.js --help/--version',
       'Runnable CLI evidence exists.',
       'CLI/package evidence is missing or not runnable.',
@@ -893,7 +893,7 @@ export function runProductGate(cwd = process.cwd(), options: { write?: boolean }
     gateCheck(
       'Operator UX Gate',
       helpOk &&
-        hasAll(rerun, ['CLI/Web controls', 'warden quality gate --write']) &&
+        hasAll(rerun, ['CLI/Web controls', 'maestro quality gate --write']) &&
         hasAll(roadmap, ['UI shows worker lanes', 'Run detail UI showing all required evidence']),
       'CLI help and reports must expose task/run/approval/product gate controls without manual .agent editing.',
     ),

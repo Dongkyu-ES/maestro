@@ -38,6 +38,13 @@ export interface MemoryFact {
    * drift guess) is half of the gate-#4 freshness decision; the other half is provenance.
    */
   last_verified_at?: string;
+  /**
+   * Tombstone trail: ids of duplicate facts that were canonicalized into this one. Set by the
+   * memory canonicalization pass (`canonicalize.ts`) so a merge never silently drops the merged
+   * ids — `resolveCanonicalFactId` can still map an old id to its survivor. Empty/absent on facts
+   * that have never absorbed a duplicate.
+   */
+  merged_alias_ids?: string[];
 }
 export interface MemoryFabricStore {
   schema_version: 1;
@@ -56,7 +63,7 @@ export function readMemoryFabric(agentDir: string): MemoryFabricStore {
   const path = memoryFabricPath(agentDir);
   if (!existsSync(path)) return { schema_version: 1, facts: [] };
   // Fail open on a malformed/foreign/oversized store: a corrupt fabric.json must not crash a run
-  // that merely wants to read memory (the read path is default-on for `warden harness run`). An
+  // that merely wants to read memory (the read path is default-on for `maestro harness run`). An
   // unreadable fabric simply contributes no facts — the safe direction.
   try {
     if (statSync(path).size > MAX_FABRIC_BYTES) return { schema_version: 1, facts: [] };

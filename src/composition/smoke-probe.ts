@@ -19,7 +19,7 @@ import type { InjectionAdapter } from './inject.js';
  * adversarial proof: an executor that owns the worktree could write the sentinel directly without
  * ever loading the MCP. So `consumptionProven` means "consumption confirmed for a non-adversarial
  * executor", not "the executor could not have faked it". Defeating a malicious executor would need
- * the canary to leave a trace only Warden (not the executor) can produce — out of scope here.
+ * the canary to leave a trace only maestro (not the executor) can produce — out of scope here.
  */
 
 export interface CanaryConfig {
@@ -74,7 +74,7 @@ export function canaryModule(cfg: CanaryConfig): CatalogModule {
     kind: 'mcp',
     tags: [],
     origin: 'declared',
-    description: 'Warden consumption canary (proves injected MCP config was loaded)',
+    description: 'maestro consumption canary (proves injected MCP config was loaded)',
     mcp: {
       server: 'warden-canary',
       // node -e wrapper sets the canary env then execs the server, so token/sentinel travel in argv.
