@@ -2,6 +2,7 @@ import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 import { appendRuntimeEvent } from '../events/ledger.js';
 import { rebuildIndex } from './index-builder.js';
+import { assertPromotionTransition, ontologyStageForStatus } from './promotion-lifecycle.js';
 import {
   AGENT_DIR,
   type PromotionRecord,
@@ -145,6 +146,13 @@ export function resolvePromotion(id: string, status: 'approved' | 'rejected', cw
   const p = safeJoin(root, AGENT_DIR, 'promotions', `${id}.json`);
   if (!existsSync(p)) throw new Error(`promotion ${id} not found`);
   const rec = JSON.parse(readFileSync(p, 'utf8')) as PromotionRecord;
+  // Idempotent no-op: re-resolving to the same status must not rewrite the record or append a
+  // duplicate promotion.decided event (which would pollute the ledger and the ontology projection).
+  if (rec.status === status) return rec;
+  // Guard the lifecycle: a terminal record (applied/rejected) must not be silently reverted, and a
+  // candidate must follow the legal candidate -> validated/rejected path. Closes a silent-overwrite
+  // gap where re-resolving an applied promotion dropped its applied_path.
+  assertPromotionTransition(rec.status, status);
   rec.status = status;
   rec.updated_at = nowIso();
   writeFileSync(p, JSON.stringify(rec, null, 2));
@@ -156,7 +164,13 @@ export function resolvePromotion(id: string, status: 'approved' | 'rejected', cw
       runId: rec.run_id,
       source: 'runtime-manager',
       type: 'promotion.decided',
-      payload: { promotion_id: id, decision: status, target_type: rec.target_type, runtime_label: 'promotion_loop' },
+      payload: {
+        promotion_id: id,
+        decision: status,
+        ontology_stage: ontologyStageForStatus(status),
+        target_type: rec.target_type,
+        runtime_label: 'promotion_loop',
+      },
       artifactRefs: [`promotions/${id}.json`],
     });
   rebuildIndex(root);
@@ -198,6 +212,7 @@ export function applyApprovedPromotion(id: string, cwd = process.cwd()): Promoti
         promotion_id: id,
         target_type: rec.target_type,
         applied_path: rec.applied_path,
+        ontology_stage: ontologyStageForStatus('applied'),
         runtime_label: 'promotion_loop',
       },
       artifactRefs: [`promotions/${id}.json`],
