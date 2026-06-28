@@ -1,47 +1,129 @@
 # maestro
 
+> **AI 코딩 에이전트를 위한 작업 인식형(task-aware) 오케스트레이션.** 작업 하나를 넣으면, 알맞은 멀티 에이전트 패턴이 나옵니다 — 이미 구독 중인 CLI들로 조합해서.
+
 *다른 언어로 보기: [English](README.md) · **한국어***
 
-**AI 코딩 에이전트를 위한 작업 인식형(task-aware) 오케스트레이션.** maestro에 작업을 주면, 알맞은 오케스트레이션 패턴을 고르고, 역할마다 어울리는 CLI(Codex, Claude Code, Antigravity/agy — 각자의 로그인으로 헤드리스 구동)를 조합하고, **역할마다 필요한 컨텍스트만 적재**(격리 git 워크트리 + 선택적 MCP/지시 주입)한 뒤, 오케스트레이션을 실행해 하나의 결과로 종합합니다. 주로 `/maestro "<할일>"` Claude Code 스킬로 씁니다.
+![Claude Code plugin](https://img.shields.io/badge/Claude_Code-plugin-d97757)
+![runtime deps](https://img.shields.io/badge/runtime_deps-0-2ea44f)
+![footprint](https://img.shields.io/badge/local-single--operator-3b82f6)
+![evidence](https://img.shields.io/badge/evidence-opt--in-64748b)
 
-> 로컬, 파일 기반, 단일 운영자(single-operator). 상태는 `.agent/` 아래에 저장됩니다. 호스팅 서비스 없음, SaaS 없음, 자동 push 없음, 런타임 의존성 0.
+maestro에 작업을 주면, 작업을 분류하고, 어울리는 오케스트레이션 패턴을 고르고, 역할마다 알맞은 CLI(Codex, Claude Code, Antigravity/`agy` — 각자의 로그인으로 헤드리스 구동)를 조합하고, 역할마다 필요한 컨텍스트만 적재한 뒤, 오케스트레이션을 실행해 **하나의 종합된 결과**를 돌려줍니다. 주로 `/maestro "<할일>"` Claude Code 스킬로 씁니다.
 
-**작업별로 고르는 4가지 패턴:** build → 독립 리뷰 루프 · 팬아웃 + 선택 · 패널 / 디베이트 · scout → plan → build → verify. 무거운 단계(워크트리 분리, 선택 주입, DAG 팬아웃)는 로컬·프로바이더 중립 엔진에서, 읽기 전용 단계(패널·스카우트·리뷰)는 인세션에서 돌립니다. 워크트리와 주입은 *파일을 병렬로 바꾸는 단계에만* 씁니다 — 가벼운 작업은 가볍게 끝납니다.
-
-## 왜(Why)
-
-maestro는 **새 인프라를 만들지 않고 이미 있는 도구를 조합**합니다: `git worktree`, 네이티브 CLI와 각자의 로그인(구독이 곧 런타임 — per-call API 비용 없음), 그리고 detect → resolve → inject → spawn → cleanup을 담당하는 검증된 엔진. 그 위에 **옵트인** 증거 계층 — 해시 체인 원장(ledger), 재계산 가능한 검증기(verifier), 내용 주소화된 증거 — 이 얹혀, 재계산·감사 가능한 완료 판정이 필요할 때(`--prove` / `--gate`)만 켜집니다. 기본 경로에서는 꺼져 있습니다: 오케스트레이션이 먼저, 증명은 요청할 때만.
-
-## Claude Code 플러그인으로 설치
-
-가장 짧은 길: maestro는 **자체완결형 Claude Code 플러그인**으로 배포됩니다 — 오케스트레이션 엔진이 플러그인 *안에* 함께 실립니다(`bin/maestro` → 동봉된 `dist/`). 그래서 `npm install`도, 빌드도, PATH 손질도 필요 없습니다.
+## 설치
 
 ```text
 /plugin marketplace add Dongkyu-ES/maestro
 /plugin install maestro@maestro
 ```
 
-활성화하면 딱 세 가지가 일어납니다: `maestro`를 Bash 도구 PATH에 올리고, `/maestro:maestro` 스킬을 등록하고, 그 외에는 기기를 건드리지 않습니다. CLI는 **런타임 의존성 0** — 동봉된 `dist/`는 Node 위에서만 돌아갑니다 — 라서 *설치됨*과 *작동함*이 같은 순간입니다.
+자체완결형: 엔진이 플러그인 *안에* 함께 실리고, 런타임 의존성 0, 빌드 불필요. `node` + `git`, 그리고 실행 엔진 CLI 하나(`codex` / `claude` / `agy`)가 각자 로그인으로 있어야 합니다. 소스에서 직접 빌드 → [소스에서 빌드](#소스에서-빌드).
 
-**이미 갖추고 있어야 하는 것**(의도적으로 동봉하지 않음):
+## 무엇을 얻나
 
-- `node` 와 `git` — 토대.
-- 각자 로그인으로 도는 실행 엔진 CLI 하나 — `codex`(권장)·`claude`·`agy`. 이게 근육입니다: maestro는 실행기를 *조합*할 뿐 대체하지 않습니다. 하나도 없으면 읽기 전용 패턴(패널 · 스카우트 · 리뷰)은 그대로 돌고, 파일을 바꾸는 작업은 실제 실행기를 기다립니다.
+- **작업별로 고르는 4가지 패턴** — build → 독립 리뷰 · 팬아웃 + 선택 · 패널 / 디베이트 · scout → plan → build → verify.
+- **구독이 곧 런타임** — Codex / Claude / agy를 각자 로그인으로 구동; per-call API 비용 없음.
+- **딱 맞는 격리** — git 워크트리 + 선택적 MCP / 지시 주입은 *파일을 병렬로 바꾸는 단계에만*; 읽기 전용 단계는 인세션, 가벼운 작업은 가볍게.
+- **옵트인 증거** — 해시 체인 원장(ledger), 재계산 가능한 검증기(verifier), 내용 주소화된 증거. 재생·감사 가능한 완료 판정이 필요할 때(`--prove` / `--gate`)만. 기본은 꺼짐.
+- **로컬·정직** — `.agent/` 아래 파일 기반, 단일 운영자, 호스팅 서비스 없음, SaaS 없음, 자동 push 없음.
 
-업데이트는 `git push` 한 번 거리입니다 — 사용자는 `/plugin marketplace update`로 당겨받습니다. 레지스트리도, 릴리스 파이프라인도, "repo"와 "플러그인" 사이의 드리프트도 없습니다: repo가 **곧** 플러그인입니다.
+---
 
-## 소스에서 빌드 (개발)
+## 목차
+
+- [배경](#배경)
+- [왜 maestro인가](#왜-maestro인가)
+- [어떻게 작동하나](#어떻게-작동하나)
+  - [4가지 패턴](#4가지-패턴)
+  - [역할 → CLI 매핑](#역할--cli-매핑)
+  - [maestro magic — 의존성 합성](#maestro-magic--의존성-합성)
+- [사용법](#사용법)
+  - [Claude Code 스킬로](#claude-code-스킬로)
+  - [운영자 플로우](#운영자-플로우)
+  - [하네스 런타임](#하네스-런타임)
+- [활용 사례](#활용-사례)
+- [증거와 안전성](#증거와-안전성)
+- [품질 게이트](#품질-게이트)
+- [어떻게 만들었나](#어떻게-만들었나)
+- [소스에서 빌드](#소스에서-빌드)
+- [프로젝트 구조](#프로젝트-구조)
+- [라이선스](#라이선스)
+
+---
+
+## 배경
+
+AI 코딩 CLI들은 개별적으론 강하지만 서로를 못 봅니다. Codex, Claude Code, Antigravity는 각자의 로그인, 각자의 샌드박스, 각자의 헤드리스 구동 방식을 갖고 있고 — 서로의 존재를 모릅니다. 작업이 그중 *둘 이상*을 원하는 순간 — 첫 모델을 리뷰할 두 번째 모델, 그중 고를 독립 시도 셋, 결정 전 디베이트 — 다시 수작업으로 돌아갑니다: 터미널 사이 컨텍스트 복붙, 병렬 작성자가 충돌 안 하게 워크트리 저글링, 그리고 각 도구가 뱉는 "된 것처럼 보이는" 산문을 그냥 믿기.
+
+maestro는 그 배선을 대신 해주는 계층입니다 — 그것도 작업이 실제로 필요로 하는 만큼만.
+
+## 왜 maestro인가
+
+maestro는 **새 인프라를 만들지 않고 이미 있는 도구를 조합**합니다: `git worktree`, 네이티브 CLI와 각자의 로그인(구독이 곧 런타임 — per-call API 비용 없음), 그리고 detect → resolve → inject → spawn → cleanup을 담당하는 검증된 엔진.
+
+그 위에 **옵트인** 증거 계층 — 해시 체인 원장, 재계산 가능한 검증기, 내용 주소화된 증거 — 이 얹혀, 재계산·감사 가능한 완료 판정이 필요할 때만 켜집니다. 기본 경로에서는 꺼져 있습니다: 오케스트레이션이 먼저, 증명은 요청할 때만(`--prove` / `--gate`).
+
+스킬 자체에 박힌 지침: **결과를 개선하는 가장 가벼운 기존 경로를 고른다.** 멀티 에이전트 팬아웃은 기본이 아니라 예외입니다 — 독립 시도가 진짜 가치 있거나, 단일 시도의 확신이 낮거나, 작업이 어려울 때만 비용값을 합니다. 아니면 인세션 단일 에이전트가 정답입니다.
+
+## 어떻게 작동하나
+
+maestro는 모든 작업에 5단계 루프를 돕니다: **분류 → 패턴 선택 → 역할↔CLI 매핑 → 역할별 최소 컨텍스트 적재 → 실행·종합.** 무거운 단계(워크트리 분리, 선택 주입, DAG 팬아웃)는 로컬·프로바이더 중립 엔진에서, 읽기 전용 단계(패널·스카우트·리뷰)는 워크트리 없이 인세션에서 돕니다.
+
+### 4가지 패턴
+
+| 신호 | 패턴 | 왜 |
+| --- | --- | --- |
+| 산출물 1개, 품질이 중요, "제대로 됐는지 확신 필요" | **build → 독립 리뷰 루프** | 만든 모델과 *다른* 모델이 리뷰 → 자기검증의 맹점을 깬다 |
+| 같은 목표에 독립 시도 여러 개, "여러 안 중 best" | **팬아웃 + 선택** | N개 병렬 시도 → 심판이 선택/종합 |
+| 결정/설계 질문, 파일 변경 없음 | **패널 / 디베이트** | 서로 다른 모델·관점의 조언자 → 종합 |
+| 넓고 모호한 빌드, "어디부터 손대야 할지 모름" | **scout → plan → build → verify** | 탐색→계획→구현→검증 파이프라인 |
+
+팬아웃이 *정당할* 때도 최대 3~5개, 그리고 *수*보다 **관점 다양성**(다른 모델/렌즈)을 우선합니다.
+
+### 역할 → CLI 매핑
+
+기본 휴리스틱, 역할별로 덮어쓸 수 있음:
+
+- **build** → workspace-write 워크트리의 `codex`.
+- **review** → 빌더와 *다른* 모델(`codex` gpt-5.5 high, 또는 `claude`).
+- **scout / 심판** → `claude` 또는 인세션 `Explore` 에이전트.
 
 ```bash
-npm install
-npm run build
-npm link            # `maestro`를 PATH에 등록 (상태는 여전히 cwd별 .agent/)
-maestro --version
+# 읽기 전용 조언자/리뷰어, 인세션, 워크트리 없음:
+codex exec -m gpt-5.5 -c model_reasoning_effort="high" --sandbox read-only "<프롬프트>" </dev/null
 ```
 
-링크 없이 실행: `node dist/cli.js --help`. `src/`를 바꾼 뒤에는 `dist/`를 다시 빌드해 커밋하세요 — 그 커밋된 빌드가 플러그인으로 실리는 실물입니다.
+### maestro magic — 의존성 합성
 
-## 핵심 운영자 플로우 (v0–v2 제품)
+*Tuist인데 LLM 의존성용*이라고 보면 됩니다. 프로젝트를 분석해 필요한 LLM-의존성 모듈(MCP 서버, 지시 파일)을 해소하고, 주입하고, 실행 — 프로젝트마다 수동 배선이 없습니다.
+
+```bash
+maestro magic plan "<goal>"     # 프로젝트 태그 감지 + 모듈 해소 (드라이런; 주입 안 함)
+maestro magic catalog           # 모듈 카탈로그 나열 (선언된 것 + 발견된 것)
+maestro magic run "<goal>" --executor codex|claude|agy [--prove]   # 주입 후 실행기 구동
+maestro magic show <magicRunId> # 원장에서 주입 기록 재계산; 모순 표시
+```
+
+- **감지**(결정적, 평면 태그): 매니페스트/락파일(Tuist, SwiftPM, Cargo, npm/pnpm/yarn, go, python…) + AI-표면 마커.
+- **카탈로그**: 선언된 `maestro.modules.json`(repo) + `~/.maestro/catalog/*.json`(글로벌) + 발견된 설치 스킬; 모듈 태그 ⊆ 감지된 태그일 때 매칭.
+- **`--prove`**: 카나리 MCP 서버를 주입; 소비는 *실제 호출됐을 때* 그게 쓰는 센티넬로 증명 — 모델의 말이 아니라.
+
+## 사용법
+
+### Claude Code 스킬로
+
+평소 경로. 플러그인 설치 후:
+
+```text
+/maestro "결제 스위트의 플래키 테스트를 찾아 고치고, 검증까지"
+```
+
+maestro가 분류해서 `scout → plan → build → verify`를 고르고, 실행기를 대신 구동합니다.
+
+### 운영자 플로우
+
+스킬 뒤의 CLI 표면(v0–v2 제품):
 
 ```bash
 maestro init
@@ -54,83 +136,99 @@ maestro review latest
 maestro web --port 4317      # 운영자 UI: 원장에서 진실을 재계산하고, 모순을 표시
 ```
 
-- **역할 / 멀티 워커:** `--mode roles` (manager/worker/reviewer) 와 `--mode multi --max-workers N` (실제 격리 워크트리에서 경계가 있는 병렬 워커; 충돌·금지 경로·증거 불일치 시 합성(synthesis)을 차단).
-- **승인 게이트 적용:** `maestro apply propose <run-id>` → `maestro approval approve <id>` → `maestro apply approved <id>` (먼저 `git apply --check`; 절대 자동 push 안 함).
-- **변경성 셸(Mutating shell)** 은 `shell_mutation` 승인을 생성하고, 승인 전까지 실행하지 않습니다.
+- **역할 / 멀티 워커** — `--mode roles`(manager / worker / reviewer) 와 `--mode multi --max-workers N`(실제 격리 워크트리의 병렬 워커; 충돌·금지 경로·증거 불일치 시 합성 차단).
+- **승인 게이트 적용** — `maestro apply propose <run-id>` → `maestro approval approve <id>` → `maestro apply approved <id>`(먼저 `git apply --check`; 절대 자동 push 안 함).
+- **변경성 셸**은 `shell_mutation` 승인을 만들고 승인 전엔 실행하지 않음.
 
-## 하네스 런타임 (증거 계층)
+### 하네스 런타임
+
+재계산 가능한 판정이 필요할 때의 증거 계층:
 
 ```bash
-maestro harness run "<목표>" --executor codex|claude|agy|anthropic-direct
-maestro skill run <spec.json> --what "<목표>"   # 리서치 → 실행 → 리뷰
-maestro skill show <runId>                       # 원장에서 완료를 재계산; 모순 표시
+maestro harness run "<goal>" --executor codex|claude|agy|anthropic-direct
+maestro skill run <spec.json> --what "<goal>"   # research → execute → review
+maestro skill show <runId>                       # 원장에서 완료 재계산; 모순 표시
 maestro runtime verify-ledger <runId>            # 해시 체인 변조 검사
-maestro verifier run --run <runId>               # 재계산 가능한 합격 판정
-maestro orchestrate serve | run --file <graph.json>   # DAG 데몬 (요청에 담긴 verifyCmd는 거부)
+maestro verifier run --run <runId>               # 재계산 가능한 수용 판정
+maestro orchestrate serve | run --file <graph.json>   # DAG 데몬 (요청의 verifyCmd 거부)
 ```
 
-표준(canonical) 실행기는 자신의 로그인으로 헤드리스로 구동되는 네이티브 CLI(`codex exec`, `claude -p`, `agy -p`)입니다 — 당신의 구독이 곧 런타임이고, 호출당 API 비용이 없습니다. `anthropic-direct`는 동일한 증거 계약(evidence contract) 뒤에 있는 선택적 직접-API 어댑터입니다. 모든 실행은 `native-harness-assisted`로 라벨링되며, 소유하지 않는 표면(unowned surfaces)이 명시됩니다.
+표준 실행기는 헤드리스로 구동되는 네이티브 CLI(`codex exec`, `claude -p`, `agy -p`)이며 각자의 로그인을 씁니다 — 구독이 곧 런타임, per-call API 비용 없음. `anthropic-direct`는 같은 증거 계약 뒤의 선택적 직접-API 어댑터. 모든 실행은 `native-harness-assisted`로 라벨되고, 소유하지 않은 표면이 명시됩니다.
 
-### orchestrator-as-skill
+`maestro skill run`은 스펙을 `research → execute → review` 그래프로 컴파일합니다. 완료는 `recomputeCompletionFromLedger`: 해시 체인을 검증하고, **저장된 execute 증거가 여전히 해시-체인된 내용 다이제스트와 일치하는지 단언**(스토어 파일을 바꿔치기하면 조용한 재채점이 아니라 `failed`로 재계산)한 뒤, **그 증거 위에서 수용 명령을 깨끗한 체크아웃에서 재실행**하되 운영자 `testFiles`를 맨 마지막에 덮어씌웁니다 — 실행기는 자기가 채점당하는 테스트를 고칠 수 없습니다.
 
-`maestro skill run`은 스펙을 네이티브 실행기 위의 `research → execute → review` 그래프로 컴파일합니다. 완료는 `recomputeCompletionFromLedger`로 판정됩니다: 해시 체인을 검증하고, **저장된 실행 증거가 여전히 그 해시 체인 내용 다이제스트와 일치하는지 단언**하며(저장 파일이 바꿔치기되면 조용한 재채점이 아니라 `failed`로 재계산), 그런 다음 **깨끗한 체크아웃에서 그 증거 위로 합격 명령을 다시 실행**합니다 — 이때 운영자의 `testFiles`가 마지막에 덮어씌워집니다(실행기는 자신이 채점받는 테스트를 편집할 수 없음).
+## 활용 사례
 
-- **증거 입도(granularity)** — 실행 단계는 자기완결적 산출물 하나(`evidence: 'artifact'`, 기본값) 또는 **전체 워크트리 diff**(`evidence: 'diff'`)를 기록합니다. diff 모드는 실제 멀티파일 저장소 작업을 채점합니다: 합격 판정은 `base@고정-커밋 + git apply(diff) + 마지막에 덮은 testFiles`를 결정론적으로 재구성하고 저장소의 `node_modules`를 링크하므로, 자기완결 파일 하나가 아니라 멀티파일 변경에 대한 진짜 `npm test`가 채점 가능합니다.
-- **실행 팬아웃(fan-out)** — 같은 작업에 N개의 실행기를 경쟁시키고, 승자는 순위/자기 주장이 아니라 합격 기준 재실행으로 결정합니다.
-- **정련 루프(refinement loop)** (`maxRefineIterations`) — 경계가 있는 draft→verify→fix 루프; 계속/중단 신호는 오직 재계산 가능한 합격 기준이며, 절대 비평가(critic) 점수가 아닙니다.
+**"버그가 있는데 어디부터 손대야 할지 모르겠다."** 넓고 모호함 → scout가 지형을 그리고, plan이 수정을 범위화하고, build가 구현하고, verify가 증명.
 
-## maestro magic — 프로젝트별 의존성 합성 (LLM 의존성을 위한 Tuist)
+```text
+/maestro "배포 후 사용자가 간헐적으로 로그아웃됨 — 원인을 찾아 고쳐줘"
+```
 
-프로젝트를 분석해 필요한 LLM-의존성 모듈(MCP 서버, 지시문 파일)을 해결하고, 주입한 뒤 실행합니다 — 프로젝트마다 손으로 배선할 필요가 없습니다.
+**"여러 접근 중 베스트를 줘."** 해법 공간이 넓음 → 독립 시도를 경주시키고, 수용 재실행으로 심판, 자기주장으로는 절대 안 함.
 
 ```bash
-maestro magic plan "<목표>"        # 프로젝트 태그 탐지 + 모듈 해결 (드라이런; 아무것도 주입 안 함)
-maestro magic catalog              # 모듈 카탈로그 나열 (선언 + 발견)
-maestro magic apply [--into <dir>] [--executor ...] [--approve-secrets]   # 주입 + 해시 체인 기록
-maestro magic show <magicRunId>    # 원장에서 주입 기록을 재계산; 모순 표시
-maestro magic run "<목표>" [--executor ...] [--prove]                     # 주입 후 실행기 실행
+maestro harness run "게이트웨이용 레이트 리미터 설계" --executor codex   # 팬아웃 변주가 수용으로 선택
 ```
 
-- **탐지(Detect)** (결정론적, 평면 태그): 매니페스트/락파일(Tuist, SwiftPM, Cargo, npm/pnpm/yarn, go, python…) + AI-표면 마커. 술어(predicate) DSL 없음.
-- **카탈로그(Catalog)**: 선언된 `maestro.modules.json`(저장소) + `~/.maestro/catalog/*.json`(전역) + 발견된 설치 스킬; 모듈의 태그가 탐지된 태그의 부분집합(⊆)일 때 매칭됩니다.
-- **주입(Inject)**: 해결된 집합을 실행 워크트리에 기록; 변조 감지·재현 가능한 `composition.injected` 원장 이벤트로 남깁니다.
-- **`--prove`**: 카나리(canary) MCP 서버를 주입; 소비(consumption)는 *실제로 호출되었을 때만* 그것이 쓰는 센티넬(sentinel)로 증명됩니다 — 모델의 말로는 절대 증명되지 않습니다.
+**"A가 맞아 B가 맞아?"** 파일 변경 없는 결정 → 서로 다른 모델/렌즈의 조언자 패널, 종합.
 
-**정직한 천장(설계상).** 실행기가 워크트리를 소유하므로(R-native-ownership), maestro은 *주입한 것의 무결성 + 재현성*을 보장하지, 실행기가 그것으로 무엇을 하는지는 보장하지 않습니다. 소비 증명은 비적대적(non-adversarial)입니다. MCP(역량)는 자유롭게 주입되지만, **지시문 주입(CLAUDE.md/soul)은 승인 게이트가 걸려 있고, 또한 고정된 테스트 합격 기준으로 기계적으로 제한**됩니다 — 채점 테스트가 운영자에게 고정(pinned)된 채로 남으므로, 판정을 세탁할 수 없는 "테스트 맞춤 교육(teaching-to-the-test)" 채널입니다.
+```bash
+codex exec -m gpt-5.5 -c model_reasoning_effort="high" --sandbox read-only \
+  "이 스키마에 낙관적 vs 비관적 잠금 비교. 양쪽 다 논변한 뒤 추천." </dev/null
+```
 
-## 증거 & 안전 모델
+**"만들고, 진짜 제대로 됐는지 확인해줘."** 품질이 중요 → 빌더와 리뷰어가 다른 모델; 무엇도 자기승인 안 함.
 
-- 프로젝트 상태는 `.agent/` 아래에 있으며, `.agent/index.json`으로 재구성 가능합니다.
-- 해시 체인 `RuntimeEventEnvelope` 원장(`prev_event_sha256`); 중간 이벤트가 변조되면 재검증에 실패합니다. 체인은 **이벤트 서사(narrative)가 편집되지 않았음**을 증명하고 — 스킬 경로에서는 **채점되는 실행 증거를 바인딩**합니다: 그 내용 다이제스트가 체인에 기록되고, 완료 재계산 전에 다시 단언됩니다. 체인은 변조 감지 + 증거 바인딩이며, 완료 *권한*은 여전히 그 바인딩된 증거 위로 합격 기준을 다시 실행하는 것이지 체인 자체가 아닙니다.
-- 프로세스 출력은 `*.process.json` / `*.stdout.log` / `*.stderr.log`로 캡처되고, 렌더된 산출물은 일반적인 API 토큰을 마스킹합니다.
-- 메모리 패브릭(memory fabric)은 **출처가 명시되고(provenanced) 갓 검증된(freshly-verified)** 사실만 받아들입니다(게이트 #4); 신선도(freshness)는 통과한 검증기로부터 얻으며, 자기 주장으로는 안 됩니다.
-- 주입은 절대 완료를 진전시키지 않으며, 웹 UI는 게이트가 빨강일 때 초록을 보여주는 대신 CONTRADICTION 패널을 표시합니다.
+```bash
+maestro skill run spec.json --what "주문 엔드포인트에 idempotency 키 추가"
+maestro skill show <runId>   # 완료는 산문이 아니라 원장에서 재계산
+```
 
-## 품질 게이트 (참고용/advisory)
+## 증거와 안전성
+
+- 프로젝트 상태는 `.agent/` 아래, `.agent/index.json`으로 재구성 가능.
+- 해시 체인 `RuntimeEventEnvelope` 원장(`prev_event_sha256`)은 중간 이벤트를 변조하면 재검증에 실패하게 합니다. 체인은 **이벤트 서사**가 미편집임을 증명하고 **채점된 execute 증거를 바인딩** — 그 내용 다이제스트가 체인에 기록되고 완료 재계산 전에 재단언됩니다. 체인은 변조 증거이고, 완료 *권위*는 여전히 그 바인딩된 증거 위에서 수용을 재실행하는 것.
+- 프로세스 출력은 `*.process.json` / `*.stdout.log` / `*.stderr.log`로 캡처; 렌더된 산출물은 흔한 API 토큰을 가립니다.
+- 메모리 패브릭은 **출처가 있고 갓 검증된** 사실만 받아들입니다; 신선도는 통과한 검증기에서 얻고 자기주장이 아닙니다.
+- 주입은 완료를 절대 전진시키지 않음; 게이트가 빨강일 때 웹 UI는 초록을 보이는 대신 CONTRADICTION 패널을 띄웁니다.
+
+## 품질 게이트
 
 ```bash
 maestro quality gate --write
 ```
 
-스캐폴드/MVP/문서만 있는/자기 인증 완료를 거부하고, `.agent/product-gates/` 아래에 영구 리포트를 씁니다. **참고용일 뿐** — 실행을 완료로 표시할 수 없습니다; 완료 권한은 재계산 가능한 원장/diff 검증기입니다. PRD 범위의 로컬 v0–v2 게이트는 통과하지만, 하드 완료는 리뷰 커스터디(custody)가 존재할 때까지 정직하게 상한이 걸려 있고(`completion_ceiling: 60`), 정직한 단일 운영자 천장은 구조상 약 75입니다.
+스캐폴드 / MVP / 문서만 / 자기인증 완료를 거부하고 `.agent/product-gates/` 아래에 영속 리포트를 씁니다. **권고용일 뿐** — 실행을 완료로 표시할 수 없고, 완료 권위는 재계산 가능한 원장 / diff 검증기입니다.
 
-**커스터디 기준은 위조 저항(forgery-resistance)이지 입증된 독립성(proven independence)이 아니며 — 이는 "로컬, 단일 운영자"와 의도적 긴장 관계에 있습니다.** 커스터디(`≥90` 경로)는 리뷰 번들을 실행의 `head_sha`에 바인딩하고 HMAC 서명하는 CI 워크플로우입니다: 위조되거나 사후에 만들어진 리뷰를 *변조 감지 가능하고 출처에 바인딩되게* 만들어, 자기 인증의 비용을 높입니다. 진짜로 독립적인 주체가 작업을 판정했음을 *증명*하지는 **않습니다** — 운영자가 여전히 CI 정의, 서명 키, 리뷰어 에이전트를 소유합니다. 그래서 순수 로컬 단일 실행은 **설계상** 상한(약 75)이 걸리고, ≥90을 넘으려면 의도적으로 외부 두 번째 주체(커스터디 CI)가 필요합니다 — 즉, 헤드라인이 묘사하는 순수 로컬-단일 자세 밖으로 나가는 것입니다. 그 긴장은 숨겨진 게 아니라 의도적이고 명시된 것이며, `60` 상한은 커스터디가 독립성이 아니라 위조 저항임을 정직하게 인정하는 것입니다.
+정직한 천장은 숨기지 않고 명시합니다: 리뷰 custody가 생기기 전까지 하드 완료는 `completion_ceiling: 60`으로 캡되고, 순수 로컬 솔로 실행은 구조상 ~75에서 포화합니다 — 운영자가 여전히 기계·키·프롬프트·산출물을 소유하기 때문. ≥90을 넘으려면 의도적으로 외부 두 번째 주체(실행의 `head_sha`에 HMAC 서명된 리뷰 번들을 바인딩하는 custody CI)가 필요하고, 이는 순수 로컬-솔로 자세를 벗어나는 것입니다. 이 긴장은 의도적입니다: custody는 위조 저항이지 독립성의 증명이 아닙니다.
 
-## 이건 어떻게 만들어졌나
+## 어떻게 만들었나
 
-설계와 구현은 저장소 내부의 **비평가 패널(critic panel)** 로 리뷰됩니다 — 세 개의 이질적인 실행기(codex/claude/agy)가 격리된 워크트리에서, 각자 별개의 적대적 렌즈 아래, 검증기가 "supported(뒷받침됨)"를 소유합니다(`docs/milestones/*_panel.mjs`). 작성(writer) 패스와 리뷰어(reviewer) 패스는 분리되어 있고, 어떤 것도 자기 승인하지 않습니다. 여러 기능이 패널 BLOCKER에 의해 실질적으로 재구성되거나 좁혀졌습니다(예: 주입의 보장은 R-native-ownership이 실제로 허용하는 범위로 좁혀짐).
+설계와 구현은 in-repo **크리틱 패널**이 리뷰합니다 — 격리 워크트리의 이질적 실행기 셋(codex / claude / agy), 각자 다른 적대적 렌즈, "supported"는 검증기가 소유(`docs/milestones/*_panel.mjs`). writer와 reviewer 패스는 분리되고, 무엇도 자기승인 안 함. 여러 기능이 패널 BLOCKER로 실질적으로 재형성·축소됐습니다 — 예: 주입의 보장은 실행기가-워크트리를-소유한다는 사실이 허용하는 선까지 좁혀졌습니다.
 
-## 레이아웃
+## 소스에서 빌드
 
-- `src/harness/` — 원장, 검증기, orchestrator-skill, 팬아웃, 정련, 주입 배선
-- `src/composition/` — maestro magic: 탐지 / 카탈로그 / 해결 / 주입 / 원장-증거 / 카나리
+```bash
+npm install
+npm run build
+npm link            # `maestro`를 PATH에 등록 (상태는 여전히 cwd별 .agent/)
+maestro --version
+```
+
+링크 없이 실행: `node dist/cli.js --help`. `src/`를 바꾼 뒤에는 `dist/`를 다시 빌드해 커밋하세요 — 그 커밋된 빌드가 플러그인으로 실리는 실물입니다.
+
+## 프로젝트 구조
+
+- `src/harness/` — 원장, 검증기, 오케스트레이터-스킬, 팬아웃, 정제(refinement), 주입 배선
+- `src/composition/` — maestro magic: 감지 / 카탈로그 / 해소 / 주입 / 원장-증거 / 카나리
 - `src/events/ledger.ts` — 해시 체인 런타임 이벤트 원장
-- `src/memory/` — 출처-키 기반 메모리 패브릭
+- `src/memory/` — 출처 키 기반 메모리 패브릭
 - `src/cli.ts` — `maestro` CLI; `src/view.ts` — 운영자 웹 UI
-- `docs/milestones/` — 현재 표준 문서; 완료된 마일스톤 + 일회성 패널은 `docs/milestones/archive/` 아래
-- **여기서 시작:** `docs/milestones/_CURRENT_TRUTH.md` (단일 진실 원천: 방향, 상태, 문서 맵)
-- 업스트림/범위: `docs/milestones/HARNESS_OS_CORRECTED_PLAN.md` (구속력 있음); `dominic_orchestration_PRD.md` (역사적/대체됨)
+- `bin/maestro` — 플러그인 런처(PATH 심 → 동봉된 `dist/cli.js`)
+- `docs/milestones/` — 표준 문서; 완료된 마일스톤 + 일회성 패널은 `docs/milestones/archive/` 아래
+- **여기서 시작:** `docs/milestones/_CURRENT_TRUTH.md` (단일 진실 출처: 방향, 상태, 문서 맵)
 
 ## 라이선스
 
-저장소의 라이선스 파일을 참고하세요.
+저장소 라이선스 파일 참조.
