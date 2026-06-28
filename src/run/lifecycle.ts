@@ -873,7 +873,7 @@ function buildCodexExecutionPrompt(taskMd: string, taskId: string, root = proces
     '- Keep the change tightly scoped to the task; do not touch unrelated files.',
     '- Do not run destructive or remote git commands (no reset --hard, push, or branch deletion).',
     githubReportTask
-      ? '- This task is a GitHub-folder report task. Produce the operator-visible artifacts by running: `node dist/cli.js report github-projects --github-dir /Users/dominic/Documents/github`. The PPTX/Markdown/JSON must be created under the repository root `reports/` directory, not under `.agent/`.'
+      ? '- This task is a GitHub-folder report task. Produce the operator-visible artifacts by running: `node dist/cli.js report github-projects --github-dir ~/Documents/github`. The PPTX/Markdown/JSON must be created under the repository root `reports/` directory, not under `.agent/`.'
       : '',
     githubReportTask
       ? '- Closed loop is mandatory: after generating the report, run `node scripts/verify-pptx-openable.mjs <reports/.../github-projects-report.pptx>`. If it prints `PPTX_OPENABLE_FAIL`, fix the report generator, regenerate the report, and rerun verification. Do not finish until it prints `PPTX_OPENABLE_PASS`.'

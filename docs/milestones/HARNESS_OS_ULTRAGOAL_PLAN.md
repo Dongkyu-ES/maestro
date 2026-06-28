@@ -653,7 +653,7 @@ Local binary was present in this checkout:
 
 ```text
 command -v claude
-/Users/dominic/.local/bin/claude
+~/.local/bin/claude
 
 claude --version
 2.1.161 (Claude Code)
