@@ -8,8 +8,8 @@
     {
       "name": "maestro",
       "source": "./",
-      "description": "Task-aware multi-agent orchestration harness (codex/claude/agy)",
-      "version": "0.1.0"
+      "description": "Task-aware multi-agent orchestration harness (codex/claude/agy) — compose reusable agent+skill harnesses",
+      "version": "0.2.0"
     }
   ]
 }
