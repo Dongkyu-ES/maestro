@@ -26,6 +26,7 @@ Self-contained: the engine ships *inside* the plugin, zero runtime dependencies,
 - **Your subscription is the runtime** — drives Codex / Claude / agy on their own logins; no per-call API spend.
 - **Right-sized isolation** — git worktrees + selective MCP / instruction injection *only* when a step mutates files in parallel; read-only steps stay in-session, light tasks stay light.
 - **Opt-in evidence** — a hash-chained ledger, a recomputable verifier, content-addressed evidence, for when you want a completion verdict you can replay and audit (`--prove` / `--gate`). Off by default.
+- **Compose a harness when work recurs** — materialize role-agents + skills + a thin orchestrator (who/how separation) instead of re-deriving the role→CLI mapping every run.
 - **Local & honest** — file-backed under `.agent/`, single-operator, no hosted service, no SaaS, no auto-push.
 
 ---
@@ -39,6 +40,7 @@ Self-contained: the engine ships *inside* the plugin, zero runtime dependencies,
   - [Role to CLI mapping](#role-to-cli-mapping)
   - [Bring your own executor](#bring-your-own-executor)
   - [maestro magic — dependency composition](#maestro-magic--dependency-composition)
+  - [Compose a harness](#compose-a-harness)
 - [Usage](#usage)
   - [As a Claude Code skill](#as-a-claude-code-skill)
   - [Operator flow](#operator-flow)
@@ -126,6 +128,12 @@ maestro magic show <magicRunId> # recompute the injection record from the ledger
 - **Detect** (deterministic, flat tags): manifests / lockfiles (Tuist, SwiftPM, Cargo, npm/pnpm/yarn, go, python…) + AI-surface markers.
 - **Catalog**: declared `maestro.modules.json` (repo) + `~/.maestro/catalog/*.json` (global) + discovered installed skills; a module matches when its tags ⊆ the detected tags.
 - **`--prove`**: injects a canary MCP server; consumption is proven by the sentinel it writes *when actually called* — never by the model's word.
+
+### Compose a harness
+
+The four patterns run *once and vanish*. When the same kind of work recurs — or a job is too broad for a single pattern — maestro can instead **materialize a reusable harness**: role-agents (*who*), skills (*how*), and a thin orchestrator, written to files so the next run reuses them instead of re-deriving the mapping.
+
+The idea is borrowed from harness-authoring meta-skills, but kept maestro-flavored: a role is **any** executor (`codex` / `claude` / `agy` / an in-session subagent), not an opus-only Claude Code agent; execution reuses the existing engine (`magic` / `orchestrate`) and Claude Code's native `agents/` + `skills/` formats rather than a new runtime; and evidence stays opt-in. Compose only when reuse pays — otherwise a one-shot pattern is the right call. Recipe and checklist live in the skill's `references/compose.md`.
 
 ## Usage
 

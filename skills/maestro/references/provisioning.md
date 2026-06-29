@@ -47,7 +47,7 @@ maestro magic plan "<goal>"
 # dry-run: 감지된 태그 + 실릴 모듈 (아무것도 주입 안 함)
 maestro magic plan "<goal>"
 
-# 카탈로그 보기 (declared warden.modules.json + ~/.warden/catalog + 발견된 스킬)
+# 카탈로그 보기 (declared maestro.modules.json + ~/.maestro/catalog + 발견된 스킬)
 maestro magic catalog
 
 # 워크트리 분리 + 선택 주입 + executor 스폰 + 정리 (한 방)
@@ -86,4 +86,4 @@ maestro worktrees cleanup
 
 ## 내부 경로 메모
 
-상태는 `.agent/` (워크트리는 `.agent/worktrees/`, 매직런은 `.agent/magic-runs/`), 전역 설정/카탈로그는 `~/.warden/`. 이 내부 경로 이름들은 (CLI 이름이 maestro로 바뀐 뒤에도) 기존 상태 호환을 위해 그대로 둔다 — 사용자에게 보이는 표면만 maestro다.
+상태는 `.agent/` (워크트리는 `.agent/worktrees/`, 매직런은 `.agent/magic-runs/`), 전역 설정/카탈로그는 `~/.maestro/catalog/`, repo 카탈로그는 `maestro.modules.json` — 코드(src/composition/catalog.ts)와 일치한다. 다만 일부 **내부 wire/sentinel 이름**(주입 마커 `warden-injected`, 백업 접미사 `.warden-bak`, 카나리 파일 `.warden-canary`, MCP 카나리 툴 `warden_canary_ping`)은 기존 상태/포맷 호환을 위해 옛 접두사를 그대로 둔다 — 사용자에게 보이는 표면만 maestro다.

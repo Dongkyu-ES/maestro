@@ -9,9 +9,9 @@
 
 ## 1. Contract Purpose
 
-This contract defines the minimum provider-neutral runtime semantics Warden must own before it can claim cross-model agent orchestration.
+This contract defines the minimum provider-neutral runtime semantics maestro must own before it can claim cross-model agent orchestration.
 
-The product may call OpenAI, Anthropic, Gemini, local models, Codex CLI, Claude Code, OMX, agy, or shell. None of those providers/harnesses owns completion. Warden owns completion through this contract.
+The product may call OpenAI, Anthropic, Gemini, local models, Codex CLI, Claude Code, OMX, agy, or shell. None of those providers/harnesses owns completion. maestro owns completion through this contract.
 
 ---
 
@@ -19,7 +19,7 @@ The product may call OpenAI, Anthropic, Gemini, local models, Codex CLI, Claude 
 
 ### 2.1 Canonical owner
 
-Warden owns:
+maestro owns:
 
 - base rules;
 - memory selection and verification labels;

@@ -1,4 +1,4 @@
-# Warden Dogfood Report
+# maestro Dogfood Report
 
 > **CURRENT TEST STATUS (2026-06-02):** After test isolation work, the current suite is 112/112 PASS, but product completion remains FAIL / ceiling 60 because signed independent-review provenance is absent.
 >

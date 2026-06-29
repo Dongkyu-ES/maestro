@@ -37,7 +37,7 @@ The gate must compare the actual product against `dominic_orchestration_PRD.md` 
 
 Evidence:
 
-- PRD says Warden is a local webservice control plane.
+- PRD says maestro is a local webservice control plane.
 - PRD v0/v1/v2 scope is single run, manager/worker/reviewer, bounded multi-worker.
 - PRD explicitly excludes initial SaaS, automatic push, full custom Agents SDK runtime, and broad MCP integration.
 

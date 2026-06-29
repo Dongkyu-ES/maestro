@@ -1,4 +1,4 @@
-# Warden Product Completion Standard
+# maestro Product Completion Standard
 
 **Status:** Corrected standard, hardened after anti-rubber-stamp failure analysis
 **Date:** 2026-06-01
@@ -8,7 +8,7 @@
 
 The previous v0-v2 pass criteria were too weak. They allowed a scaffold with generated artifacts and tests to be treated as product completion. That is invalid.
 
-Warden is complete only when it is a **95%+ complete PRD-scoped local agent orchestration product** that a real operator can use on a real repository without manually editing generated internals to make the happy path work.
+maestro is complete only when it is a **95%+ complete PRD-scoped local agent orchestration product** that a real operator can use on a real repository without manually editing generated internals to make the happy path work.
 
 The phrase **PRD-scoped** is mandatory. The scope can only be narrowed when the original PRD explicitly narrows it. For this repo, local-first is supported by the PRD itself (`dominic_orchestration_PRD.md`: local webservice, local agent work, v0 single run, v1 manager/worker/reviewer, v2 bounded multi-worker, no initial SaaS/auto-push). A reviewer may not invent a smaller scope after implementation just to pass the gate.
 
@@ -173,7 +173,7 @@ Self-review, same-lane review, and implementation-summary-as-review do not pass.
 
 ### 5.10 Dogfood Gate
 
-Passes only if Warden uses itself on this repository or a separate real repo to complete a meaningful task and produces durable evidence.
+Passes only if maestro uses itself on this repository or a separate real repo to complete a meaningful task and produces durable evidence.
 
 ## 6. Closure Loop
 

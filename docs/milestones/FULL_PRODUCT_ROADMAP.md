@@ -1,4 +1,4 @@
-# Warden Full Product Roadmap: v0 → v2
+# maestro Full Product Roadmap: v0 → v2
 
 
 > **REDESIGN NOTE (2026-06-04):** The ultimate direction is provider-neutral harness ownership, corrected by `docs/milestones/HARNESS_OS_CORRECTED_PLAN.md`: Phase A canonical substrate is a rented native executor wrapped by Dominic-owned evidence/verifier/policy/ledger/promotion contracts. Direct model executors remain future adapters behind the same contract, not the current proof path. See `docs/milestones/ULTIMATE_GOAL_DIVIDE_AND_CONQUER_PLAN.md`, `docs/milestones/PROVIDER_NEUTRAL_HARNESS_CONTRACT.md`, and `docs/adr/0001-provider-neutral-supersedes-omx-first.md`.
@@ -29,7 +29,7 @@ This remains **PRD-scoped local v0-v2**, not a universal hosted/remote/broad-MCP
 
 ### Goal
 
-A real operator can install/run Warden locally, register real projects, create/manage tasks, start/collect runs, review results, and inspect all evidence through CLI and Web UI.
+A real operator can install/run maestro locally, register real projects, create/manage tasks, start/collect runs, review results, and inspect all evidence through CLI and Web UI.
 
 ### Required Product Behavior
 

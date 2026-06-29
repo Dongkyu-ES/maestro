@@ -1,4 +1,4 @@
-# Warden — Current Truth (single source of truth)
+# maestro — Current Truth (single source of truth)
 
 **Last updated:** 2026-06-21
 **Read this first.** This is the one doc a new agent/operator should read before anything else in
@@ -11,7 +11,7 @@ document map. Everything dated/finished has moved to `docs/milestones/archive/`.
 
 ---
 
-## 1. What Warden is (current canonical direction)
+## 1. What maestro is (current canonical direction)
 
 A **provider-neutral evidence-and-control LAYER** that owns the harness — base rules, memory, hooks,
 context, policy, hash-chained event ledger, recomputable verifier, promotion, state transitions — and
@@ -35,8 +35,8 @@ only; where they conflict, the controlling records are:
 - **Build/test:** `npm run build` green; `npm test` = 396/396 pass (as of 2026-06-21).
 - **Spine runs for real.** The four substrate primitives — delegate → log to hash-chained ledger →
   verify → gate-on-verifier — execute end-to-end over a real rented loop. Proven by the M23 self-critic
-  dogfood (2026-06-20): Warden drove a real `claude` executor to find + fix a real rename-bypass security
-  bug *in Warden's own verifier*, gated by its own clean-checkout acceptance command, then independently
+  dogfood (2026-06-20): maestro drove a real `claude` executor to find + fix a real rename-bypass security
+  bug *in maestro's own verifier*, gated by its own clean-checkout acceptance command, then independently
   revert-checked. See `archive/M23_SELF_CRITIC_CLOSED_LOOP_2026-06-20.md`.
 - **The §9 "daily-usable slice" is shipped** as `maestro harness run "<goal>" --executor <codex|claude>
   --acceptance-file <accept.json>`: task → ContextBundle → native adapter → ledger → M7 verifier →
