@@ -1,5 +1,9 @@
 # maestro
 
+<p align="center">
+  <img src="assets/maestro-hero.png" alt="maestro — task-aware orchestration: pick the pattern, compose the CLIs" width="100%">
+</p>
+
 > **Task-aware orchestration for AI coding agents.** One task in, the right multi-agent pattern out — composed from the CLIs you already pay for.
 
 *Read this in other languages: **English** · [한국어](README.ko.md)*

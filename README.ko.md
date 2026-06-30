@@ -1,5 +1,9 @@
 # maestro
 
+<p align="center">
+  <img src="assets/maestro-hero.png" alt="maestro — 작업 인식형 오케스트레이션: 패턴을 고르고 CLI를 엮는다" width="100%">
+</p>
+
 > **AI 코딩 에이전트를 위한 작업 인식형(task-aware) 오케스트레이션.** 작업 하나를 던지면 거기에 맞는 멀티 에이전트 패턴이 돌아갑니다. 이미 쓰고 있는 CLI들을 엮어서요.
 
 *다른 언어로 보기: [English](README.md) · **한국어***
